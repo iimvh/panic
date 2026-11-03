@@ -1,0 +1,6 @@
+id: roomCatalog
+description: Browse the meeting room catalog and room details through the room-catalog MCP server.
+prompt: system.md
+skills: []
+subAgents: []
+tools: [mcp:room-catalog]

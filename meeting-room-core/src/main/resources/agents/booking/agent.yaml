@@ -1,0 +1,6 @@
+id: booking
+description: Book a new meeting (requires roomId, title, organizer, start/end time).
+prompt: system.md
+skills: [booking-policy]
+subAgents: []
+tools: [local:booking-tools]

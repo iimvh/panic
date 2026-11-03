@@ -1,0 +1,6 @@
+id: coordinator
+description: Routes requests to book meetings, search rooms, cancel meetings and browse the room catalog.
+prompt: system.md
+skills: []
+subAgents: [search, booking, cancellation, roomCatalog]
+tools: []

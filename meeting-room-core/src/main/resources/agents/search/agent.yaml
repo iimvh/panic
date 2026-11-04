@@ -1,6 +1,0 @@
-id: search
-description: Find free meeting rooms by time, headcount and location.
-prompt: system.md
-skills: [booking-policy]
-subAgents: []
-tools: [local:search-tools]

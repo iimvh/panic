@@ -1,0 +1,6 @@
+id: echo
+description: Echoes a short text back to the caller. Example agent showing how a module plugs in.
+prompt: system.md
+skills: []
+subAgents: []
+tools: [local:echo-tools]

@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+	html,
+	body,
+	#root {
+		height: 100%;
+	}
+
+	body {
+		@apply bg-surface font-sans text-ink antialiased;
+		background-image:
+			radial-gradient(900px 420px at 85% -12%, rgba(123, 132, 255, 0.09), transparent 60%),
+			radial-gradient(700px 380px at -10% 110%, rgba(99, 108, 255, 0.05), transparent 55%);
+		background-attachment: fixed;
+	}
+
+	::selection {
+		@apply bg-accent-soft text-ink;
+	}
+
+	:focus-visible {
+		outline: 2px solid #7b84ff;
+		outline-offset: -2px;
+	}
+}
+
+@layer components {
+	.btn-primary {
+		@apply inline-flex min-h-9 items-center justify-center gap-2 rounded-sm border border-transparent bg-white px-4 py-2 font-sans text-[15px] leading-[21px] font-medium text-canvas transition-colors duration-200 hover:bg-[#e3e7f1] disabled:pointer-events-none disabled:opacity-40;
+	}
+
+	.btn-secondary {
+		@apply inline-flex min-h-10 items-center justify-center gap-2 rounded-sm border border-hairline-strong bg-soft-fill px-4 py-2 font-sans text-[15px] leading-[21px] font-medium text-ink transition-colors duration-200 hover:bg-soft-fill-hover disabled:pointer-events-none disabled:opacity-40;
+	}
+
+	.btn-ghost {
+		@apply inline-flex min-h-7 items-center justify-center gap-1.5 rounded-xs bg-soft-fill px-3 py-1 font-sans text-[14px] leading-[16.8px] tracking-[0.15px] text-muted transition-colors duration-200 hover:bg-soft-fill-hover hover:text-ink disabled:pointer-events-none disabled:opacity-40;
+	}
+
+	.eyebrow {
+		@apply font-sans text-[12px] font-bold leading-[1.4];
+	}
+
+	.hairline-row {
+		@apply border-b border-muted-soft/60;
+	}
+}
+
+@layer utilities {
+	.scrollbar-thin {
+		scrollbar-width: thin;
+		scrollbar-color: #2a3450 transparent;
+	}
+
+	.scrollbar-thin::-webkit-scrollbar {
+		width: 8px;
+	}
+
+	.scrollbar-thin::-webkit-scrollbar-thumb {
+		background: #2a3450;
+		border-radius: 999px;
+	}
+
+	.scrollbar-thin::-webkit-scrollbar-track {
+		background: transparent;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}

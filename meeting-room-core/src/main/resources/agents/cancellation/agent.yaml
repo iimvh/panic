@@ -1,6 +1,0 @@
-id: cancellation
-description: Cancel a meeting by its meeting id.
-prompt: system.md
-skills: [booking-policy]
-subAgents: []
-tools: [local:cancellation-tools]

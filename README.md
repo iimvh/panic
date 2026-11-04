@@ -1,6 +1,6 @@
-# Meeting Room Booking (Spring Boot + Spring AI + OpenRouter)
+# Panic (Spring Boot + Spring AI + OpenRouter)
 
-A small meeting room booking system following the architecture in `idea.md`, built with **Spring Boot 3.x** and **Spring AI**, using **OpenRouter** as the LLM provider.
+Panic is a multi-agent assistant following the architecture in `idea.md`, built with **Spring Boot 3.x** and **Spring AI**, using **OpenRouter** as the LLM provider. Panic ships with two agents: the **coordinator** (root, answers directly) in `panic-agents-core`, and an example **echo** agent in `panic-agent-example` that shows the module layout. Everything else is added as its own module.
 
 Every agent is a **self-describing plugin**; there is only **one `Agent` type** used by both coordinators and leaf agents, nesting recursively without limits.
 
@@ -8,27 +8,25 @@ Every agent is a **self-describing plugin**; there is only **one `Agent` type** 
 
 | Component | Implementation |
 |---|---|
-| User Interface | React + Vite + Tailwind SPA (`frontend/`, built into `meeting-room-app/src/main/resources/static`) — even the room list panel goes through an agent |
+| User Interface | React + Vite + Tailwind SPA (`web/`, built into `panic-app/src/main/resources/static`) |
 | API | `AgentController` (`POST /api/agent/chat`) — the user's only entry point |
 | **Agent runtime** | `core.agent.runtime`: `AgentRegistry` (wires the tree), `AgentExecutor` (LLM + tool loop, recursion), `AgentTreeEndpoint` (`/actuator/agents`) |
 | **Agent SPI** | `core.agent.spi`: `Agent`, `AgentDefinition`, `ToolSource`, `Skill`, `AgentPolicy`, `AgentContext` |
-| Domain Agents | `agents.search`, `agents.booking`, `agents.cancellation`, `agents.catalog` (MCP) — one package per agent containing `*Tools` + the `AgentDefinition` bean |
-| Tool Adapters | `MeetingRoomService`, `MeetingService` + Spring Data JPA repositories on H2 |
-| Tool backend | local (`@Tool` / `ToolCallback`) or MCP server (`meeting-room-mcp-demo`) |
-| Authorization | Room existence / status checks in the service layer |
-| Guardrails | Service checks for missing roomId/title/organizer/past time + overlap guard; agents never invent roomId/meetingId; unbounded recursion is prevented with `depth` + `chain` |
+| Bundled agents | `coordinator` (`panic-agents-core`) + example `echo` (`panic-agent-example`) — each is `agent.yaml` + `system.md` in its own module |
+| Tool backend | local (`@Tool` / `ToolCallback`) or MCP server — none wired out of the box |
+| Guardrails | Unbounded recursion is prevented with `depth` + `chain`; agents cannot mount themselves |
 | Observability | Actuator: `/actuator/health`, `/actuator/agents` |
-| Data Sources | `meeting_rooms`, `meetings` (JPA, H2 in-memory) |
+| Data Sources | H2 (file-based) for conversation memory |
 
 ### What an agent consists of
 
 ```java
 AgentDefinition.builder("search")
-    .description("Find free meeting rooms by time, headcount and location.") // = what the parent LLM sees
+    .description("Find free rooms by time, headcount and location.")        // = what the parent LLM sees
     .systemPromptTemplate("... {now} {tools} {subAgents} {skills} ...")     // rendered EVERY turn
-    .toolSources(LocalToolSource.of("search-tools", searchTools))           // local or MCP
+    .toolSources(LocalToolSource.of("search-tools", searchTools))           // local tools
     .subAgentIds("...")                                                     // empty = leaf agent
-    .skillIds("booking-policy")
+    .skillIds("my-skill")
     .policy(new AgentPolicy(maxDepth, timeoutMs, maxToolCalls))
     .build();
 ```
@@ -57,11 +55,8 @@ User → AgentController → AgentExecutor.run(root, depth=0)
 The current agent tree:
 
 ```
-coordinator                  (no tools of its own, only sub-agents)
-├── search                   search__searchRooms        + booking-policy skill
-├── booking                  booking__bookMeeting
-├── cancellation             cancellation__cancelMeeting
-└── roomCatalog              roomCatalog__listRooms, roomCatalog__roomDetail  (MCP)
+coordinator                  (no tools of its own)
+└── echo                     echo__echo   (example module)
 ```
 
 ## Enabling / disabling agents
@@ -70,61 +65,80 @@ Each agent bean carries `@ConditionalOnProperty(app.agents.<id>.enabled)` (defau
 A disabled agent disappears from the registry, the prompt and the `call_<id>` tool; the app still starts.
 
 ```bash
-APP_AGENTS_BOOKING_ENABLED=false mvn -pl meeting-room-app -am spring-boot:run
-curl -s localhost:8080/actuator/agents   # booking is gone; the app is still UP
+APP_AGENTS_COORDINATOR_ENABLED=false mvn -pl panic-app -am spring-boot:run
+curl -s localhost:8080/actuator/agents   # coordinator is disabled; the app is still UP
 ```
 
 Disabling the root → the app still starts and `/api/agent/chat` returns a clear error (400).
-Invalid declarations (unknown sub-agent id, cycle) → **fail-fast** at startup with an explicit message.
+Structurally invalid declarations (cycle, duplicate id) → **fail-fast** at startup with an explicit message.
+A declared sub-agent whose module is not on the classpath is **not** an error: it is dropped and listed
+under `missingSubAgents` in `/actuator/agents`.
 
-## Adding a new agent (3 steps)
+## Module boundaries (agents vs runtime)
 
-1. Create `agents/<name>/<Name>Tools.java` containing `@Tool` methods.
-2. Create `agents/<name>/<Name>AgentConfig.java`:
+| Module | Contents | Rule |
+|---|---|---|
+| `panic-core` | agent runtime, SPI, registry, executor, pipeline, memory, prompt/skill repositories | **framework only** — no agent, no business logic |
+| `panic-agents-core` | agents of the base product (currently only the `coordinator`) | no domain features |
+| `panic-agent-example` | `echo` — reference implementation of an agent module | template to copy |
+| `panic-app` | entry point, configuration, UI build, installed modules | installs agents |
+
+The runtime scans `classpath*:agents/*/agent.yaml` on the whole classpath, so **installing an agent =
+adding its module dependency** to `panic-app/pom.xml`. A missing module is not an error: the parent
+just drops that sub-agent (visible in `/actuator/agents` as `missingSubAgents`).
+
+`panic-core` may still be edited when a feature needs a **new capability** (tool streaming, per-tenant
+memory, a guardrail hook, a new SPI). It must not be edited for one agent's prompt, tools or domain logic.
+
+## Adding a new agent (new module, 4 steps)
+
+Copy the layout of `panic-agent-example`:
+
+1. `src/main/resources/agents/<name>/agent.yaml` — `id`, `description`, `prompt`, `skills`,
+   `subAgents`, `tools: [local:<tool-source-id>]`.
+2. `src/main/resources/agents/<name>/system.md` — the prompt (`{now}`, `{today}`, `{tools}`,
+   `{subAgents}`, `{skills}` are rendered every turn).
+3. `src/main/java/.../<Name>Tools.java` with `@Tool` methods, plus a config with two beans:
 
    ```java
    @Configuration
+   @ConditionalOnProperty(name = "app.agents.greeting.enabled", havingValue = "true", matchIfMissing = true)
    public class GreetingAgentConfig {
-       public static final String ID = "greeting";
+
        @Bean
-       @ConditionalOnProperty(name = "app.agents.greeting.enabled", havingValue = "true", matchIfMissing = true)
-       public AgentDefinition greetingAgent(GreetingTools tools) {
-           return AgentDefinition.builder(ID)
+       public AgentDefinition greetingAgent() {
+           return AgentDefinition.builder("greeting")
                    .description("Greets users and answers general questions.")
-                   .systemPromptTemplate("You are a greeting agent. The current time is {now}.")
-                   .toolSources(LocalToolSource.of("greeting-tools", tools))
+                   .promptFile("agents/greeting/system.md")
                    .build();
+       }
+
+       @Bean
+       public AgentToolSources greetingToolSources(GreetingTools tools) {
+           return new AgentToolSources().local(LocalToolSource.of("greeting-tools", tools));
        }
    }
    ```
-3. Add `"greeting"` to the coordinator's `subAgentIds(...)` (`CoordinatorAgentConfig`) and
-   declare `app.agents.greeting.enabled=true`. No prompt change, no controller change.
 
-Removing an agent = deleting it from `subAgentIds` (or toggling it off via the property).
+   The `AgentDefinition` carries no tool objects: the `tools:` entries in `agent.yaml` are resolved by
+   the loader against the `AgentToolSources` contributed by the same module.
+4. Add the module dependency to `panic-app/pom.xml` and (optionally) `app.agents.<name>.enabled=true`.
+
+To mount it under the coordinator add `greeting` to `subAgents` in
+`panic-agents-core/src/main/resources/agents/coordinator/agent.yaml`. Nothing in `panic-core` changes,
+and disabling it is a property flip.
+
+Removing an agent = dropping the module dependency (or `app.agents.<name>.enabled=false`).
 
 ## MCP
 
-`meeting-room-mcp-demo` is a separate process serving the room catalog over MCP (SSE, port 8081).
-The `roomCatalog` agent only uses `McpToolSource`, so catalog data can only come from MCP.
+The bundled coordinator declares no tools, so no MCP server is wired. The runtime still supports MCP:
+the `McpToolSource` SPI can be wrapped around any `ToolCallbackProvider`, then mounted on an agent with
+`.toolSources(...)` and referenced from `agent.yaml` as `tools: [mcp:<server>]`.
 
-```bash
-# window 1
-mvn -pl meeting-room-mcp-demo -am spring-boot:run
-
-# window 2
-SPRING_PROFILES_ACTIVE=mcp mvn -pl meeting-room-app -am spring-boot:run
-curl -s localhost:8080/actuator/agents   # roomCatalog has roomCatalog__listRooms, roomCatalog__roomDetail
-
-# chat: "Show me the whole company room catalog"
-```
-
-- The `mcp` profile enables `spring.ai.mcp.client` and connects to `${MCP_CATALOG_URL:http://localhost:8081}`.
-- The MCP client is **off by default**: without the profile `roomCatalog` runs without tools (the app is still UP);
-  to remove it entirely set `app.agents.roomCatalog.enabled=false`.
+- Enable the client with `spring.ai.mcp.client.enabled=true` and declare the connection
+  (`spring.ai.mcp.client.sse.connections.<name>.url`).
 - Server unreachable → a single WARN log, the agent degrades, the app does not die.
-- Adding another MCP server: declare `spring.ai.mcp.client.sse.connections.<name>.url`, create an
-  `McpToolSource("<name>", provider)` and mount it on an agent via `.toolSources(...)`.
-- The current versions (Spring AI 1.0.0 / MCP SDK 0.10.0) support **SSE**; streamable-http needs a newer SDK.
 
 ## Skills
 
@@ -132,8 +146,8 @@ A skill = a markdown file with frontmatter under `classpath*:skills/*.md`:
 
 ```markdown
 ---
-name: booking-policy
-description: Company rules for choosing, booking and cancelling meeting rooms
+name: my-skill
+description: Rules or procedures the agent can load on demand
 mcpServers: []
 ---
 <procedure content>
@@ -148,7 +162,7 @@ the `load_skill(skillId)` tool to load the full text (progressive disclosure). M
 - Maven 3.8+
 - `OPENROUTER_API_KEY` (needed for agents to actually call the LLM; without it the app still starts and returns a clear error in chat)
 
-## OpenRouter configuration (`meeting-room-app/src/main/resources/application.properties`)
+## OpenRouter configuration (`panic-app/src/main/resources/application.properties`)
 
 ```properties
 # Spring AI appends /v1/chat/completions itself, so base-url must NOT include /v1
@@ -160,24 +174,25 @@ spring.ai.openai.chat.options.model=${LLM_MODEL:${OPENROUTER_MODEL:openai/gpt-4o
 `OpenAiChatModel` cannot be initialised with an empty key, so a placeholder is used to let the app run without
 a key; `AgentExecutor` treats the placeholder as "not configured" and reports an error in chat.
 
-Environment variables: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_REFERER`, `OPENROUTER_TITLE`,
-`MCP_CATALOG_URL`, `RUN_MCP_IT=true` (enables the MCP integration test).
+Environment variables: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_REFERER`, `OPENROUTER_TITLE`.
+
 
 ## Build and run
 
-The repo is a Maven multi-module project: `meeting-room-core` (domain + pipeline + agent runtime),
-`meeting-room-app` (entry point + static UI), `meeting-room-mcp-demo` (standalone MCP server).
+The repo is a Maven multi-module project: `panic-core` (pipeline + agent runtime),
+`panic-agents-core` (coordinator), `panic-agent-example` (example agent module), `panic-app`
+(entry point + static UI + installed agents).
 
 ```bash
 mvn -q clean package                                   # build the whole reactor
-java -jar meeting-room-app/target/meeting-room-app-1.0.0.jar
+java -jar panic-app/target/panic-app-1.0.0.jar
 ```
 
 Or run a single module — **always with `-am`** so the latest core is built (without `-am` you get the stale JAR in `~/.m2`):
 
 ```bash
-mvn -pl meeting-room-app -am spring-boot:run
-mvn -pl meeting-room-core test                         # run core tests only
+mvn -pl panic-app -am spring-boot:run
+mvn -pl panic-core test                         # run core tests only
 ```
 
 `dev.ps1` bundles the common commands:
@@ -185,27 +200,24 @@ mvn -pl meeting-room-core test                         # run core tests only
 ```powershell
 ./dev.ps1 build      # mvn -o clean package
 ./dev.ps1 app        # run the app
-./dev.ps1 mcp        # run the MCP demo (port 8081)
-./dev.ps1 mcp-app    # run the demo then the app with the mcp profile
 ./dev.ps1 test       # test core
 ./dev.ps1 ui         # build the frontend
 ```
 
-The server listens on port 8080. H2 is in-memory (`create-drop`), so data is lost on restart.
+The server listens on port 8080. H2 is file-based (`./data/panic`), so conversation memory survives a restart.
 
 ## Chat UI (React + Vite + Tailwind)
 
 ```bash
-cd frontend
+cd web
 npm install
 npm run dev        # http://localhost:5173, proxies /api -> http://localhost:8080
-npm run build      # tsc + vite build -> ../meeting-room-app/src/main/resources/static
+npm run build      # tsc + vite build -> ../panic-app/src/main/resources/static
 ```
 
-After building, just restart `meeting-room-app`; core is untouched.
+After building, just restart `panic-app`; core is untouched.
 
-- Every action (including the room list in the sidebar) goes through the agent; there is no business REST API.
-- The room list is parsed from `- id=... | name=... | capacity=... | location=...` lines returned by the agent.
+- Every action goes through the agent; there is no business REST API.
 - The conversation is stored in `localStorage`, with a clear-conversation button.
 - A clear error is shown when `OPENROUTER_API_KEY` is missing.
 
@@ -230,7 +242,7 @@ GET  /actuator/agents                         # runtime agent tree + tools + ski
 
 ## Database
 
-**H2 in-memory** by default (`create-drop`). To use PostgreSQL, change `spring.datasource.*` and add the PostgreSQL driver.
+**H2 file-based** (`./data/panic`) so conversation memory survives a restart. To use PostgreSQL, change `spring.datasource.*` and add the PostgreSQL driver.
 
 ## Out of scope for the MVP
 

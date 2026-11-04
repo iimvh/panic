@@ -1,0 +1,6 @@
+id: test-harness
+description: Fixture used by AgentDefinitionLoaderTest.
+prompt: system.md
+skills: []
+subAgents: [ghost]
+tools: [local:stub-tools]

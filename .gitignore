@@ -36,6 +36,11 @@ dist/
 Thumbs.db
 desktop.ini
 
+# Local H2 database (file-based; conversation memory + meeting data)
+data/
+*.mv.db
+*.trace.db
+
 # Logs
 logs/
 *.log
@@ -68,3 +73,4 @@ AGENTS.md
 .mcp.json
 opencode.jsonc
 dev.ps1
+kilo.json

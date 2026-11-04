@@ -1,0 +1,6 @@
+id: coordinator
+description: Panic assistant — answers the user directly or delegates to a sub-agent.
+prompt: system.md
+skills: []
+subAgents: [echo]
+tools: []

@@ -8,17 +8,18 @@
 		<version>3.3.5</version>
 		<relativePath/>
 	</parent>
-	<groupId>com.meetingroom</groupId>
-	<artifactId>meeting-room-parent</artifactId>
+	<groupId>com.panic</groupId>
+	<artifactId>panic-parent</artifactId>
 	<version>1.0.0</version>
 	<packaging>pom</packaging>
-	<name>meeting-room-parent</name>
-	<description>Meeting room booking built with Spring Boot and Spring AI</description>
+	<name>panic-parent</name>
+	<description>Panic — a multi-agent assistant built with Spring Boot and Spring AI</description>
 
 	<modules>
-		<module>meeting-room-core</module>
-		<module>meeting-room-app</module>
-		<module>meeting-room-mcp-demo</module>
+		<module>panic-core</module>
+		<module>panic-agents-core</module>
+		<module>panic-agent-example</module>
+		<module>panic-app</module>
 	</modules>
 
 	<properties>

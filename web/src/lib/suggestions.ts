@@ -8,6 +8,11 @@ export interface Suggestion {
 
 export const SUGGESTIONS: Suggestion[] = [
 	{
+		icon: "list",
+		label: "Đọc bản tin mỗi sáng hôm nay",
+		prompt: "Hôm nay có tin gì?",
+	},
+	{
 		icon: "search",
 		label: "Summarize what Panic can do",
 		prompt: "Summarize what you can do for me in a few bullet points.",

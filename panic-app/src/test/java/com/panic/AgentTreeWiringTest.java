@@ -29,8 +29,17 @@ class AgentTreeWiringTest {
 	void coordinatorIsRootAndExampleAgentIsMounted() {
 		assertThat(registry.root().id()).isEqualTo("coordinator");
 		assertThat(registry.visibleSubAgents("coordinator")).extracting(a -> a.id())
-				.contains("echo");
+				.contains("echo", "digest");
 		assertThat(registry.missingSubAgents("coordinator")).isEmpty();
+	}
+
+	@Test
+	void digestAgentAndItsSubAgentsAreReachableFromTheCoordinator() {
+		assertThat(registry.require("digest").subAgentIds())
+				.containsExactly("newsScout", "digestWriter");
+		assertThat(registry.require("newsScout").toolSources()).hasSize(1);
+		assertThat(registry.require("digestWriter").toolSources()).hasSize(1);
+		assertThat(registry.reachable()).contains("coordinator", "digest", "newsScout", "digestWriter");
 	}
 
 	@SuppressWarnings("unchecked")
@@ -58,6 +67,6 @@ class AgentTreeWiringTest {
 
 		Map<String, Object> root = (Map<String, Object>) tree.get("tree");
 		List<Map<String, Object>> subs = (List<Map<String, Object>>) root.get("subAgents");
-		assertThat(subs).extracting(s -> s.get("id")).containsExactly("echo");
+		assertThat(subs).extracting(s -> s.get("id")).containsExactly("echo", "digest");
 	}
 }

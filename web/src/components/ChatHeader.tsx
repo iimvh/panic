@@ -38,6 +38,10 @@ export default function ChatHeader({
 				</div>
 
 				<div className="flex shrink-0 items-center gap-2">
+					<a href="/ban-tin" className="btn-secondary" title="Đọc bản tin mỗi sáng">
+						<span className="hidden sm:inline">Bản tin</span>
+					</a>
+
 					<button
 						type="button"
 						onClick={onTogglePipeline}

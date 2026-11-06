@@ -1,0 +1,6 @@
+id: newsScout
+description: Fetches Vietnamese news feeds and reports the configured sources.
+prompt: system.md
+skills: []
+subAgents: []
+tools: [local:news-scout-tools]

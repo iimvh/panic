@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="vi" xmlns:th="http://www.thymeleaf.org">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title th:text="${title}">Bản tin mỗi sáng</title>
+	<meta name="description" th:content="${description}" />
+	<meta property="og:type" content="article" />
+	<meta property="og:title" th:content="${title}" />
+	<meta property="og:description" th:content="${description}" />
+	<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+	<script type="application/ld+json" th:utext="${jsonLd}"></script>
+	<style th:replace="~{digest-style :: style}"></style>
+</head>
+<body>
+	<header class="site-header">
+		<a class="brand" href="/ban-tin">Bản tin mỗi sáng</a>
+		<nav>
+			<a href="/ban-tin/luu-tru">Lưu trữ</a>
+			<a href="/">Trợ lý Panic</a>
+		</nav>
+	</header>
+
+	<main class="digest">
+		<div class="notice" th:if="${stale}">
+			Chưa có bản tin cho hôm nay. Đây là bản tin mới nhất (ngày <span th:text="${date}"></span>).
+		</div>
+
+		<h1 th:text="${title}">Bản tin mỗi sáng</h1>
+		<p class="intro" th:text="${intro}" th:if="${not #strings.isEmpty(intro)}"></p>
+
+		<div class="share">
+			<a th:href="'https://www.facebook.com/sharer/sharer.php?u=' + ${shareUrl}"
+				target="_blank" rel="noopener">Chia sẻ Facebook</a>
+			<a th:href="'https://zalo.me/share?u=' + ${shareUrl}"
+				target="_blank" rel="noopener">Chia sẻ Zalo</a>
+		</div>
+
+		<section class="topic" th:each="section : ${sections}">
+			<h2 th:text="${section.category}">chủ đề</h2>
+			<article class="item" th:each="item : ${section.items}">
+				<h3><a th:href="${item.link}" target="_blank" rel="noopener nofollow" th:text="${item.title}">tiêu đề</a></h3>
+				<p class="summary" th:text="${item.summary}"></p>
+				<p class="source">
+					Nguồn: <a th:href="${item.link}" target="_blank" rel="noopener nofollow" th:text="${item.sourceName}"></a>
+				</p>
+			</article>
+		</section>
+
+		<nav class="related" th:if="${not #lists.isEmpty(relatedDates)}">
+			<h2>Các ngày khác</h2>
+			<ul>
+				<li th:each="d : ${relatedDates}"><a th:href="'/ban-tin/' + ${d}" th:text="${d}"></a></li>
+			</ul>
+		</nav>
+	</main>
+
+	<footer class="site-footer">
+		<p>Bản tin chỉ lưu tiêu đề, liên kết và trích đoạn ngắn; mọi nội dung thuộc về nguồn gốc.</p>
+		<p><a href="/ban-tin/luu-tru">Xem lưu trữ bản tin</a></p>
+	</footer>
+</body>
+</html>

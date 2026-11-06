@@ -1,0 +1,5 @@
+id: digest
+description: Bản tin mỗi sáng — answers with today's or a past day's Vietnamese digest and can trigger generation.
+prompt: system.md
+skills: []
+tools: [local:digest-tools]

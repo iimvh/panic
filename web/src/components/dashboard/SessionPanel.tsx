@@ -55,14 +55,14 @@ export default function SessionPanel({
 	const scrollerRef = useRef<HTMLOListElement | null>(null);
 	const count = lines.length;
 
-	// Stick to the newest work line while the turn builds.
+	// Stick to the newest work line while the turn builds; answer growth does not change the row count.
 	useEffect(() => {
 		scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
-	}, [count]);
+	}, [count, answer]);
 
 	const mistake = lines.some((line) => line.status === "error");
 	return (
-		<section className="flex min-h-0 flex-col border border-edge-strong bg-panel">
+		<section className="flex h-full min-h-0 flex-col border border-edge-strong bg-panel">
 			<header className="flex shrink-0 items-center gap-2 border-b border-edge-strong bg-panel-head px-3 py-2">
 				<span className={`micro-label ${mistake ? "text-red" : "text-amber"}`}>
 					{(agentId ?? "agent").toUpperCase()} / MAIN SESSION

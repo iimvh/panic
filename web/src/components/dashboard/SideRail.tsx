@@ -43,7 +43,7 @@ export default function SideRail({
 	live: boolean;
 }) {
 	return (
-		<div className="flex min-h-0 flex-col gap-2.5">
+		<div className="flex min-h-0 flex-1 flex-col gap-2.5">
 			<Panel
 				title="model / callback rounds"
 				right={<LiveBadge live={live} />}

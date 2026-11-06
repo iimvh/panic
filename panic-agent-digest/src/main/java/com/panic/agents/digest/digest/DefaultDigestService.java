@@ -106,15 +106,19 @@ public class DefaultDigestService implements DigestService {
 	public Digest generate(LocalDate date, boolean force) {
 		Optional<Digest> existing = findByDate(date);
 		if (existing.isPresent()) {
-			if (!force) {
+			// A READY day is final: the morning run and chat reads must never rewrite good content.
+			// EMPTY/FAILED days are not a no-op: the next run retries them, so a delayed or broken
+			// morning can still recover.
+			if (!force && existing.get().getStatus() == Digest.Status.READY) {
 				return existing.get();
 			}
-			// Forced regeneration replaces the body of the same day; the day and its id stay stable.
+			// Regeneration replaces the body of the same day; the day and its id stay stable.
 			return regenerate(existing.get());
 		}
 		ingest();
-		List<NewsItem> candidates = deduplicate(items.findByDigestIdIsNullAndPublishedAtAfterOrderByPublishedAtDesc(
-				date.atStartOfDay(zone).toInstant().minus(FRESHNESS)));
+		List<NewsItem> candidates = balanceByCategory(deduplicate(
+				items.findByDigestIdIsNullAndPublishedAtAfterOrderByPublishedAtDesc(
+						date.atStartOfDay(zone).toInstant().minus(FRESHNESS))));
 		Digest digest = new Digest();
 		digest.setDigestDate(date);
 		digest.setCreatedAt(clock.instant());
@@ -139,9 +143,9 @@ public class DefaultDigestService implements DigestService {
 		// already consumed by other days so a forced run never re-publishes a prior day's stories.
 		List<NewsItem> pool = items.findByPublishedAtAfterOrderByPublishedAtDesc(
 				digest.getDigestDate().atStartOfDay(zone).toInstant().minus(FRESHNESS));
-		List<NewsItem> candidates = deduplicate(pool.stream()
+		List<NewsItem> candidates = balanceByCategory(deduplicate(pool.stream()
 				.filter(item -> item.getDigestId() == null || item.getDigestId().equals(digest.getId()))
-				.toList());
+				.toList()));
 		DigestSections sections = summarizeSafely(digest.getDigestDate(), candidates, digest);
 		digest.setSectionsJson(sections.toJson());
 		digest.setItemCount(sections.itemCount());
@@ -184,6 +188,31 @@ public class DefaultDigestService implements DigestService {
 				items.save(item);
 			}
 		}
+	}
+
+	/**
+	 * Interleave the newest items of each category round-robin, so a single prolific feed cannot
+	 * crowd every other topic out of the bounded pool the writer sees. Preserves freshness within a
+	 * category.
+	 */
+	private static List<NewsItem> balanceByCategory(List<NewsItem> items) {
+		java.util.Map<String, java.util.ArrayDeque<NewsItem>> byCategory = new java.util.LinkedHashMap<>();
+		for (NewsItem item : items) {
+			byCategory.computeIfAbsent(item.getCategory(), key -> new java.util.ArrayDeque<>()).add(item);
+		}
+		List<NewsItem> balanced = new java.util.ArrayList<>(items.size());
+		boolean added = true;
+		while (added) {
+			added = false;
+			for (java.util.ArrayDeque<NewsItem> queue : byCategory.values()) {
+				NewsItem next = queue.poll();
+				if (next != null) {
+					balanced.add(next);
+					added = true;
+				}
+			}
+		}
+		return balanced;
 	}
 
 	private List<NewsItem> deduplicate(List<NewsItem> candidates) {

@@ -25,6 +25,8 @@ public class VietnameseDigestWriter implements DigestSummarizer {
 
 	private static final Logger log = LoggerFactory.getLogger(VietnameseDigestWriter.class);
 	private static final ObjectMapper JSON = new ObjectMapper();
+	/** Answer budget: enough for intro + 5–10 items after the model's reasoning, with headroom. */
+	private static final int MAX_ANSWER_TOKENS = 8192;
 
 	private final ChatClient.Builder chatClientBuilder;
 	private final DigestWriterPrompt prompt = new DigestWriterPrompt();
@@ -43,13 +45,24 @@ public class VietnameseDigestWriter implements DigestSummarizer {
 		if (candidates.isEmpty()) {
 			return DigestSections.empty();
 		}
+		// Bound the prompt: the reasoning model spends its token budget thinking, so a huge feed of
+		// candidates would starve the JSON answer. Choose from at most a few times the item count.
+		List<NewsItem> bounded = bound(candidates, maxItems);
 		String reply = chatClientBuilder.clone().build()
 				.prompt()
+				.options(org.springframework.ai.openai.OpenAiChatOptions.builder()
+						.maxTokens(MAX_ANSWER_TOKENS)
+						.build())
 				.system(prompt.system())
-				.user(prompt.user(date, maxItems, candidates.size(), toJson(payload(candidates))))
+				.user(prompt.user(date, maxItems, bounded.size(), toJson(payload(bounded))))
 				.call()
 				.content();
-		return parse(reply, candidates);
+		return parse(reply, bounded);
+	}
+
+	/** At most a few candidates per requested item: keeps the reasoning budget from starving the answer. */
+	static List<NewsItem> bound(List<NewsItem> candidates, int maxItems) {
+		return candidates.stream().limit(Math.max(maxItems, 1) * 3L).toList();
 	}
 
 	private List<Map<String, String>> payload(List<NewsItem> candidates) {

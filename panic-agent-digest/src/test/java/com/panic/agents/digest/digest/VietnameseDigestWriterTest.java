@@ -56,6 +56,15 @@ class VietnameseDigestWriterTest {
 	}
 
 	@Test
+	void boundsTheCandidatePoolSoTheReasoningModelHasRoomToAnswer() {
+		List<NewsItem> many = java.util.stream.IntStream.range(0, 100)
+				.mapToObj(i -> item("Tin " + i, "https://a.example/" + i, "society", "A")).toList();
+
+		assertThat(VietnameseDigestWriter.bound(many, 8)).hasSize(24);
+		assertThat(VietnameseDigestWriter.bound(many, 8)).containsExactlyElementsOf(many.subList(0, 24));
+	}
+
+	@Test
 	void malformedJsonFailsLoudlySoTheDayIsRecordedAsFailed() {
 		assertThatThrownBy(() -> writer.parse("xin chào, không có json", candidates))
 				.isInstanceOf(IllegalStateException.class);

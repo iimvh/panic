@@ -133,6 +133,31 @@ class DigestServiceTest {
 	}
 
 	@Test
+	void aProlificTopicDoesNotCrowdOutTheOthersInTheBoundedPool() {
+		service = new DefaultDigestService(sources, items, digests,
+				() -> List.of(FeedSource.of("Tech", "https://tech.example/rss", "technology"),
+						FeedSource.of("Biz", "https://biz.example/rss", "economy"),
+						FeedSource.of("News", "https://news.example/rss", "society")),
+				reader, summarizer, clock, DIGEST_ZONE, 3);
+		for (int i = 0; i < 20; i++) {
+			reader.articles("https://tech.example/rss", "Tech",
+					article("t" + i, "Công nghệ " + i, "https://tech.example/" + i));
+		}
+		reader.articles("https://biz.example/rss", "Biz",
+				article("b1", "Kinh tế 1", "https://biz.example/1"));
+		reader.articles("https://news.example/rss", "News",
+				article("n1", "Xã hội 1", "https://news.example/1"));
+		summarizer.echoAll();
+
+		Digest digest = service.generate(DAY, false);
+
+		// The writer caps at maxItems=3; balancing must surface every topic among those 3.
+		DigestSections body = DigestSections.fromJson(digest.getSectionsJson());
+		assertThat(body.sections()).extracting(DigestSections.Section::category)
+				.containsExactlyInAnyOrder("technology", "economy", "society");
+	}
+
+	@Test
 	void regenerationIsANoOpUnlessForced() {
 		service.ingest();
 		reader.articles("https://vnexpress.example/rss", "VnExpress",
@@ -151,6 +176,24 @@ class DigestServiceTest {
 		Digest forced = service.generate(DAY, true);
 		assertThat(forced.getId()).isEqualTo(firstId);
 		assertThat(forced.getItemCount()).isEqualTo(2);
+	}
+
+	@Test
+	void aFailedOrEmptyDayIsRetriedByTheNextRunWithoutForce() {
+		// First run: no feeds reachable -> EMPTY, the day is not lost.
+		Digest empty = service.generate(DAY, false);
+		assertThat(empty.getStatus()).isEqualTo(Digest.Status.EMPTY);
+
+		// Feeds come back; the next scheduled run (force=false) must recover the same day.
+		service.ingest();
+		reader.articles("https://vnexpress.example/rss", "VnExpress",
+				article("g1", "Tin một", "https://vnexpress.example/1"));
+		summarizer.echoAll();
+		Digest recovered = service.generate(DAY, false);
+
+		assertThat(recovered.getId()).isEqualTo(empty.getId());
+		assertThat(recovered.getStatus()).isEqualTo(Digest.Status.READY);
+		assertThat(recovered.getItemCount()).isEqualTo(1);
 	}
 
 	@Test

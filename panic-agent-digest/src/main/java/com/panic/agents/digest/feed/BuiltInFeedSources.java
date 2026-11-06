@@ -13,8 +13,11 @@ public final class BuiltInFeedSources implements FeedSourceSeed {
 			new SourceDefinition("VnExpress – Kinh doanh", "https://vnexpress.net/rss/kinh-doanh.rss", "economy"),
 			new SourceDefinition("VnExpress – Thời sự", "https://vnexpress.net/rss/thoi-su.rss", "society"),
 			new SourceDefinition("Tuổi Trẻ – Nhịp sống số", "https://tuoitre.vn/rss/nhip-song-so.rss", "technology"),
-			new SourceDefinition("Tuổi Trẻ – Kinh tế", "https://tuoitre.vn/rss/kinh-te.rss", "economy"),
-			new SourceDefinition("Thanh Niên – Thời sự", "https://thanhnien.vn/rss/thoi-su.rss", "society"));
+			new SourceDefinition("Thanh Niên – Kinh tế", "https://thanhnien.vn/rss/kinh-te.rss", "economy"),
+			new SourceDefinition("Thanh Niên – Thời sự", "https://thanhnien.vn/rss/thoi-su.rss", "society"),
+			new SourceDefinition("VietNamNet – Công nghệ", "https://vietnamnet.vn/cong-nghe.rss", "technology"),
+			new SourceDefinition("VietNamNet – Kinh doanh", "https://vietnamnet.vn/kinh-doanh.rss", "economy"),
+			new SourceDefinition("VietNamNet – Thời sự", "https://vietnamnet.vn/thoi-su.rss", "society"));
 
 	public static final BuiltInFeedSources INSTANCE = new BuiltInFeedSources();
 

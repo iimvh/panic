@@ -34,7 +34,9 @@ public class ClasspathPromptRepository implements PromptRepository {
 	}
 
 	private Optional<String> readOne(String location) {
-		ClassPathResource resource = new ClassPathResource(location);
+		// Use this class's loader, not the thread context loader: prompts are read both on the chat
+		// worker thread and on reactor threads (streamed tool execution), where the TCCL differs.
+		ClassPathResource resource = new ClassPathResource(location, ClasspathPromptRepository.class.getClassLoader());
 		if (!resource.exists()) {
 			return Optional.empty();
 		}

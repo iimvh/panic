@@ -18,6 +18,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class PipelineBroadcaster {
 
 	public static final String EVENT_PIPELINE = "pipeline";
+	/** One incremental chunk of the assistant's answer, streamed token by token. */
+	public static final String EVENT_TOKEN = "token";
 
 	private final Map<Long, List<SseEmitter>> emitters = new ConcurrentHashMap<>();
 
@@ -32,6 +34,17 @@ public class PipelineBroadcaster {
 
 	public void publish(PipelineEvent event) {
 		publish(event.traceId(), EVENT_PIPELINE, event.toMap());
+	}
+
+	/** Streams one chunk of the assistant answer to the client as it is produced. */
+	public void publishToken(long traceId, String text, String agentId) {
+		if (text == null || text.isEmpty()) {
+			return;
+		}
+		Map<String, Object> data = new java.util.LinkedHashMap<>();
+		data.put("text", text);
+		data.put("agentId", agentId);
+		publish(traceId, EVENT_TOKEN, data);
 	}
 
 	public void publishAll(PipelineEvent[] events) {

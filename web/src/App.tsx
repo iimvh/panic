@@ -55,6 +55,8 @@ export default function App() {
 	const [pipelineWidth, setPipelineWidth] = useState<number>(() => loadPipelineWidth());
 	const [pipelineError, setPipelineError] = useState<string | null>(null);
 	const [traceId, setTraceId] = useState<number | null>(null);
+	/** Partial assistant answer while it streams; empty when not streaming. */
+	const [streamingText, setStreamingText] = useState("");
 	/** Index of the assistant message whose pipeline is shown; -1 = follow the live turn. */
 	const [selectedMessageIndex, setSelectedMessageIndex] = useState(-1);
 
@@ -94,7 +96,7 @@ export default function App() {
 		const el = messagesRef.current;
 		if (!el) return;
 		el.scrollTo({ top: el.scrollHeight, behavior: messages.length > 0 ? "smooth" : "auto" });
-	}, [messages, busy]);
+	}, [messages, busy, streamingText]);
 
 	useEffect(() => {
 		const onKey = (event: KeyboardEvent) => {
@@ -122,6 +124,7 @@ export default function App() {
 			setDraft("");
 			setPipelineError(null);
 			setTraceId(null);
+			setStreamingText("");
 			setSelectedMessageIndex(-1);
 			pipeline.begin();
 			appendMessage("user", text);
@@ -135,8 +138,10 @@ export default function App() {
 							if (info.conversationId) setConversationId(info.conversationId);
 						},
 						onPipeline: (event) => pipeline.push(event),
+						onToken: (chunk) => setStreamingText((current) => current + chunk),
 					}
 				);
+				setStreamingText("");
 				pipeline.merge(result.pipeline, { status: "ok", durationMs: result.durationMs });
 				if (result.conversationId) setConversationId(result.conversationId);
 				appendMessage("assistant", result.reply, {
@@ -166,6 +171,7 @@ export default function App() {
 					appendMessage("error", detail);
 				}
 			} finally {
+				setStreamingText("");
 				busyRef.current = false;
 				setBusy(false);
 			}
@@ -240,7 +246,13 @@ export default function App() {
 									/>
 								))
 							)}
-							{busy && <TypingRow />}
+							{streamingText ? (
+								<MessageBubble
+									message={{ id: "streaming", role: "assistant", text: streamingText, at: Date.now() }}
+								/>
+							) : (
+								busy && <TypingRow />
+							)}
 						</div>
 					</div>
 

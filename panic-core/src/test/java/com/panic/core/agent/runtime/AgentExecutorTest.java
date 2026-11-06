@@ -39,18 +39,20 @@ class AgentExecutorTest {
 	private CountingTools tools;
 	private ScriptedChatModel model;
 	private PipelineRecorder recorder;
+	private PipelineBroadcaster broadcaster;
 
 	@BeforeEach
 	void setUp() {
 		tools = new CountingTools();
 		model = new ScriptedChatModel();
-		recorder = new PipelineRecorder(new PipelineBroadcaster());
+		broadcaster = new PipelineBroadcaster();
+		recorder = new PipelineRecorder(broadcaster);
 	}
 
 	private AgentExecutor executor(List<AgentDefinition> agents, SkillRepository skills) {
 		AgentRegistry registry = new AgentRegistry(agents, "coordinator");
 		ChatClient.Builder builder = testBuilder(model);
-		return new AgentExecutor(builder, registry, skills, recorder, new AgentPromptRenderer(prompts()), null,
+		return new AgentExecutor(builder, registry, skills, recorder, new AgentPromptRenderer(prompts()), null, broadcaster,
 				"test-key");
 	}
 
@@ -230,7 +232,7 @@ class AgentExecutorTest {
 
 		AgentRegistry registry = registry(List.of(coordinator()));
 		AgentExecutor executor = new AgentExecutor(testBuilder(model), registry, noSkills(), recorder,
-				new AgentPromptRenderer(prompts()), memory, "test-key");
+				new AgentPromptRenderer(prompts()), memory, broadcaster, "test-key");
 		model.reply("You are Lan");
 
 		executor.runRoot("conv-1", "what is my name?");
@@ -253,7 +255,7 @@ class AgentExecutorTest {
 		AgentRegistry registry = registry(List.of(coordinator("search"),
 				searchAgent(LocalToolSource.of("t", tools))));
 		AgentExecutor executor = new AgentExecutor(testBuilder(model), registry, noSkills(), recorder,
-				new AgentPromptRenderer(prompts()), memory, "test-key");
+				new AgentPromptRenderer(prompts()), memory, broadcaster, "test-key");
 		model.callTool("call_search", "{\"query\":\"room for 5\"}").reply("found").reply("done");
 
 		executor.runRoot("conv-1", "find a room");
@@ -281,7 +283,7 @@ class AgentExecutorTest {
 	void missingApiKeyFailsWithClearMessage() {
 		AgentRegistry registry = registry(List.of(coordinator()));
 		AgentExecutor executor = new AgentExecutor(ChatClient.builder(model), registry, noSkills(), recorder,
-				new AgentPromptRenderer(prompts()), null, "");
+				new AgentPromptRenderer(prompts()), null, broadcaster, "");
 
 		assertThatThrownBy(() -> executor.runRoot("x"))
 				.isInstanceOf(BookingException.class)
@@ -296,5 +298,59 @@ class AgentExecutorTest {
 
 		assertThat(event.agentId()).isEqualTo("search");
 		recorder.end(trace, false, null);
+	}
+
+	@Test
+	void rootAnswerStreamsTokenByToken() {
+		String[] chunks = { "Xin ", "chào, ", "tôi là Panic." };
+		var streamingModel = new StreamingModel(chunks);
+		var tokens = new java.util.ArrayList<String>();
+		var recordingBroadcaster = new PipelineBroadcaster() {
+			@Override
+			public void publishToken(long traceId, String text, String agentId) {
+				tokens.add(text);
+			}
+		};
+		AgentRegistry registry = registry(List.of(coordinator()));
+		AgentExecutor executor = new AgentExecutor(ChatClient.builder(streamingModel), registry, noSkills(), recorder,
+				new AgentPromptRenderer(prompts()), null, recordingBroadcaster, "test-key");
+		recorder.startResponse(new PipelineRecorder.RequestTrace());
+
+		var result = executor.runRoot("hello");
+		recorder.unbind();
+
+		assertThat(tokens).as("tokens=%s", tokens).containsExactly("Xin ", "chào, ", "tôi là Panic.");
+		assertThat(result.text()).isEqualTo("Xin chào, tôi là Panic.");
+	}
+
+	/** Streaming ChatModel that emits the given text chunks and no tool calls. */
+	static final class StreamingModel implements org.springframework.ai.chat.model.ChatModel {
+
+		private final String[] chunks;
+
+		StreamingModel(String[] chunks) {
+			this.chunks = chunks;
+		}
+
+		@Override
+		public org.springframework.ai.chat.model.ChatResponse call(org.springframework.ai.chat.prompt.Prompt prompt) {
+			return next();
+		}
+
+		@Override
+		public reactor.core.publisher.Flux<org.springframework.ai.chat.model.ChatResponse> stream(
+				org.springframework.ai.chat.prompt.Prompt prompt) {
+			return reactor.core.publisher.Flux.fromArray(chunks).map(chunk -> next(chunk));
+		}
+
+		private org.springframework.ai.chat.model.ChatResponse next() {
+			return next(String.join("", chunks));
+		}
+
+		private org.springframework.ai.chat.model.ChatResponse next(String text) {
+			return new org.springframework.ai.chat.model.ChatResponse(List.of(
+					new org.springframework.ai.chat.model.Generation(
+							new org.springframework.ai.chat.messages.AssistantMessage(text))));
+		}
 	}
 }

@@ -33,6 +33,8 @@ export interface AskOptions {
 	onStart?: (info: StartInfo) => void;
 	/** Called for every pipeline step the server pushes, in realtime. */
 	onPipeline?: (event: PipelineEvent) => void;
+	/** Called for every incremental chunk of the assistant answer as it streams. */
+	onToken?: (text: string) => void;
 }
 
 export interface AskArgs {
@@ -117,6 +119,11 @@ export async function askAgent(args: AskArgs, options: AskOptions = {}): Promise
 		}
 		if (frame.event === "pipeline") {
 			options.onPipeline?.(parsed as PipelineEvent);
+			return;
+		}
+		if (frame.event === "token") {
+			const payload = parsed as { text?: unknown };
+			if (typeof payload.text === "string" && payload.text) options.onToken?.(payload.text);
 			return;
 		}
 		if (frame.event === "result") {

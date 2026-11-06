@@ -12,6 +12,7 @@ import com.panic.exception.BookingException;
 import com.panic.pipeline.LlmCallAdvisor;
 import com.panic.pipeline.PipelineEvent;
 import com.panic.pipeline.PipelineJson;
+import com.panic.pipeline.PipelineBroadcaster;
 import com.panic.pipeline.PipelineRecorder;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -45,17 +46,19 @@ public class AgentExecutor {
 	private final PipelineRecorder recorder;
 	private final AgentPromptRenderer renderer;
 	private final ConversationStore memory;
+	private final PipelineBroadcaster broadcaster;
 	private final boolean aiEnabled;
 
 	public AgentExecutor(ChatClient.Builder chatClientBuilder, AgentRegistry registry, SkillRepository skills,
 			PipelineRecorder recorder, AgentPromptRenderer renderer, ConversationStore memory,
-			@Value("${spring.ai.openai.api-key:}") String apiKey) {
+			PipelineBroadcaster broadcaster, @Value("${spring.ai.openai.api-key:}") String apiKey) {
 		this.chatClientBuilder = chatClientBuilder;
 		this.registry = registry;
 		this.skills = skills;
 		this.recorder = recorder;
 		this.renderer = renderer;
 		this.memory = memory;
+		this.broadcaster = broadcaster;
 		this.aiEnabled = AgentApiKey.isConfigured(apiKey);
 	}
 
@@ -154,13 +157,25 @@ public class AgentExecutor {
 					prompt.messages(history);
 				}
 			}
-			String reply = prompt
+			var callSpec = prompt
 					.user(context.userMessage())
 					.toolCallbacks(routed)
 					.toolContext(Map.of("traceId", context.traceId(), "agentId", agent.id(), "depth", context.depth()))
-					.advisors(LlmCallAdvisor.forAgent(agent.id(), recorder, trace, context.parentEventId()))
-					.call()
-					.content();
+					.advisors(LlmCallAdvisor.forAgent(agent.id(), recorder, trace, context.parentEventId()));
+			// The root agent streams its answer token by token on the chat stream so the UI can render
+			// it as it is generated. Sub-agents run inside a blocking tool callback, so they stay blocking
+			// (their result travels back through the tool response).
+			boolean stream = context.depth() == 0 && broadcaster != null && trace != null;
+			String reply;
+			if (stream) {
+				reply = streamAnswer(callSpec, agent.id(), context);
+				if (reply == null) {
+					// Model without streaming support (or a test double): answer in one blocking call.
+					reply = callSpec.call().content();
+				}
+			} else {
+				reply = callSpec.call().content();
+			}
 			return AgentResult.ok(agent.id(), reply == null ? "" : reply, context.depth());
 		} catch (BookingException ex) {
 			throw ex;
@@ -169,6 +184,27 @@ public class AgentExecutor {
 					+ ex.getClass().getSimpleName() + (ex.getMessage() == null ? "" : ": " + ex.getMessage()));
 		} finally {
 			recorder.popAgent(previous);
+		}
+	}
+
+	/**
+	 * Streams the answer, publishing each chunk. Returns the accumulated text, or {@code null} when
+	 * the model does not support streaming and nothing was emitted, so the caller can fall back.
+	 */
+	private String streamAnswer(ChatClient.ChatClientRequestSpec callSpec, String agentId, AgentContext context) {
+		StringBuilder accumulated = new StringBuilder();
+		try {
+			callSpec.stream().content().toIterable().forEach(chunk -> {
+				accumulated.append(chunk);
+				broadcaster.publishToken(context.traceId(), chunk, agentId);
+			});
+			return accumulated.toString();
+		} catch (RuntimeException ex) {
+			if (accumulated.length() == 0 && ex instanceof UnsupportedOperationException) {
+				log.debug("Model does not support streaming for agent '{}'; falling back to a blocking call", agentId);
+				return null;
+			}
+			throw ex;
 		}
 	}
 

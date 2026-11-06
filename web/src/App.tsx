@@ -162,6 +162,16 @@ export default function App() {
 		setLiveTraceId(null);
 	};
 
+	/** Remove one saved session; drop the selection if it was the one being viewed. */
+	const deleteTurn = useCallback((id: string) => {
+		setTurns((current) => {
+			const next = current.filter((turn) => turn.id !== id);
+			saveTurns(next);
+			return next;
+		});
+		setSelectedTurnId((current) => (current === id ? null : current));
+	}, []);
+
 	const selectedTask = viewedTurn?.task ?? "";
 
 	const selectedTraceId = viewedTurn?.traceId ?? null;
@@ -186,45 +196,39 @@ export default function App() {
 				turns={finishedTurns}
 				activeTurnId={selectedTurnId}
 				onSelectTurn={(id) => setSelectedTurnId((current) => (current === id ? null : id))}
+				onDeleteTurn={deleteTurn}
 			/>
 
-			{/* Desktop: the whole workspace fits the viewport — only panel bodies scroll.
-			    Mobile: natural page scroll, panels keep natural heights. */}
-			<main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
-				<div className="mx-auto flex max-w-[1560px] flex-col gap-2.5 p-3 lg:h-full">
+			{/* Wireframe: role cards → middle band (tool lanes | main session | advisor) →
+			    viewport boundary → evidence row + event stream spanning the full page width,
+			    the page scrolling naturally below the first screenful. */}
+			<main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
+				<div className="mx-auto flex max-w-[1560px] flex-col gap-2.5 p-3">
 					<RoleCards roles={dashboard.roles} />
 
-					<div className="flex min-h-0 flex-col gap-2.5 lg:flex-1 lg:flex-row">
-						{/* Left region: middle row + evidence + event stream, spanning under both columns. */}
-						<div className="flex min-h-0 flex-col gap-2.5 lg:flex-1">
-							<div className="flex min-h-0 flex-col gap-2.5 lg:min-h-[240px] lg:flex-1 lg:flex-row">
-								<div className="order-2 flex min-h-0 flex-col lg:order-1 lg:w-[248px] lg:shrink-0">
-									<ToolRail cards={dashboard.tools} />
-								</div>
-								<div className="order-1 flex min-h-[340px] flex-col lg:order-2 lg:min-h-0 lg:flex-1">
-									<SessionPanel
-										lines={dashboard.session}
-										agentId={rootAgentId}
-										turnNumber={turnNumber > 0 ? turnNumber : null}
-										live={busy}
-										answer={
-											busy
-												? streamingText
-												: viewedTurn?.answer && viewedTurn.status === "ok"
-													? viewedTurn.answer
-													: ""
-										}
-										error={viewedError}
-									/>
-								</div>
-							</div>
-
-							<EvidenceRow dashboard={dashboard} />
-							<EventStream dashboard={dashboard} />
+					<div className="flex min-h-0 flex-col gap-2.5 lg:h-[min(58vh,540px)] lg:flex-row">
+						<div className="order-2 flex min-h-[200px] flex-col lg:order-1 lg:h-full lg:w-[248px] lg:shrink-0">
+							<ToolRail cards={dashboard.tools} />
+						</div>
+						<div className="order-1 flex min-h-[380px] flex-col lg:order-2 lg:h-full lg:flex-1">
+							<SessionPanel
+								lines={dashboard.session}
+								agentId={rootAgentId}
+								turnNumber={turnNumber > 0 ? turnNumber : null}
+								live={busy}
+								answer={
+									busy
+										? streamingText
+										: viewedTurn?.answer && viewedTurn.status === "ok"
+											? viewedTurn.answer
+											: ""
+								}
+								error={viewedError}
+							/>
 						</div>
 
-						{/* Right rail runs to the bottom on desktop; stacks last on mobile. */}
-						<div className="order-last flex min-h-[320px] flex-col lg:order-none lg:min-h-0 lg:w-[276px] lg:shrink-0">
+						{/* Right rail: advisor column, full band height on desktop; stacks last on mobile. */}
+						<div className="order-last flex min-h-[320px] flex-col lg:order-none lg:h-full lg:min-h-0 lg:w-[276px] lg:shrink-0">
 							<SideRail
 								llmRounds={dashboard.llmRounds}
 								checkpoints={dashboard.checkpoints}
@@ -240,6 +244,16 @@ export default function App() {
 							/>
 						</div>
 					</div>
+
+					{/* Viewport boundary: everything below scrolls naturally with the page. */}
+					<div className="flex items-center gap-3 text-fg-faint" aria-hidden="true">
+						<span className="h-px flex-1 bg-edge-strong" />
+						<span className="micro-label shrink-0">viewport boundary</span>
+						<span className="h-px flex-1 bg-edge-strong" />
+					</div>
+
+					<EvidenceRow dashboard={dashboard} />
+					<EventStream dashboard={dashboard} />
 				</div>
 			</main>
 		</div>

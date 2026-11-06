@@ -211,7 +211,9 @@ public class AgentExecutor {
 	private ToolCallback route(AgentDefinition agent, ToolCallback callback, Map<String, AgentDefinition> subById,
 			AgentContext context) {
 		AgentDefinition sub = subById.get(callback.getToolDefinition().name());
-		return sub == null ? callback : new SubAgentToolCallback(agent, sub, callback, context);
+		return sub == null
+				? callback
+				: new SubAgentToolCallback(agent, sub, callback, context, recorder.currentTrace());
 	}
 
 	private void guard(AgentDefinition agent, AgentContext context) {
@@ -249,13 +251,19 @@ public class AgentExecutor {
 		private final AgentDefinition sub;
 		private final ToolCallback delegate;
 		private final AgentContext parentContext;
+		/**
+		 * Captured while {@code route()} runs on the caller thread, before the streamed tool loop
+		 * moves to a reactor thread where no trace is bound.
+		 */
+		private final PipelineRecorder.RequestTrace trace;
 
 		SubAgentToolCallback(AgentDefinition parent, AgentDefinition sub, ToolCallback delegate,
-				AgentContext parentContext) {
+				AgentContext parentContext, PipelineRecorder.RequestTrace trace) {
 			this.parent = parent;
 			this.sub = sub;
 			this.delegate = delegate;
 			this.parentContext = parentContext;
+			this.trace = trace;
 		}
 
 		@Override
@@ -271,8 +279,8 @@ public class AgentExecutor {
 		@Override
 		public String call(String toolInput, org.springframework.ai.chat.model.ToolContext toolContext) {
 			String query = AgentCall.queryOf(toolInput).query();
-			PipelineRecorder.RequestTrace trace = recorder.currentTrace();
-			PipelineEvent toolEvent = recorder.start(trace, PipelineEvent.PHASE_TOOL, parent.id(),
+			PipelineRecorder.RequestTrace boundTrace = boundTrace();
+			PipelineEvent toolEvent = recorder.start(boundTrace, PipelineEvent.PHASE_TOOL, parent.id(),
 					"Sub-agent " + sub.id(),
 					PipelineJson.of(Map.of("args", Map.of("query", String.valueOf(query)))),
 					parentContext.parentEventId(), parent.id());
@@ -280,17 +288,26 @@ public class AgentExecutor {
 			long start = System.currentTimeMillis();
 			try {
 				AgentContext childContext = parentContext.child(sub.id(), toolEventId, query);
-				AgentResult result = run(sub, childContext);
-				recorder.finish(trace, toolEvent, PipelineEvent.STATUS_OK, "Sub-agent " + sub.id(),
+				AgentResult result = recorder.callBound(boundTrace, () -> run(sub, childContext));
+				recorder.finish(boundTrace, toolEvent, PipelineEvent.STATUS_OK, "Sub-agent " + sub.id(),
 						PipelineJson.of(Map.of("output", result.text())), System.currentTimeMillis() - start,
 						toolEventId);
 				return result.text();
 			} catch (RuntimeException ex) {
-				recorder.finish(trace, toolEvent, PipelineEvent.STATUS_ERROR, "Sub-agent " + sub.id(),
+				recorder.finish(boundTrace, toolEvent, PipelineEvent.STATUS_ERROR, "Sub-agent " + sub.id(),
 						PipelineJson.text(String.valueOf(ex.getMessage())), System.currentTimeMillis() - start,
 						toolEventId);
 				throw ex;
 			}
+		}
+
+		/**
+		 * The executing thread may be a reactor thread with no trace bound (streamed tool loop);
+		 * fall back to the captured trace instead of null.
+		 */
+		private PipelineRecorder.RequestTrace boundTrace() {
+			PipelineRecorder.RequestTrace current = recorder.currentTrace();
+			return current != null ? current : trace;
 		}
 	}
 }

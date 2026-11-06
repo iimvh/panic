@@ -30,10 +30,11 @@ function EvidencePanel({ evidence }: { evidence: DashboardModel["evidence"] }) {
 function AuditPanel({ audit }: { audit: string | null }) {
 	return (
 		<Panel title="tool result / worktree" className="shrink-0" bodyClassName="px-3 py-2.5">
-			<dl className="mb-2 flex items-baseline gap-3 font-mono text-[11px]">
+			<dl className="mb-1 flex items-baseline gap-3 font-mono text-[11px]">
 				<dt className="text-fg-faint">worktree</dt>
 				<dd className="text-fg-dim">tree</dd>
 			</dl>
+			<p className="mb-2 font-mono text-[10.5px] tracking-wide text-fg-faint">local · refresh · forDate</p>
 			<p className="scrollbar-thin max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-fg [@media(max-height:900px)]:max-h-16">
 				{audit ?? "diff review → related checks → return"}
 			</p>

@@ -33,6 +33,17 @@
 			<artifactId>panic-agent-digest</artifactId>
 			<version>${project.version}</version>
 		</dependency>
+		<!-- Prod store of record for the postgres profile (H2 stays the dev default). -->
+		<dependency>
+			<groupId>org.postgresql</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+		<!-- TCP fallback adapter for the StringRedisOps port (Upstash REST is HTTP-only). -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-redis</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-test</artifactId>

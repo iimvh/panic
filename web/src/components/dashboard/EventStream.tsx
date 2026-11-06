@@ -17,7 +17,7 @@ function StreamLine({
 	return (
 		<li className="flex items-baseline gap-3 px-3 font-mono text-[11px] leading-relaxed">
 			<span className="w-10 shrink-0 select-none text-right text-fg-faint">{row.stamp}</span>
-			<span className={`w-20 shrink-0 truncate ${tintText[row.tint]}`} title={row.actor}>
+			<span className={`w-24 shrink-0 truncate ${tintText[row.tint]}`} title={row.actor}>
 				{row.actor}
 			</span>
 			<span

@@ -74,3 +74,7 @@ AGENTS.md
 opencode.jsonc
 dev.ps1
 kilo.json
+agents/
+.scratch/
+UI-TEMPLATE.png
+ui-wireframe.md

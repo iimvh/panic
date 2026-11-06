@@ -45,6 +45,31 @@ public class PipelineRecorder {
 		CURRENT_TRACE.remove();
 	}
 
+	/**
+	 * Runs a blocking task with a trace bound to the executing thread, restoring the previous
+	 * binding afterwards. Streamed tool loops execute callbacks on reactor threads where no
+	 * trace is bound; the executor captures the trace on the caller thread (already bound) and
+	 * passes it here so synchronous sub-agent runs record into it.
+	 */
+	public <T> T callBound(RequestTrace trace, java.util.function.Supplier<T> task) {
+		RequestTrace previous = CURRENT_TRACE.get();
+		boolean bound = trace != null && trace != previous;
+		if (bound) {
+			CURRENT_TRACE.set(trace);
+		}
+		try {
+			return task.get();
+		} finally {
+			if (bound) {
+				if (previous == null) {
+					CURRENT_TRACE.remove();
+				} else {
+					CURRENT_TRACE.set(previous);
+				}
+			}
+		}
+	}
+
 	public PipelineEvent activeTool() {
 		return ACTIVE_TOOL.get();
 	}

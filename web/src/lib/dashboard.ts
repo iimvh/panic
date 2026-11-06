@@ -165,6 +165,7 @@ function summaryText(event: PipelineEvent): string {
 function streamActor(event: PipelineEvent): string {
 	if (event.role === "user") return "USER";
 	switch (event.phase) {
+		case "trace": return "COORDINATOR";
 		case "llm": {
 			const model = event.title.match(/LLM call · (.+?) →/)?.[1] ?? event.actor;
 			return (model ?? "LLM").toUpperCase();

@@ -40,6 +40,10 @@ public class ChatTurn {
 	@Column(nullable = false)
 	private LocalDateTime createdAt = LocalDateTime.now();
 
+	/** Pipeline trace of the run that produced this turn; null on legacy rows. */
+	@Column(name = "trace_id")
+	private Long traceId;
+
 	public enum Role {
 		USER,
 		ASSISTANT

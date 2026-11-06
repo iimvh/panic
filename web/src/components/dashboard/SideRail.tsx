@@ -45,11 +45,18 @@ export default function SideRail({
 	return (
 		<div className="flex min-h-0 flex-1 flex-col gap-2.5">
 			<Panel
-				title="model / callback rounds"
+				title="opus / advisor"
 				right={<LiveBadge live={live} />}
 				className="flex-1"
 				bodyClassName="scrollbar-thin overflow-y-auto px-3 py-2"
 			>
+				<p className="mb-3 flex items-center gap-2 text-[11.5px] text-fg-dim">
+					<span
+						aria-hidden="true"
+						className={`inline-block h-[7px] w-[7px] shrink-0 rounded-full ${live ? "bg-green animate-pulse-soft" : "bg-edge-strong"}`}
+					/>
+					on call
+				</p>
 				{llmRounds.length === 0 ? (
 					<p className="py-6 text-center text-[11px] text-fg-faint">no model round yet</p>
 				) : (

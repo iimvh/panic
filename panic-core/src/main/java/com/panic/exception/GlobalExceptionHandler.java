@@ -19,7 +19,8 @@ public class GlobalExceptionHandler {
 	public ResponseEntity<Map<String, String>> handleBooking(BookingException ex) {
 		Map<String, String> body = new HashMap<>();
 		body.put("error", ex.getMessage());
-		return ResponseEntity.badRequest().body(body);
+		return ResponseEntity.status(ex.status() <= 0 ? HttpStatus.BAD_REQUEST
+				: HttpStatus.valueOf(ex.status())).body(body);
 	}
 
 	@ExceptionHandler(MethodArgumentNotValidException.class)

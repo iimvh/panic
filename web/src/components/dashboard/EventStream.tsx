@@ -71,7 +71,7 @@ export default function EventStream({ dashboard }: { dashboard: DashboardModel }
 			<div
 				ref={scrollerRef}
 				onScroll={onScroll}
-				className="scrollbar-thin h-52 min-h-0 overflow-y-auto py-2 [@media(max-height:820px)]:h-44"
+				className="scrollbar-thin h-52 min-h-0 overflow-y-auto py-2 [@media(max-height:900px)]:h-40 [@media(max-height:800px)]:h-32"
 			>
 				{dashboard.stream.length === 0 ? (
 					<p className="py-8 text-center text-[11px] text-fg-faint">

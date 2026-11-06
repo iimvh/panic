@@ -197,7 +197,7 @@ export default function App() {
 					<div className="flex min-h-0 flex-col gap-2.5 lg:flex-1 lg:flex-row">
 						{/* Left region: middle row + evidence + event stream, spanning under both columns. */}
 						<div className="flex min-h-0 flex-col gap-2.5 lg:flex-1">
-							<div className="flex min-h-0 flex-col gap-2.5 lg:flex-1 lg:flex-row">
+							<div className="flex min-h-0 flex-col gap-2.5 lg:min-h-[240px] lg:flex-1 lg:flex-row">
 								<div className="order-2 flex min-h-0 flex-col lg:order-1 lg:w-[248px] lg:shrink-0">
 									<ToolRail cards={dashboard.tools} />
 								</div>

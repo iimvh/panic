@@ -7,7 +7,7 @@ function EvidencePanel({ evidence }: { evidence: DashboardModel["evidence"] }) {
 		<Panel
 			title="evidence / tool return"
 			className="shrink-0"
-			bodyClassName="scrollbar-thin max-h-36 space-y-1.5 overflow-y-auto px-3 py-2.5 [@media(max-height:820px)]:max-h-24"
+			bodyClassName="scrollbar-thin max-h-36 space-y-1.5 overflow-y-auto px-3 py-2.5 [@media(max-height:900px)]:max-h-24"
 		>
 			{evidence.length === 0 ? (
 				<p className="py-4 text-[11px] text-fg-faint">no tool return yet</p>
@@ -21,7 +21,7 @@ function EvidencePanel({ evidence }: { evidence: DashboardModel["evidence"] }) {
 					</div>
 				))
 			)}
-			<p className="pt-1 text-[10.5px] text-fg-faint">only the positions + summaries that matter</p>
+			<p className="pt-1 text-[10.5px] text-fg-faint [@media(max-height:900px)]:hidden">only the positions + summaries that matter</p>
 		</Panel>
 	);
 }
@@ -34,7 +34,7 @@ function AuditPanel({ audit }: { audit: string | null }) {
 				<dt className="text-fg-faint">worktree</dt>
 				<dd className="text-fg-dim">tree</dd>
 			</dl>
-			<p className="scrollbar-thin max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-fg">
+			<p className="scrollbar-thin max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-fg [@media(max-height:900px)]:max-h-16">
 				{audit ?? "diff review → related checks → return"}
 			</p>
 		</Panel>

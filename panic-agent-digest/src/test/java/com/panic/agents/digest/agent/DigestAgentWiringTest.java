@@ -75,6 +75,6 @@ class DigestAgentWiringTest {
 						new DigestTools(digests, new DigestProperties()))
 				.toolCallbacks().stream().map(callback -> callback.getToolDefinition().name()).toList();
 
-		assertThat(names).containsExactlyInAnyOrder("today", "forDate", "archive", "generate");
+		assertThat(names).containsExactlyInAnyOrder("today", "forDate", "archive", "generate", "refresh");
 	}
 }

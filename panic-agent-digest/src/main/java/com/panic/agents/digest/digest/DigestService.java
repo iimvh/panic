@@ -35,4 +35,11 @@ public interface DigestService {
 
 	/** Human-readable chat answer for a date, or a plain "not available" message. */
 	String answerFor(LocalDate date);
+
+	/**
+	 * Fetch feeds now and return the freshest unsummarized stories (newest first), so a chat user can
+	 * get the latest headlines immediately without waiting for the morning run. Reads metadata only —
+	 * this never calls the summarizer.
+	 */
+	List<com.panic.agents.digest.feed.NewsItem> latestHeadlines(int limit);
 }

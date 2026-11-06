@@ -250,6 +250,17 @@ public class DefaultDigestService implements DigestService {
 	}
 
 	@Override
+	@Transactional
+	public List<NewsItem> latestHeadlines(int limit) {
+		ingest();
+		Instant threshold = clock.instant().minus(FRESHNESS);
+		List<NewsItem> recent = deduplicate(items.findByDigestIdIsNullAndPublishedAtAfterOrderByPublishedAtDesc(threshold));
+		return balanceByCategory(recent).stream()
+				.limit(Math.max(limit, 1))
+				.toList();
+	}
+
+	@Override
 	public String answerFor(LocalDate date) {
 		Optional<Digest> digest = find(date);
 		if (digest.isEmpty()) {

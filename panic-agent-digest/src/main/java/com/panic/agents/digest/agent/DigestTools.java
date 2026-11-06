@@ -43,6 +43,22 @@ public class DigestTools {
 		return dates.stream().limit(14).map(LocalDate::toString).reduce((a, b) -> a + "\n" + b).orElse("");
 	}
 
+	@Tool(description = "Fetch the Vietnamese news feeds right now and return the latest headlines "
+			+ "(title, source, link), newest first. Use this when the user wants the freshest news "
+			+ "immediately or when no digest exists for today yet. Fast and free: it never calls the model.")
+	public String refresh(@ToolParam(description = "Maximum number of headlines to return") int limit) {
+		var items = digests.latestHeadlines(limit);
+		if (items.isEmpty()) {
+			return "Hiện chưa lấy được tin mới từ các nguồn RSS. Vui lòng thử lại sau ít phút.";
+		}
+		StringBuilder out = new StringBuilder("Tin mới nhất (").append(items.size()).append("):\n");
+		for (var item : items) {
+			out.append("- ").append(item.getTitle()).append(" (").append(item.getSource().getName()).append("): ")
+					.append(item.getLink()).append('\n');
+		}
+		return out.toString().trim();
+	}
+
 	@Tool(description = "Generate the digest for a date on demand. Set force=true to regenerate an existing day. "
 			+ "Only available when operators enable manual generation.")
 	public String generate(@ToolParam(description = "Digest date in ISO form, e.g. 2026-11-06") String date,

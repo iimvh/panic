@@ -242,6 +242,20 @@ class DigestServiceTest {
 	}
 
 	@Test
+	void latestHeadlinesFetchesNowAndReturnsRecentStoriesWithoutSummarizing() {
+		reader.articles("https://vnexpress.example/rss", "VnExpress",
+				article("g1", "Tin một", "https://vnexpress.example/1"),
+				article("g2", "Tin hai", "https://vnexpress.example/2"));
+
+		List<com.panic.agents.digest.feed.NewsItem> latest = service.latestHeadlines(5);
+
+		assertThat(latest).extracting(com.panic.agents.digest.feed.NewsItem::getTitle)
+				.containsExactly("Tin một", "Tin hai");
+		// A chat read never summarizes: the model is not called at all.
+		assertThat(summarizer.calls()).isZero();
+	}
+
+	@Test
 	void archiveListsAvailableDatesNewestFirst() {
 		service.generate(DAY, false);
 		service.generate(DAY.minusDays(1), false);

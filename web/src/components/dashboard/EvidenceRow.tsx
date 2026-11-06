@@ -7,7 +7,7 @@ function EvidencePanel({ evidence }: { evidence: DashboardModel["evidence"] }) {
 		<Panel
 			title="evidence / tool return"
 			className="shrink-0"
-			bodyClassName="scrollbar-thin max-h-36 space-y-1.5 overflow-y-auto px-3 py-2.5"
+			bodyClassName="scrollbar-thin max-h-36 space-y-1.5 overflow-y-auto px-3 py-2.5 [@media(max-height:820px)]:max-h-24"
 		>
 			{evidence.length === 0 ? (
 				<p className="py-4 text-[11px] text-fg-faint">no tool return yet</p>

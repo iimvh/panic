@@ -17,7 +17,7 @@ export function Panel({
 	bodyClassName?: string;
 }) {
 	return (
-		<section className={`flex min-h-0 flex-col border border-edge bg-panel ${className}`}>
+		<section className={`flex min-h-0 flex-col overflow-hidden border border-edge bg-panel ${className}`}>
 			<header className="flex shrink-0 items-center gap-2 border-b border-edge bg-panel-head px-3 py-2">
 				<span className="micro-label text-fg-dim">{title}</span>
 				{right && <span className="ml-auto flex items-center gap-2">{right}</span>}

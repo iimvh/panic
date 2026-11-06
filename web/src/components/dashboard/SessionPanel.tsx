@@ -52,13 +52,19 @@ export default function SessionPanel({
 	answer: string;
 	error: string | null;
 }) {
-	const scrollerRef = useRef<HTMLOListElement | null>(null);
+	const logRef = useRef<HTMLOListElement | null>(null);
+	const answerRef = useRef<HTMLDivElement | null>(null);
 	const count = lines.length;
 
-	// Stick to the newest work line while the turn builds; answer growth does not change the row count.
+	// Stick to the newest work line while the turn builds.
 	useEffect(() => {
-		scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
-	}, [count, answer]);
+		logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+	}, [count]);
+
+	// Keep the answer pane pinned to the newest streamed characters.
+	useEffect(() => {
+		answerRef.current?.scrollTo({ top: answerRef.current.scrollHeight });
+	}, [answer]);
 
 	const mistake = lines.some((line) => line.status === "error");
 	return (
@@ -79,27 +85,31 @@ export default function SessionPanel({
 			</div>
 
 			<div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto py-2">
-				{lines.length === 0 && !answer ? (
+				{lines.length === 0 ? (
 					<p className="px-5 py-10 text-center font-mono text-[11.5px] text-fg-faint">
 						main session idle — send a task above
 					</p>
 				) : (
-					<ol ref={scrollerRef}>
+					<ol ref={logRef}>
 						{lines.map((line, index) => (
 							<SessionRow key={`${line.id}-${index}`} line={line} index={index} />
 						))}
-						{answer && (
-							<li className="flex items-baseline gap-2 bg-[rgba(111,168,255,0.07)] px-3 font-mono text-[11.5px] leading-[1.65]">
-								<span className="w-7 shrink-0 select-none text-right text-fg-faint">
-									{String(lines.length).padStart(2, "0")}
-								</span>
-								<span className="w-3 shrink-0 select-none text-blue">‹</span>
-								<span className="whitespace-pre-wrap break-words text-blue/90">{answer}</span>
-							</li>
-						)}
 					</ol>
 				)}
 			</div>
+
+			{answer && (
+				<div
+					ref={answerRef}
+					className="scrollbar-thin max-h-[45%] min-h-0 shrink-0 overflow-y-auto border-t border-edge bg-[rgba(111,168,255,0.07)] px-3 py-2.5"
+				>
+					<span className="micro-label text-blue">answer</span>
+					<p className="mt-1.5 whitespace-pre-wrap break-words font-mono text-[11.5px] leading-[1.65] text-blue/90">
+						{answer}
+						{live && <span className="animate-pulse-soft"> ▌</span>}
+					</p>
+				</div>
+			)}
 
 			<footer className="shrink-0 border-t border-edge px-3 py-2 text-[10.5px] text-fg-faint">
 				evidence scoped to current task

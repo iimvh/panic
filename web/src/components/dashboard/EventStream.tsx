@@ -68,7 +68,11 @@ export default function EventStream({ dashboard }: { dashboard: DashboardModel }
 			right={<span className="micro-label text-fg-faint">{dashboard.stream.length} events</span>}
 			className="shrink-0"
 		>
-			<div ref={scrollerRef} onScroll={onScroll} className="scrollbar-thin h-52 min-h-0 overflow-y-auto py-2">
+			<div
+				ref={scrollerRef}
+				onScroll={onScroll}
+				className="scrollbar-thin h-52 min-h-0 overflow-y-auto py-2 [@media(max-height:820px)]:h-44"
+			>
 				{dashboard.stream.length === 0 ? (
 					<p className="py-8 text-center text-[11px] text-fg-faint">
 						no events yet — the stream fills as the task runs

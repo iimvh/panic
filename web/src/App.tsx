@@ -188,15 +188,17 @@ export default function App() {
 				onSelectTurn={(id) => setSelectedTurnId((current) => (current === id ? null : id))}
 			/>
 
-			<main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
-				<div className="mx-auto flex max-w-[1560px] flex-col gap-2.5 p-3">
+			{/* Desktop: the whole workspace fits the viewport — only panel bodies scroll.
+			    Mobile: natural page scroll. */}
+			<main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
+				<div className="mx-auto flex max-w-[1560px] flex-col gap-2.5 p-3 lg:h-full">
 					<RoleCards roles={dashboard.roles} />
 
-					<div className="grid min-h-0 grid-cols-1 gap-2.5 lg:grid-cols-[248px_minmax(0,1fr)_276px]">
+					<div className="grid min-h-0 grid-cols-1 gap-2.5 lg:flex-1 lg:grid-cols-[248px_minmax(0,1fr)_276px]">
 						<div className="order-2 flex min-h-0 flex-col lg:order-1">
 							<ToolRail cards={dashboard.tools} />
 						</div>
-						<div className="order-1 min-h-[340px] lg:order-2 lg:h-[560px]">
+						<div className="order-1 min-h-[340px] lg:order-2 lg:min-h-0">
 							<SessionPanel
 								lines={dashboard.session}
 								agentId={rootAgentId}
@@ -212,7 +214,7 @@ export default function App() {
 								error={viewedError}
 							/>
 						</div>
-						<div className="order-3 flex min-h-0 flex-col lg:h-[560px]">
+						<div className="order-3 flex min-h-0 flex-col">
 							<SideRail
 								llmRounds={dashboard.llmRounds}
 								checkpoints={dashboard.checkpoints}

@@ -36,7 +36,7 @@ function LaneDot({ card }: { card: RoleCard }) {
 /** Top lane strip with the four fixed roles: MAIN · WORKERS · TOOLS · ROUTING. */
 export default function RoleCards({ roles }: { roles: RoleCard[] }) {
 	return (
-		<div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+		<div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
 			{roles.map((card) => (
 				<RoleLane key={card.key} card={card} />
 			))}

@@ -6,8 +6,8 @@ function EvidencePanel({ evidence }: { evidence: DashboardModel["evidence"] }) {
 	return (
 		<Panel
 			title="evidence / tool return"
-			className="min-h-0"
-			bodyClassName="px-3 py-2.5 space-y-1.5"
+			className="shrink-0"
+			bodyClassName="scrollbar-thin max-h-36 space-y-1.5 overflow-y-auto px-3 py-2.5"
 		>
 			{evidence.length === 0 ? (
 				<p className="py-4 text-[11px] text-fg-faint">no tool return yet</p>
@@ -29,7 +29,7 @@ function EvidencePanel({ evidence }: { evidence: DashboardModel["evidence"] }) {
 /** Bottom-right: last closed tool output + the review chain of the workspace. */
 function AuditPanel({ audit }: { audit: string | null }) {
 	return (
-		<Panel title="tool result / worktree" className="min-h-0" bodyClassName="px-3 py-2.5">
+		<Panel title="tool result / worktree" className="shrink-0" bodyClassName="px-3 py-2.5">
 			<dl className="mb-2 flex items-baseline gap-3 font-mono text-[11px]">
 				<dt className="text-fg-faint">worktree</dt>
 				<dd className="text-fg-dim">tree</dd>
@@ -44,7 +44,7 @@ function AuditPanel({ audit }: { audit: string | null }) {
 /** Bottom row: evidence left, audit right. */
 export default function EvidenceRow({ dashboard }: { dashboard: DashboardModel }) {
 	return (
-		<div className="grid min-h-0 grid-cols-1 gap-2.5 lg:grid-cols-2">
+		<div className="grid grid-cols-1 gap-2.5 lg:grid-cols-2">
 			<EvidencePanel evidence={dashboard.evidence} />
 			<AuditPanel audit={dashboard.audit} />
 		</div>

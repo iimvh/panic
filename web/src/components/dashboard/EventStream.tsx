@@ -66,7 +66,7 @@ export default function EventStream({ dashboard }: { dashboard: DashboardModel }
 		<Panel
 			title="event stream / one task"
 			right={<span className="micro-label text-fg-faint">{dashboard.stream.length} events</span>}
-			className="min-h-0"
+			className="shrink-0"
 		>
 			<div ref={scrollerRef} onScroll={onScroll} className="scrollbar-thin h-52 min-h-0 overflow-y-auto py-2">
 				{dashboard.stream.length === 0 ? (

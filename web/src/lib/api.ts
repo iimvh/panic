@@ -1,7 +1,41 @@
 import { normalizePipeline, type PipelineEvent } from "./pipeline";
 
 const CHAT_ENDPOINT = "/api/agent/chat";
+const AGENT_TREE_ENDPOINT = "/actuator/agents";
 const TIMEOUT_MS = 90_000;
+
+export interface AgentTreeNode {
+	id: string;
+	description: string;
+	tools: string[];
+	providers: string[];
+	subAgents: string[];
+	skills: string[];
+}
+
+/** Runtime agent registry (GET /actuator/agents) — id tree + tool lists. */
+export async function fetchAgentTree(): Promise<{ root: string; agents: AgentTreeNode[] } | null> {
+	try {
+		const response = await fetch(AGENT_TREE_ENDPOINT);
+		if (!response.ok) return null;
+		const json = (await response.json()) as { root?: string; agents?: unknown[] };
+		if (!Array.isArray(json.agents)) return null;
+		const agents = json.agents
+			.filter((agent): agent is Record<string, unknown> => typeof agent === "object" && agent !== null)
+			.map((agent) => ({
+				id: String(agent.id ?? ""),
+				description: String(agent.description ?? ""),
+				tools: Array.isArray(agent.tools) ? agent.tools.map(String) : [],
+				providers: Array.isArray(agent.providers) ? agent.providers.map(String) : [],
+				subAgents: Array.isArray(agent.subAgents) ? agent.subAgents.map(String) : [],
+				skills: Array.isArray(agent.skills) ? agent.skills.map(String) : [],
+			}))
+			.filter((agent) => agent.id);
+		return { root: typeof json.root === "string" ? json.root : agents[0]?.id ?? "", agents };
+	} catch {
+		return null;
+	}
+}
 
 export class AgentError extends Error {
 	constructor(

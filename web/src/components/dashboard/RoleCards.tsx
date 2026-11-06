@@ -7,15 +7,15 @@ import { Dot, tintFill, tintText } from "./Panel";
  */
 function RoleLane({ card }: { card: RoleCard }) {
 	return (
-		<div className="flex flex-col gap-2 border border-edge bg-panel px-4 py-3">
+		<div className="flex flex-col gap-1 border border-edge bg-panel px-3.5 py-1.5">
 			<div className="flex items-center justify-between gap-2">
 				<span className="micro-label text-fg-faint">{card.label}</span>
 				<LaneDot card={card} />
 			</div>
-			<span className={`truncate text-[17px] ${tintText[card.tint]}`} title={`${card.title} — ${card.subtitle}`}>
+			<span className={`truncate text-[14px] leading-tight ${tintText[card.tint]}`} title={`${card.title} — ${card.subtitle}`}>
 				{card.title}
 			</span>
-			<span className="truncate text-[11px] text-fg-faint">{card.subtitle}</span>
+			<span className="truncate text-[10px] leading-tight text-fg-faint">{card.subtitle}</span>
 		</div>
 	);
 }

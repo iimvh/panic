@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="vi" class="light h-full overflow-hidden">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PANIC Multi-Agent Workspace — Japanese Minimalist Architecture</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'Inter', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            wabi: '#C84B31',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    * {
+      border-color: inherit;
+      box-shadow: none !important;
+      text-shadow: none !important;
+      filter: none !important;
+      backdrop-filter: none !important;
+    }
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .tabular-nums {
+      font-variant-numeric: tabular-nums;
+    }
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #D4D4D8;
+    }
+    .dark ::-webkit-scrollbar-thumb {
+      background: #27272A;
+    }
+  </style>
+</head>
+<body class="bg-white dark:bg-[#0F0F11] text-[#111111] dark:text-[#EDEDED] h-full w-full flex flex-col selection:bg-[#C84B31] selection:text-white transition-colors duration-150">
+
+  <!-- TOP ARCHITECTURAL HEADER (48px, shrink-0, Hairline separation) -->
+  <header class="h-12 border-b border-[#EAEAEA] dark:border-[#222226] bg-white dark:bg-[#0F0F11] px-6 lg:px-8 flex items-center justify-between shrink-0 z-20">
+    <div class="flex items-center gap-6">
+      <div class="flex items-baseline gap-3">
+        <span class="text-xs font-bold tracking-[0.2em] text-[#111111] dark:text-[#EDEDED] uppercase">PANIC</span>
+        <span class="text-[10px] tracking-[0.15em] text-[#888888] dark:text-[#787880] uppercase hidden sm:inline">Orchestrated Agent Workspace</span>
+      </div>
+      <span class="h-3 w-[1px] bg-[#EAEAEA] dark:bg-[#222226]"></span>
+      <div class="text-[11px] font-mono text-[#888888] dark:text-[#787880]">
+        TRACE <span class="text-[#111111] dark:text-[#EDEDED]">#496030</span>
+      </div>
+    </div>
+
+    <!-- VIEW CONTROLS -->
+    <div class="flex items-center gap-6 lg:gap-8 text-xs">
+      <button id="tab-user" onclick="switchView('user')" class="h-12 border-b-2 border-[#C84B31] font-semibold text-[#111111] dark:text-[#EDEDED] tracking-[0.05em] uppercase transition-colors">
+        01 / Synthesis (User View)
+      </button>
+      <button id="tab-split" onclick="switchView('split')" class="h-12 border-b-2 border-transparent font-normal text-[#888888] dark:text-[#787880] hover:text-[#111111] dark:hover:text-[#EDEDED] tracking-[0.05em] uppercase transition-colors hidden md:block">
+        02 / Parallel Ledger
+      </button>
+      <button id="tab-debug" onclick="switchView('debug')" class="h-12 border-b-2 border-transparent font-normal text-[#888888] dark:text-[#787880] hover:text-[#111111] dark:hover:text-[#EDEDED] tracking-[0.05em] uppercase transition-colors">
+        03 / Execution Trace (Inspector)
+      </button>
+    </div>
+
+    <!-- UTILITY CONTROLS -->
+    <div class="flex items-center gap-4 text-xs">
+      <!-- Theme Switcher -->
+      <button onclick="toggleTheme()" class="text-[11px] tracking-[0.1em] font-mono text-[#888888] dark:text-[#787880] hover:text-[#111111] dark:hover:text-[#EDEDED] uppercase flex items-center gap-1.5">
+        <span id="theme-label">和紙 [Washi / Light]</span>
+      </button>
+      <span class="h-3 w-[1px] bg-[#EAEAEA] dark:bg-[#222226]"></span>
+      <button class="text-xs text-[#C84B31] hover:underline font-medium tracking-[0.05em] whitespace-nowrap">
+        + New Session
+      </button>
+    </div>
+  </header>
+
+  <!-- WORKSPACE BODY (flex-1, min-h-0, overflow-hidden) -->
+  <div class="flex-1 min-h-0 flex overflow-hidden">
+
+    <!-- SIDEBAR: SESSIONS DIRECTORY -->
+    <aside class="w-64 border-r border-[#EAEAEA] dark:border-[#222226] bg-[#FAFAFA] dark:bg-[#141417] flex flex-col shrink-0 overflow-hidden">
+      <div class="p-4 border-b border-[#EAEAEA] dark:border-[#222226] shrink-0">
+        <div class="text-[10px] font-bold tracking-[0.2em] text-[#888888] dark:text-[#787880] uppercase mb-2">
+          Directory
+        </div>
+        <input type="text" placeholder="Filter records..." class="w-full bg-white dark:bg-[#0F0F11] border border-[#EAEAEA] dark:border-[#222226] rounded-none px-3 py-1.5 text-xs text-[#111111] dark:text-[#EDEDED] placeholder-[#888888] focus:outline-none focus:border-[#C84B31]">
+      </div>
+
+      <div class="flex-1 min-h-0 overflow-y-auto">
+        <!-- Active Session -->
+        <div class="border-b border-[#EAEAEA] dark:border-[#222226] bg-white dark:bg-[#0F0F11] p-4 relative cursor-pointer">
+          <div class="absolute left-0 top-0 bottom-0 w-[2px] bg-[#C84B31]"></div>
+          <div class="text-xs font-semibold text-[#111111] dark:text-[#EDEDED] tracking-tight mb-1">
+            Tiến độ Sân bay Long Thành
+          </div>
+          <div class="text-[11px] text-[#888888] dark:text-[#787880] leading-snug truncate">
+            Thẩm tra văn bản kiến nghị lùi mốc 2027
+          </div>
+          <div class="mt-2 flex items-center justify-between text-[10px] font-mono text-[#888888] dark:text-[#787880]">
+            <span>10:42 AM</span>
+            <span class="text-[#C84B31] font-medium">Active</span>
+          </div>
+        </div>
+
+        <!-- Session Item 2 -->
+        <div class="border-b border-[#EAEAEA] dark:border-[#222226] p-4 hover:bg-white dark:hover:bg-[#0F0F11] transition-colors cursor-pointer group">
+          <div class="text-xs font-medium text-[#444444] dark:text-[#A0A0A5] group-hover:text-[#111111] dark:group-hover:text-[#EDEDED] tracking-tight mb-1">
+            Phân bổ vốn đầu tư Q4/2026
+          </div>
+          <div class="text-[11px] text-[#888888] dark:text-[#787880] truncate">
+            Báo cáo chi ngân sách hạng mục đường lăn
+          </div>
+          <div class="mt-2 text-[10px] font-mono text-[#888888] dark:text-[#787880]">
+            Yesterday · 4 calls
+          </div>
+        </div>
+
+        <!-- Session Item 3 -->
+        <div class="border-b border-[#EAEAEA] dark:border-[#222226] p-4 hover:bg-white dark:hover:bg-[#0F0F11] transition-colors cursor-pointer group">
+          <div class="text-xs font-medium text-[#444444] dark:text-[#A0A0A5] group-hover:text-[#111111] dark:group-hover:text-[#EDEDED] tracking-tight mb-1">
+            Quy hoạch chuỗi cung ứng vật liệu
+          </div>
+          <div class="text-[11px] text-[#888888] dark:text-[#787880] truncate">
+            Tổng hợp dữ liệu mỏ đá Tân Cang & vận tải
+          </div>
+          <div class="mt-2 text-[10px] font-mono text-[#888888] dark:text-[#787880]">
+            04 Nov · Closed
+          </div>
+        </div>
+      </div>
+
+      <div class="p-3.5 border-t border-[#EAEAEA] dark:border-[#222226] text-[10px] font-mono text-[#888888] dark:text-[#787880] flex justify-between shrink-0 bg-[#FAFAFA] dark:bg-[#141417]">
+        <span>AGENTS: 04 ONLINE</span>
+        <span>42MS</span>
+      </div>
+    </aside>
+
+    <!-- MAIN VIEWPORT CONTAINER -->
+    <main class="flex-1 min-h-0 flex overflow-hidden">
+
+      <!-- ==============================================
+           MODULE 1: SYNTHESIS (USER VIEW)
+           Notice: NO horizontal border above the input dock!
+           The input box floats organically in intentional negative space (Ma).
+           ============================================== -->
+      <section id="panel-user" class="flex-1 min-h-0 flex flex-col h-full bg-white dark:bg-[#0F0F11] overflow-hidden border-r border-[#EAEAEA] dark:border-[#222226] transition-all">
+        
+        <!-- SCROLLABLE CONVERSATION REGISTER -->
+        <div class="flex-1 min-h-0 overflow-y-auto px-6 lg:px-16 pt-8 pb-4">
+          <div class="max-w-3xl mx-auto space-y-10 pb-6">
+            
+            <!-- SECTION 1: INQUIRY BRIEF -->
+            <div>
+              <div class="text-[10px] font-mono font-bold tracking-[0.2em] text-[#888888] dark:text-[#787880] uppercase mb-2">
+                01 / Inquiry Request · 08:42:11
+              </div>
+              <h1 class="text-xl lg:text-2xl font-semibold tracking-tight text-[#111111] dark:text-[#EDEDED] leading-snug">
+                Sân bay Long Thành tại sao bị kéo dài sang 2027?
+              </h1>
+              <div class="mt-3 flex items-center gap-4 text-xs font-mono text-[#888888] dark:text-[#787880]">
+                <span>SCOPE: INFRASTRUCTURE & CAPITAL</span>
+                <span>·</span>
+                <span>ROUTING: DIRECT SYNTHESIS</span>
+                <span>·</span>
+                <span class="text-[#C84B31] font-semibold">VERIFIED</span>
+              </div>
+            </div>
+
+            <div class="w-full h-[1px] bg-[#EAEAEA] dark:bg-[#222226]"></div>
+
+            <!-- SECTION 2: SYNTHESIS BODY -->
+            <div class="space-y-6 text-sm leading-[1.8] text-[#222222] dark:text-[#D4D4D8]">
+              
+              <div class="text-[10px] font-mono font-bold tracking-[0.2em] text-[#888888] dark:text-[#787880] uppercase">
+                02 / Executive Finding
+              </div>
+
+              <!-- Prominent lead statement -->
+              <div class="border-l-2 border-[#C84B31] pl-5 py-1 text-base text-[#111111] dark:text-[#EDEDED] font-medium leading-relaxed">
+                Tính đến thời điểm hiện tại, <strong>chưa có quyết định chính thức</strong> từ Thủ tướng Chính phủ hoặc Tổng công ty Cảng hàng không Việt Nam (ACV) về việc phê chuẩn lùi toàn bộ thời hạn hoàn thành sang năm 2027.
+              </div>
+
+              <p>
+                Tuy nhiên, các báo cáo đánh giá hiện trường và ý kiến từ các chuyên gia tư vấn kỹ thuật quốc tế cho thấy mốc tiến độ ban đầu đang chịu sức ép nghiêm trọng từ hai yếu tố trọng yếu:
+              </p>
+
+              <!-- Architectural Data List (Hairline dividers, Ma spacing) -->
+              <div class="border-y border-[#EAEAEA] dark:border-[#222226] my-6 divide-y divide-[#EAEAEA] dark:divide-[#222226]">
+                
+                <div class="py-4 grid grid-cols-12 gap-4">
+                  <div class="col-span-12 sm:col-span-3 text-[11px] font-mono tracking-wider text-[#888888] dark:text-[#787880] uppercase">
+                    YẾU TỐ 01
+                  </div>
+                  <div class="col-span-12 sm:col-span-9 space-y-1">
+                    <div class="font-semibold text-[#111111] dark:text-[#EDEDED]">Gói thầu Nhà ga Hành khách (Gói 5.10)</div>
+                    <p class="text-xs text-[#555555] dark:text-[#999999] leading-relaxed">
+                      Khối lượng thi công kết cấu thép mái vòm và chuỗi cung ứng thiết bị vận hành hàng không tự động cần thời gian lắp đặt, cân chỉnh và chạy thử nghiệm an toàn tối thiểu 18 đến 22 tháng.
+                    </p>
+                  </div>
+                </div>
+
+                <div class="py-4 grid grid-cols-12 gap-4">
+                  <div class="col-span-12 sm:col-span-3 text-[11px] font-mono tracking-wider text-[#888888] dark:text-[#787880] uppercase">
+                    YẾU TỐ 02
+                  </div>
+                  <div class="col-span-12 sm:col-span-9 space-y-1">
+                    <div class="font-semibold text-[#111111] dark:text-[#EDEDED]">Hạ tầng giao thông kết nối ngoại vi</div>
+                    <p class="text-xs text-[#555555] dark:text-[#999999] leading-relaxed">
+                      Các tuyến giao thông huyết mạch kết nối trực tiếp (Tuyến T1, T2 và cao tốc Biên Hòa - Vũng Tàu) gặp vướng mắc mặt bằng tại một số nút giao, ảnh hưởng đến khả năng khai thác thương mại đồng bộ.
+                    </p>
+                  </div>
+                </div>
+
+              </div>
+
+              <!-- Citations & Footnotes -->
+              <div class="pt-2 space-y-1.5 text-xs font-mono text-[#888888] dark:text-[#787880]">
+                <div class="text-[10px] font-bold tracking-[0.2em] uppercase text-[#111111] dark:text-[#EDEDED] mb-2">
+                  Primary References
+                </div>
+                <div class="flex items-baseline gap-2">
+                  <span class="text-[#C84B31]">[1]</span>
+                  <span class="text-[#111111] dark:text-[#EDEDED]">Báo VietNamNet / Chuyên mục Thời sự & Đầu tư công</span>
+                  <span class="text-[#888888]">— 06/11/2026</span>
+                </div>
+                <div class="flex items-baseline gap-2">
+                  <span class="text-[#C84B31]">[2]</span>
+                  <span class="text-[#111111] dark:text-[#EDEDED]">Biên bản giám sát thực địa Ban Quản lý Dự án Long Thành</span>
+                </div>
+              </div>
+
+              <!-- Follow-up Inquiry Actions -->
+              <div class="pt-4 flex flex-wrap items-center gap-4 text-xs">
+                <span class="font-mono text-[10px] tracking-wider text-[#888888] dark:text-[#787880] uppercase">Suggested Actions:</span>
+                <button class="text-[#111111] dark:text-[#EDEDED] hover:text-[#C84B31] underline underline-offset-4 tracking-tight">
+                  Xuất biên bản tóm tắt PDF ↗
+                </button>
+                <button class="text-[#111111] dark:text-[#EDEDED] hover:text-[#C84B31] underline underline-offset-4 tracking-tight">
+                  Tra cứu tiến độ giải ngân Gói 5.10 ↗
+                </button>
+              </div>
+
+            </div>
+
+          </div>
+        </div>
+
+        <!-- ==============================================
+             SEAMLESS BOTTOM INPUT DOCK (NO FULL-WIDTH LINE)
+             - Borderless container: Let space (Ma) do the separation
+             - Input box itself provides the solitary, refined boundary
+             ============================================== -->
+        <div class="shrink-0 bg-white dark:bg-[#0F0F11] px-6 lg:px-16 pt-2 pb-6 z-10">
+          <div class="max-w-3xl mx-auto">
+            
+            <!-- Enterprise Input Container (Flat, Hairline, Pure Zen alignment) -->
+            <div class="border border-[#EAEAEA] dark:border-[#222226] bg-white dark:bg-[#141417] focus-within:border-[#C84B31] dark:focus-within:border-[#C84B31] p-3 transition-colors">
+              
+              <!-- Text Input Field -->
+              <textarea rows="2" placeholder="Nhập chỉ thị khảo sát hoặc yêu cầu phân tích tiếp theo cho Agent..." class="w-full bg-transparent text-sm text-[#111111] dark:text-[#EDEDED] placeholder-[#888888] dark:placeholder-[#666666] resize-none focus:outline-none leading-relaxed"></textarea>
+              
+              <!-- Bottom Toolbar -->
+              <div class="flex items-center justify-between pt-2 border-t border-[#F0F0F0] dark:border-[#1E1E22] mt-1 text-xs font-mono">
+                
+                <!-- Left controls -->
+                <div class="flex items-center gap-3">
+                  <button class="text-[#888888] hover:text-[#111111] dark:hover:text-[#EDEDED] p-1 flex items-center justify-center font-sans font-medium text-base leading-none" title="Đính kèm tệp tin">
+                    +
+                  </button>
+                  <span class="h-3 w-[1px] bg-[#EAEAEA] dark:bg-[#222226]"></span>
+                  <div class="flex items-center gap-1.5 text-[#555555] dark:text-[#A0A0A5] hover:text-[#111111] dark:hover:text-white cursor-pointer py-0.5">
+                    <span class="text-[11px] font-medium tracking-tight">Gemini 3.8 Flash High</span>
+                    <span class="text-[9px] text-[#888888]">^</span>
+                  </div>
+                </div>
+
+                <!-- Right controls -->
+                <div class="flex items-center gap-3">
+                  <span class="text-[10px] text-[#888888] dark:text-[#787880] tracking-wider uppercase hidden sm:inline">
+                    Turbo On
+                  </span>
+                  <button class="w-7 h-7 bg-[#111111] dark:bg-[#EDEDED] text-white dark:text-[#0F0F11] hover:bg-[#C84B31] dark:hover:bg-[#C84B31] dark:hover:text-white flex items-center justify-center transition-colors" title="Thực thi chỉ thị (Enter)">
+                    <span class="text-xs font-bold leading-none">→</span>
+                  </button>
+                </div>
+
+              </div>
+
+            </div>
+
+            <!-- Footer Meta Subtext -->
+            <div class="mt-2 flex items-center justify-between text-[10px] font-mono text-[#888888] dark:text-[#787880] px-1">
+              <span>SHIFT + ENTER for newline</span>
+              <span>TOKEN CONTEXT: 128K</span>
+            </div>
+
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ==============================================
+           MODULE 2: EXECUTION TRACE (INSPECTOR / LEDGER VIEW)
+           ============================================== -->
+      <section id="panel-debug" class="w-[480px] lg:w-[540px] bg-[#FAFAFA] dark:bg-[#141417] flex flex-col h-full overflow-hidden shrink-0 border-l border-[#EAEAEA] dark:border-[#222226] transition-all">
+        
+        <!-- Inspector Title Header (shrink-0) -->
+        <div class="h-12 border-b border-[#EAEAEA] dark:border-[#222226] px-6 flex items-center justify-between shrink-0 bg-white dark:bg-[#0F0F11]">
+          <div class="flex items-baseline gap-2">
+            <span class="text-[10px] font-bold tracking-[0.2em] uppercase text-[#111111] dark:text-[#EDEDED]">LEDGER</span>
+            <span class="text-xs text-[#888888] font-mono">/ Telemetry Register</span>
+          </div>
+          <span class="text-[10px] font-mono px-2 py-0.5 bg-[#EAEAEA] dark:bg-[#222226] text-[#111111] dark:text-[#EDEDED]">
+            STATUS: 200 OK
+          </span>
+        </div>
+
+        <!-- Four-Cell Ledger Metrics (shrink-0) -->
+        <div class="grid grid-cols-4 border-b border-[#EAEAEA] dark:border-[#222226] bg-white dark:bg-[#0F0F11] text-left divide-x divide-[#EAEAEA] dark:divide-[#222226] shrink-0">
+          <div class="p-3">
+            <div class="text-[9px] font-mono text-[#888888] dark:text-[#787880] tracking-wider uppercase">Latency</div>
+            <div class="text-xs font-mono font-semibold text-[#111111] dark:text-[#EDEDED] mt-0.5 tabular-nums">16.48s</div>
+          </div>
+          <div class="p-3">
+            <div class="text-[9px] font-mono text-[#888888] dark:text-[#787880] tracking-wider uppercase">Tokens</div>
+            <div class="text-xs font-mono font-semibold text-[#111111] dark:text-[#EDEDED] mt-0.5 tabular-nums">2,840 tk</div>
+          </div>
+          <div class="p-3">
+            <div class="text-[9px] font-mono text-[#888888] dark:text-[#787880] tracking-wider uppercase">Workers</div>
+            <div class="text-xs font-mono font-semibold text-[#111111] dark:text-[#EDEDED] mt-0.5">1 w / 2 l</div>
+          </div>
+          <div class="p-3">
+            <div class="text-[9px] font-mono text-[#888888] dark:text-[#787880] tracking-wider uppercase">Routing</div>
+            <div class="text-xs font-mono font-semibold text-[#C84B31] mt-0.5">DIRECT</div>
+          </div>
+        </div>
+
+        <!-- Ledger Details Scroll Area (flex-1 min-h-0 overflow-y-auto) -->
+        <div class="flex-1 min-h-0 overflow-y-auto p-6 space-y-6">
+
+          <!-- 1. CHECKPOINT STAGES -->
+          <div>
+            <div class="text-[10px] font-bold tracking-[0.2em] text-[#888888] dark:text-[#787880] uppercase mb-2.5">
+              Checkpoint Stages
+            </div>
+            <div class="grid grid-cols-4 border border-[#EAEAEA] dark:border-[#222226] bg-white dark:bg-[#0F0F11] divide-x divide-[#EAEAEA] dark:divide-[#222226] text-center font-mono text-[10px]">
+              <div class="py-2 text-[#111111] dark:text-[#EDEDED]">
+                <span class="text-[#C84B31]">01</span> Request
+              </div>
+              <div class="py-2 text-[#111111] dark:text-[#EDEDED]">
+                <span class="text-[#C84B31]">02</span> Routing
+              </div>
+              <div class="py-2 text-[#111111] dark:text-[#EDEDED]">
+                <span class="text-[#C84B31]">03</span> Tools
+              </div>
+              <div class="py-2 text-[#111111] dark:text-[#EDEDED]">
+                <span class="text-[#C84B31]">04</span> Synthesize
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. EVIDENCE TABLE -->
+          <div>
+            <div class="text-[10px] font-bold tracking-[0.2em] text-[#888888] dark:text-[#787880] uppercase mb-2.5 flex items-center justify-between">
+              <span>Evidence Record</span>
+              <span class="font-mono text-[9px] text-[#888888]">2 RECORDS</span>
+            </div>
+
+            <div class="border border-[#EAEAEA] dark:border-[#222226] bg-white dark:bg-[#0F0F11] divide-y divide-[#EAEAEA] dark:divide-[#222226]">
+              <div class="p-3 font-mono text-xs space-y-1">
+                <div class="flex items-center justify-between">
+                  <span class="font-semibold text-[#111111] dark:text-[#EDEDED]">Worker 01 · digest</span>
+                  <span class="text-[10px] text-[#888888]">16.0s · HTTP 200</span>
+                </div>
+                <div class="text-[11px] text-[#666666] dark:text-[#999999]">
+                  Target: VietNamNet (Domestic Infrastructure Index)
+                </div>
+                <div class="text-[11px] text-[#333333] dark:text-[#BBBBBB] bg-[#FAFAFA] dark:bg-[#1A1A1E] p-2 border-l border-[#C84B31] font-sans leading-relaxed mt-1">
+                  "Chưa có quyết định chính thức từ Chính phủ/ACV về việc chấp thuận lùi tiến độ..."
+                </div>
+              </div>
+
+              <div class="p-3 font-mono text-xs space-y-1">
+                <div class="flex items-center justify-between">
+                  <span class="font-semibold text-[#111111] dark:text-[#EDEDED]">Worker 02 · local-scope</span>
+                  <span class="text-[10px] text-[#888888]">0.4s · 5 Tools</span>
+                </div>
+                <div class="text-[11px] text-[#666666] dark:text-[#999999]">
+                  Path: agents/main/workspace
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 3. REALTIME TIMELINE LOG -->
+          <div>
+            <div class="text-[10px] font-bold tracking-[0.2em] text-[#888888] dark:text-[#787880] uppercase mb-2.5 flex items-center justify-between">
+              <span>Execution Timeline</span>
+              <span class="font-mono text-[9px] text-[#888888]">OFFSET LOG</span>
+            </div>
+
+            <div class="border border-[#EAEAEA] dark:border-[#222226] bg-white dark:bg-[#0F0F11] font-mono text-[11px] divide-y divide-[#EAEAEA] dark:divide-[#222226]">
+              <div class="px-3 py-2 flex items-baseline gap-3">
+                <span class="text-[#888888] tabular-nums">00.0s</span>
+                <span class="text-[#111111] dark:text-[#EDEDED] font-semibold w-24">INQUIRY</span>
+                <span class="text-[#555555] dark:text-[#AAAAAA] truncate">Task received: Sân bay Long Thành</span>
+              </div>
+              <div class="px-3 py-2 flex items-baseline gap-3">
+                <span class="text-[#888888] tabular-nums">00.1s</span>
+                <span class="text-[#111111] dark:text-[#EDEDED] font-semibold w-24">ROUTING</span>
+                <span class="text-[#555555] dark:text-[#AAAAAA] truncate">Orchestrator: Direct Synthesis</span>
+              </div>
+              <div class="px-3 py-2 flex items-baseline gap-3">
+                <span class="text-[#888888] tabular-nums">02.5s</span>
+                <span class="text-[#C84B31] font-semibold w-24">DISPATCH</span>
+                <span class="text-[#555555] dark:text-[#AAAAAA] truncate">Digest Worker (1 worker · 2 lanes)</span>
+              </div>
+              <div class="px-3 py-2 flex items-baseline gap-3">
+                <span class="text-[#888888] tabular-nums">16.0s</span>
+                <span class="text-[#111111] dark:text-[#EDEDED] font-semibold w-24">FETCH_OK</span>
+                <span class="text-[#555555] dark:text-[#AAAAAA] truncate">vietnamnet.vn source validated</span>
+              </div>
+              <div class="px-3 py-2 flex items-baseline gap-3">
+                <span class="text-[#888888] tabular-nums">16.4s</span>
+                <span class="text-[#111111] dark:text-[#EDEDED] font-semibold w-24">RENDER</span>
+                <span class="text-[#555555] dark:text-[#AAAAAA] truncate">Response committed to register</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Ledger Footer (shrink-0) -->
+        <div class="p-3.5 border-t border-[#EAEAEA] dark:border-[#222226] bg-white dark:bg-[#0F0F11] flex items-center justify-between text-[10px] font-mono text-[#888888] dark:text-[#787880] shrink-0">
+          <span>TRACE HASH: SHA256-496030</span>
+          <span>HEAP: 142.4 MB</span>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script>
+    function switchView(mode) {
+      const panelUser = document.getElementById('panel-user');
+      const panelDebug = document.getElementById('panel-debug');
+      const tabUser = document.getElementById('tab-user');
+      const tabSplit = document.getElementById('tab-split');
+      const tabDebug = document.getElementById('tab-debug');
+
+      [tabUser, tabSplit, tabDebug].forEach(tab => {
+        if (tab) {
+          tab.className = "h-12 border-b-2 border-transparent font-normal text-[#888888] dark:text-[#787880] hover:text-[#111111] dark:hover:text-[#EDEDED] tracking-[0.05em] uppercase transition-colors";
+        }
+      });
+
+      if (mode === 'user') {
+        panelUser.style.display = 'flex';
+        panelDebug.style.display = 'none';
+        tabUser.className = "h-12 border-b-2 border-[#C84B31] font-semibold text-[#111111] dark:text-[#EDEDED] tracking-[0.05em] uppercase transition-colors";
+      } else if (mode === 'debug') {
+        panelUser.style.display = 'none';
+        panelDebug.style.display = 'flex';
+        panelDebug.className = "flex-1 bg-[#FAFAFA] dark:bg-[#141417] flex flex-col h-full overflow-hidden transition-all";
+        tabDebug.className = "h-12 border-b-2 border-[#C84B31] font-semibold text-[#111111] dark:text-[#EDEDED] tracking-[0.05em] uppercase transition-colors";
+      } else if (mode === 'split') {
+        panelUser.style.display = 'flex';
+        panelDebug.style.display = 'flex';
+        panelDebug.className = "w-[480px] lg:w-[540px] bg-[#FAFAFA] dark:bg-[#141417] flex flex-col h-full overflow-hidden shrink-0 border-l border-[#EAEAEA] dark:border-[#222226] transition-all";
+        if (tabSplit) {
+          tabSplit.className = "h-12 border-b-2 border-[#C84B31] font-semibold text-[#111111] dark:text-[#EDEDED] tracking-[0.05em] uppercase transition-colors";
+        }
+      }
+    }
+
+    function toggleTheme() {
+      const html = document.documentElement;
+      const label = document.getElementById('theme-label');
+      if (html.classList.contains('dark')) {
+        html.classList.remove('dark');
+        html.classList.add('light');
+        label.innerText = '和紙 [Washi / Light]';
+      } else {
+        html.classList.remove('light');
+        html.classList.add('dark');
+        label.innerText = '黒 [Kuro / Obsidian]';
+      }
+    }
+
+    switchView('user');
+  </script>
+</body>
+</html>

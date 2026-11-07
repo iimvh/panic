@@ -29,6 +29,26 @@ export interface WorkspaceStore {
 
 const STORAGE_KEY = "panic-workspace:v3";
 const SIDEBAR_KEY = "panic-sidebar-collapsed";
+const THEME_KEY = "panic-workspace-theme";
+
+export type WorkspaceTheme = "light" | "dark";
+
+export function loadTheme(): WorkspaceTheme | undefined {
+	try {
+		const raw = localStorage.getItem(THEME_KEY);
+		return raw === "dark" ? "dark" : raw === "light" ? "light" : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export function saveTheme(theme: WorkspaceTheme): void {
+	try {
+		localStorage.setItem(THEME_KEY, theme);
+	} catch {
+		/* storage unavailable: the toggle still works within the page */
+	}
+}
 
 export function newId(): string {
 	return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;

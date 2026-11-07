@@ -1,61 +1,70 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ChatSidebar from "./components/dashboard/ChatSidebar";
-import EventStream from "./components/dashboard/EventStream";
-import EvidenceRow from "./components/dashboard/EvidenceRow";
-import RoleCards from "./components/dashboard/RoleCards";
-import SessionPanel from "./components/dashboard/SessionPanel";
-import SideRail from "./components/dashboard/SideRail";
-import TaskBar from "./components/dashboard/TaskBar";
-import ToolRail from "./components/dashboard/ToolRail";
-import WorkspaceHeader, { type WorkspaceState } from "./components/dashboard/WorkspaceHeader";
+import ExecutionLedger, { type LedgerState } from "./components/workspace/ExecutionLedger";
+import ConversationTranscript from "./components/workspace/ConversationTranscript";
+import InquiryComposer from "./components/workspace/InquiryComposer";
+import SessionDirectory from "./components/workspace/SessionDirectory";
+import WorkspaceHeader, { type WorkspaceView } from "./components/workspace/WorkspaceHeader";
 import { usePipelineStream } from "./hooks/usePipelineStream";
+import { useTextStream } from "./hooks/useTextStream";
 import { AgentError, askAgent, fetchAgentTree } from "./lib/api";
 import {
 	deleteConversation,
 	fetchConversation,
 	listConversations,
-	renameConversation,
 	type ConversationSummary,
 } from "./lib/conversations";
-import { buildDashboard } from "./lib/dashboard";
+import { splitActivity, buildDashboard } from "./lib/dashboard";
 import {
 	MAX_TURNS,
-	loadSidebarCollapsed,
+	loadTheme,
 	loadWorkspace,
 	newId,
-	saveSidebarCollapsed,
+	saveTheme,
 	saveWorkspace,
 	type Turn,
 	type WorkspaceStore,
+	type WorkspaceTheme,
 } from "./lib/storage";
 
-const DEFAULT_WORKSPACE_STATE: WorkspaceState = "idle";
-const WIDE_SCREEN_PX = 1280;
+const DEFAULT_WORKSPACE_STATE: LedgerState = "idle";
 
 export default function App() {
 	const [workspace, setWorkspace] = useState<WorkspaceStore>(() => loadWorkspace());
 	const [sessions, setSessions] = useState<ConversationSummary[]>([]);
-	const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [liveTask, setLiveTask] = useState("");
 	const [liveTraceId, setLiveTraceId] = useState<number | null>(null);
-	const [streamingText, setStreamingText] = useState("");
 	const [rootAgentId, setRootAgentId] = useState<string | null>(null);
-	const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
-		() => loadSidebarCollapsed() ?? window.innerWidth < WIDE_SCREEN_PX
-	);
-	/** Conversation the current run drives; the dashboard streams it until the run closes. */
+	const [agentCount, setAgentCount] = useState(0);
+	const [view, setView] = useState<WorkspaceView>("synthesis");
+	const [theme, setTheme] = useState<WorkspaceTheme>(() => loadTheme() ?? "light");
+	/** Conversation the current run drives; the workspace streams it until the run closes. */
 	const [runningConversationId, setRunningConversationId] = useState<string | undefined>(undefined);
+	/** Wall-clock moment the first answer token arrived; the interleaving boundary of the chat timeline. */
+	const [tokenStartedAt, setTokenStartedAt] = useState<number | null>(null);
+	const tokenStartedRef = useRef<number | null>(null);
 
 	const pipeline = usePipelineStream();
+	/** Smoothed typewriter view of the live answer tokens (skeleton → typed text → cursor off). */
+	const answerStream = useTextStream();
 	const busyRef = useRef(false);
-	/** Trace id of the turn currently running; set by onStart, read by the turn finaliser (state is stale there). */
+	/** Trace id of the turn currently running; set by onStart, read by the turn finaliser. */
 	const runningTraceRef = useRef<number | null>(null);
 	/** Conversation the running turn belongs to; captured from the start frame. */
 	const runningConversationRef = useRef<string | undefined>(undefined);
 
 	const activeId = workspace.activeId;
+
+	// Theme is a document class so the paired CSS variables flip globally.
+	useEffect(() => {
+		document.documentElement.classList.toggle("dark", theme === "dark");
+		saveTheme(theme);
+	}, [theme]);
+
+	const toggleTheme = useCallback(() => {
+		setTheme((current) => (current === "dark" ? "light" : "dark"));
+	}, []);
 
 	const updateWorkspace = useCallback((mutate: (current: WorkspaceStore) => WorkspaceStore) => {
 		setWorkspace((current) => {
@@ -67,7 +76,6 @@ export default function App() {
 
 	const detachFromConversations = useCallback(() => {
 		updateWorkspace((current) => ({ ...current, activeId: undefined }));
-		setSelectedTurnId(null);
 	}, [updateWorkspace]);
 
 	const openSession = useCallback(
@@ -100,12 +108,15 @@ export default function App() {
 		listConversations()
 			.then((rows) => setSessions(rows))
 			.catch(() => {
-				/* the sidebar simply keeps its last known list */
+				/* the directory simply keeps its last known list */
 			});
 	}, []);
 
 	useEffect(() => {
-		void fetchAgentTree().then((tree) => setRootAgentId(tree?.root ?? null));
+		void fetchAgentTree().then((tree) => {
+			setRootAgentId(tree?.root ?? null);
+			setAgentCount(tree?.agents.length ?? 0);
+		});
 		refreshSessions();
 	}, [refreshSessions]);
 
@@ -126,47 +137,56 @@ export default function App() {
 		[turns]
 	);
 
-	/** The run drives this conversation; while the dashboard looks at it, panels mirror the live stream. */
+	/** The run drives this conversation; while the transcript appends the live turn, panels mirror it. */
 	const showingLive = busy && activeId === runningConversationId;
 
-	/** The pipeline the panels mirror: live frames while streaming this conversation, selected turn otherwise. */
+	/** The pipeline the panels mirror: live frames while streaming this conversation, last turn otherwise. */
 	const viewEvents = useMemo(() => {
 		if (showingLive) return pipeline.events;
-		if (selectedTurnId) {
-			return finishedTurns.find((turn) => turn.id === selectedTurnId)?.pipeline ?? [];
-		}
 		if (activeId) return finishedTurns[finishedTurns.length - 1]?.pipeline ?? [];
 		return [];
-	}, [showingLive, pipeline.events, finishedTurns, selectedTurnId, activeId]);
+	}, [showingLive, pipeline.events, finishedTurns, activeId]);
 
 	const dashboard = useMemo(() => buildDashboard(viewEvents, rootAgentId), [viewEvents, rootAgentId]);
 
-	/** The turn the panels mirror (null while a turn runs live in this conversation). */
-	const viewedTurn = useMemo(() => {
-		if (showingLive) return null;
-		return (
-			finishedTurns.find((turn) => turn.id === selectedTurnId) ??
-			finishedTurns[finishedTurns.length - 1] ??
-			null
-		);
-	}, [showingLive, finishedTurns, selectedTurnId]);
+	/** Interleaved chat timeline of the mirrored events: work rows before and after
+	 * the answer's first token. Replayed turns split on their assistant message. */
+	const activity = useMemo(
+		() => splitActivity(viewEvents, showingLive ? tokenStartedAt : null),
+		[viewEvents, showingLive, tokenStartedAt]
+	);
 
-	const workspaceState: WorkspaceState = useMemo(() => {
-		if (showingLive || pipeline.state === "connecting") return "in_progress";
-		if (viewedTurn?.status === "error") return "failed";
+	/** Wall-clock the live turn started (the transcript's clock mark). */
+	const [liveStartedAt, setLiveStartedAt] = useState<number | null>(null);
+
+	/** Mirrored turn while idle (for the trace hash + failure state). */
+	const mirroredTurn = finishedTurns[finishedTurns.length - 1] ?? null;
+
+	const ledgerState: LedgerState = useMemo(() => {
+		if (showingLive || pipeline.state === "connecting") return "running";
+		if (mirroredTurn?.status === "error" || dashboard.trace?.status === "error") return "failed";
 		if (viewEvents.length === 0) return DEFAULT_WORKSPACE_STATE;
 		return "complete";
-	}, [showingLive, pipeline.state, viewEvents.length, viewedTurn]);
+	}, [showingLive, pipeline.state, viewEvents.length, mirroredTurn, dashboard.trace]);
 
-	/** Failure detail of the viewed turn (kept on the turn, cleared when another turn is viewed). */
-	const viewedError = viewedTurn?.status === "error" ? viewedTurn.answer : null;
+	const shownTraceId = showingLive ? liveTraceId : mirroredTurn?.traceId ?? null;
 
-	const selectedTask = viewedTurn?.task ?? "";
-	const selectedTraceId = viewedTurn?.traceId ?? null;
+	// Viewport UX: the register scroller follows the growing feed while the user
+	// reads near the bottom, and yields the moment they scroll away to review.
+	const registerScrollerRef = useRef<HTMLDivElement>(null);
+	const registerStickRef = useRef(true);
 
-	const turnNumber = selectedTurnId
-		? finishedTurns.findIndex((turn) => turn.id === selectedTurnId) + 1
-		: finishedTurns.length + (showingLive ? 1 : 0);
+	const onRegisterScroll = useCallback(() => {
+		const element = registerScrollerRef.current;
+		if (!element) return;
+		registerStickRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+	}, []);
+
+	useEffect(() => {
+		if (!registerStickRef.current) return;
+		const element = registerScrollerRef.current;
+		if (element) element.scrollTop = element.scrollHeight;
+	}, [finishedTurns.length, answerStream.text, activity.post.length, showingLive]);
 
 	const sendTask = useCallback(async () => {
 		const task = draft.trim();
@@ -177,9 +197,11 @@ export default function App() {
 		setDraft("");
 		setLiveTask(task);
 		setLiveTraceId(null);
-		setStreamingText("");
-		setSelectedTurnId(null);
+		setTokenStartedAt(null);
+		tokenStartedRef.current = null;
+		setLiveStartedAt(Date.now());
 		pipeline.begin();
+		answerStream.begin();
 
 		const finish = (status: "ok" | "error", answer: string, events: Turn["pipeline"]) => {
 			const conversationId = runningConversationRef.current;
@@ -220,7 +242,14 @@ export default function App() {
 						}
 					},
 					onPipeline: (event) => pipeline.push(event),
-					onToken: (chunk) => setStreamingText((current) => current + chunk),
+					onToken: (chunk) => {
+						// Stamp the first arrival once: the point the chat text begins typing.
+						if (tokenStartedRef.current == null) {
+							tokenStartedRef.current = Date.now();
+							setTokenStartedAt(tokenStartedRef.current);
+						}
+						answerStream.append(chunk);
+					},
 				}
 			);
 			pipeline.merge(result.pipeline, { status: "ok", durationMs: result.durationMs });
@@ -248,7 +277,9 @@ export default function App() {
 				finish("error", detail, []);
 			}
 		} finally {
-			setStreamingText("");
+			// Close the typewriter: the buffered tail drains at speed, then the cursor retires
+			// and the register switches to the finished turn's replay text.
+			answerStream.end();
 			runningTraceRef.current = null;
 			runningConversationRef.current = undefined;
 			busyRef.current = false;
@@ -257,20 +288,22 @@ export default function App() {
 			// Activity ordering and the freshly seeded title come from the server.
 			refreshSessions();
 		}
-	}, [draft, activeId, pipeline, updateWorkspace, refreshSessions]);
+	}, [draft, activeId, pipeline, answerStream, updateWorkspace, refreshSessions]);
 
-	/** `＋ new chat`: detach so the next sent task creates a brand-new session. */
-	const startNewChat = useCallback(() => {
+	/** `+ New Session`: detach so the next sent task creates a brand-new session. */
+	const startNewSession = useCallback(() => {
 		detachFromConversations();
 		setLiveTraceId(null);
-		if (!busyRef.current) pipeline.reset();
-	}, [pipeline, detachFromConversations]);
+		if (!busyRef.current) {
+			pipeline.reset();
+			answerStream.reset();
+		}
+	}, [pipeline, answerStream, detachFromConversations]);
 
-	/** Sidebar selection always triggers a server fetch; the local cache renders instantly meanwhile. */
+	/** Directory selection always triggers a server fetch; the local cache renders instantly meanwhile. */
 	const selectSession = useCallback(
 		(id: string) => {
 			if (id === activeId) return;
-			setSelectedTurnId(null);
 			setLiveTraceId(null);
 			updateWorkspace((current) => ({ ...current, activeId: id }));
 			void openSession(id);
@@ -278,36 +311,28 @@ export default function App() {
 		[activeId, updateWorkspace, openSession]
 	);
 
-	const renameSession = useCallback((id: string, title: string) => {
-		renameConversation(id, title)
-			.then((updated) =>
-				setSessions((current) =>
-					current.map((row) => (row.id === id ? { ...row, title: updated.title } : row))
-				)
-			)
-			.catch(() => {
-				/* name kept as-is when the server rejects the change */
-			});
-	}, []);
-
-	const removeSession = useCallback(
+	/** Forget a session for good; deleting the active one detaches the workspace. */
+	const deleteSession = useCallback(
 		async (id: string) => {
+			if (id === runningConversationId) return;
 			try {
 				await deleteConversation(id);
+				if (id === activeId) {
+					detachFromConversations();
+					setLiveTraceId(null);
+				}
+				updateWorkspace((current) => {
+					const sessions = { ...current.sessions };
+					delete sessions[id];
+					return { ...current, sessions };
+				});
+				refreshSessions();
 			} catch {
-				return; // the row stays when the server refuses (running task or unknown id)
+				// offline or the server refused while busy: the row keeps living in the directory
+				console.error(`The server could not delete session ${id}.`);
 			}
-			setSessions((current) => current.filter((row) => row.id !== id));
-			updateWorkspace((current) => {
-				const sessions = { ...current.sessions };
-				delete sessions[id];
-				const next: WorkspaceStore = { ...current, sessions };
-				if (current.activeId === id) next.activeId = undefined;
-				return next;
-			});
-			setSelectedTurnId(null);
 		},
-		[updateWorkspace]
+		[runningConversationId, activeId, detachFromConversations, updateWorkspace, refreshSessions]
 	);
 
 	/** Offline fallback rows so cached sessions stay reachable when the list cannot load. */
@@ -323,101 +348,81 @@ export default function App() {
 		[sessions, workspace.sessions]
 	);
 
-	const toggleSidebar = useCallback(() => {
-		setSidebarCollapsed((current) => {
-			saveSidebarCollapsed(!current);
-			return !current;
-		});
-	}, []);
+	const showSynthesis = view !== "trace";
+	const showLedger = view !== "synthesis";
 
 	return (
-		<div className="flex h-full w-full overflow-hidden bg-canvas">
-			<ChatSidebar
-				collapsed={sidebarCollapsed}
-				sessions={shownSessions}
-				activeId={activeId}
-				runningId={runningConversationId}
-				onToggle={toggleSidebar}
-				onNewChat={startNewChat}
-				onSelect={selectSession}
-				onRename={renameSession}
-				onDelete={(id) => void removeSession(id)}
+		<div className="flex h-full w-full flex-col overflow-hidden bg-canvas text-fg transition-colors duration-150">
+			<WorkspaceHeader
+				view={view}
+				onViewChange={setView}
+				theme={theme}
+				onToggleTheme={toggleTheme}
+				traceId={shownTraceId}
+				onNewSession={startNewSession}
 			/>
 
-			{/*
-				Wireframe: role cards → middle band (tool lanes | main session | advisor) →
-				viewport boundary → evidence row + event stream spanning the full page width,
-				the page scrolling naturally below the first screenful.
-			*/}
-			<div className="flex min-w-0 flex-1 flex-col">
-				<WorkspaceHeader
-					state={workspaceState}
-					traceId={showingLive ? liveTraceId : selectedTraceId}
-					sidebarCollapsed={sidebarCollapsed}
-					onToggleSidebar={toggleSidebar}
-					onClear={startNewChat}
-				/>
+			<div className="flex min-h-0 flex-1 overflow-hidden">
+				<div className="hidden md:flex">
+					<SessionDirectory
+						sessions={shownSessions}
+						taskCache={workspace.sessions}
+						activeId={activeId}
+						runningId={runningConversationId}
+						agentCount={agentCount}
+						onSelect={selectSession}
+						onDelete={(id) => void deleteSession(id)}
+					/>
+				</div>
 
-				<TaskBar
-					value={draft}
-					onChange={setDraft}
-					onSend={() => void sendTask()}
-					busy={busy}
-				/>
-
-				<main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
-					<div className="mx-auto flex max-w-[1560px] flex-col gap-2.5 p-3">
-						<RoleCards roles={dashboard.roles} />
-
-						<div className="flex min-h-0 flex-col gap-2.5 lg:h-[min(58vh,540px)] lg:flex-row">
-							<div className="order-2 flex min-h-[200px] flex-col lg:order-1 lg:h-full lg:w-[248px] lg:shrink-0">
-								<ToolRail cards={dashboard.tools} />
-							</div>
-							<div className="order-1 flex min-h-[380px] flex-col lg:order-2 lg:h-full lg:flex-1">
-								<SessionPanel
-									lines={dashboard.session}
-									agentId={rootAgentId}
-									turnNumber={turnNumber > 0 ? turnNumber : null}
-									live={showingLive}
-									answer={
-										showingLive
-											? streamingText
-											: viewedTurn && viewedTurn.status === "ok"
-												? viewedTurn.answer
-												: ""
-									}
-									error={viewedError}
-								/>
-							</div>
-
-							{/* Right rail: advisor column, full band height on desktop; stacks last on mobile. */}
-							<div className="order-last flex min-h-[320px] flex-col lg:order-none lg:h-full lg:min-h-0 lg:w-[276px] lg:shrink-0">
-								<SideRail
-									llmRounds={dashboard.llmRounds}
-									checkpoints={dashboard.checkpoints}
-									task={showingLive ? liveTask : selectedTask}
-									workersSummary={
-										dashboard.workers.length > 0
-											? `${dashboard.workers.length} worker${dashboard.workers.length > 1 ? "s" : ""} · ${dashboard.tools.length} lanes`
-											: dashboard.tools.length > 0
-												? `${dashboard.tools.length} tool lane${dashboard.tools.length > 1 ? "s" : ""}`
-												: "just the main agent"
-									}
-									live={showingLive}
-								/>
-							</div>
+				<main className="flex min-h-0 flex-1 overflow-hidden">
+					{showSynthesis ? (
+						<section
+							className={`flex min-h-0 flex-col overflow-hidden bg-canvas transition-all lg:px-0 ${
+								showLedger ? "flex-1 border-r border-edge" : "flex-1"
+							}`}
+						>
+						<div
+							ref={registerScrollerRef}
+							onScroll={onRegisterScroll}
+							className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-6 pb-4 pt-8 lg:px-16"
+						>
+						<ConversationTranscript
+							turns={finishedTurns}
+							live={
+								showingLive
+									? {
+											task: liveTask,
+											activity,
+											stream: answerStream,
+											liveStartedAt,
+											totalMs: dashboard.trace?.durationMs ?? null,
+											traceKey: `live:${liveTraceId ?? "pending"}`,
+										}
+									: null
+							}
+						/>
 						</div>
+							<InquiryComposer
+								value={draft}
+								onChange={setDraft}
+								onSend={() => void sendTask()}
+								busy={busy}
+								modelLabel={dashboard.model ?? "PANIC Orchestrator"}
+								live={showingLive}
+							/>
+						</section>
+					) : null}
 
-						{/* Viewport boundary: everything below scrolls naturally with the page. */}
-						<div className="flex items-center gap-3 text-fg-faint" aria-hidden="true">
-							<span className="h-px flex-1 bg-edge-strong" />
-							<span className="micro-label shrink-0">viewport boundary</span>
-							<span className="h-px flex-1 bg-edge-strong" />
-						</div>
-
-						<EvidenceRow dashboard={dashboard} />
-						<EventStream dashboard={dashboard} />
-					</div>
+					{showLedger ? (
+						<section
+							className={`min-h-0 overflow-hidden bg-surface ${
+								view === "trace" ? "flex w-full flex-1" : "w-[480px] shrink-0 lg:w-[540px]"
+							} border-l border-edge`}
+						>
+							<ExecutionLedger dashboard={dashboard} state={ledgerState} traceId={shownTraceId} />
+						</section>
+					) : null}
 				</main>
 			</div>
 		</div>

@@ -2,7 +2,39 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Japanese Minimalist Architecture palette: washi (light) & kuro (obsidian).
+   Wired into Tailwind via var(--panic-*) so paired utilities flip with .dark. */
 @layer base {
+	:root {
+		--panic-canvas: #ffffff;
+		--panic-surface: #fafafa;
+		--panic-surface-raised: #ffffff;
+		--panic-edge: #eaeaea;
+		--panic-edge-soft: #f0f0f0;
+		--panic-fg: #111111;
+		--panic-fg-body: #222222;
+		--panic-fg-dim: #444444;
+		--panic-fg-mute: #555555;
+		--panic-fg-faint: #888888;
+		--panic-scrollbar: #d4d4d8;
+		--panic-shimmer: rgba(136, 136, 136, 0.22);
+	}
+
+	.dark {
+		--panic-canvas: #0f0f11;
+		--panic-surface: #141417;
+		--panic-surface-raised: #141417;
+		--panic-edge: #222226;
+		--panic-edge-soft: #1e1e22;
+		--panic-fg: #ededed;
+		--panic-fg-body: #d4d4d8;
+		--panic-fg-dim: #a0a0a5;
+		--panic-fg-mute: #999999;
+		--panic-fg-faint: #787880;
+		--panic-scrollbar: #27272a;
+		--panic-shimmer: rgba(136, 136, 136, 0.16);
+	}
+
 	html,
 	body,
 	#root {
@@ -10,45 +42,73 @@
 	}
 
 	body {
-		@apply bg-canvas font-mono text-fg antialiased;
-		font-feature-settings: "liga" 0, "calt" 0;
+		@apply bg-canvas font-sans text-fg antialiased;
 	}
 
 	::selection {
-		@apply bg-blue-soft text-fg;
+		@apply bg-accent text-white;
 	}
 
 	:focus-visible {
-		outline: 1px solid #6fa8ff;
+		outline: 1px solid #c84b31;
 		outline-offset: -1px;
 	}
 
-	input::placeholder {
+	input::placeholder,
+	textarea::placeholder {
 		@apply text-fg-faint;
 	}
 }
 
-/* Ultra-small uppercase label used inside panel headers and chips. */
+/* Ultra-small uppercase label used inside panel headers and section titles. */
 @layer components {
 	.micro-label {
-		@apply font-mono text-[10px] uppercase tracking-[0.14em];
+		@apply font-mono text-[10px] font-bold uppercase tracking-[0.2em];
 	}
 }
 
 @layer utilities {
+	/* Loading sweep for skeleton bars: a soft diagonal highlight gliding across.
+	   Pair with the `animate-shimmer` keyframes from the Tailwind config. */
+	.stream-shimmer {
+		background-image: linear-gradient(
+			100deg,
+			transparent 32%,
+			var(--panic-shimmer) 50%,
+			transparent 68%
+		);
+		background-size: 200% 100%;
+		background-repeat: no-repeat;
+	}
+
+	/* Gradient-clipped text pulse: the letters themselves shade light→dark→light,
+	   one sweep left to right — the chat-style loading look, no background band. */
+	.shimmer-text {
+		background-image: linear-gradient(
+			90deg,
+			var(--panic-fg-faint) 0%,
+			var(--panic-fg) 48%,
+			var(--panic-fg-faint) 96%
+		);
+		background-size: 200% 100%;
+		background-repeat: no-repeat;
+		-webkit-background-clip: text;
+		background-clip: text;
+		color: transparent;
+	}
+
 	.scrollbar-thin {
 		scrollbar-width: thin;
-		scrollbar-color: #2a3444 transparent;
+		scrollbar-color: var(--panic-scrollbar) transparent;
 	}
 
 	.scrollbar-thin::-webkit-scrollbar {
-		width: 8px;
-		height: 8px;
+		width: 5px;
+		height: 5px;
 	}
 
 	.scrollbar-thin::-webkit-scrollbar-thumb {
-		background: #2a3444;
-		border-radius: 999px;
+		background: var(--panic-scrollbar);
 	}
 
 	.scrollbar-thin::-webkit-scrollbar-track {

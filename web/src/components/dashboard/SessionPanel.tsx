@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
+import type { TextStream } from "../../hooks/useTextStream";
 import type { SessionLine, WorkStatus } from "../../lib/dashboard";
+import StreamText from "../streaming/StreamText";
 import { LiveBadge } from "./Panel";
 
 const MARKER: Record<SessionLine["marker"], { sign: string; row: string; signClass: string }> = {
@@ -62,6 +64,7 @@ export default function SessionPanel({
 	agentId,
 	turnNumber,
 	live,
+	stream,
 	answer,
 	error,
 }: {
@@ -69,7 +72,9 @@ export default function SessionPanel({
 	agentId: string | null;
 	turnNumber: number | null;
 	live: boolean;
-	/** Live-streamed assistant answer while the model is speaking. */
+	/** Live stream (skeleton → typewriter → cursor) driving the answer while the model speaks. */
+	stream: TextStream | null;
+	/** Finished-turn answer text for replay; empty while the live stream drives the box. */
 	answer: string;
 	error: string | null;
 }) {
@@ -108,21 +113,22 @@ export default function SessionPanel({
 			<div className="flex min-h-0 flex-1 flex-col gap-2.5 p-2.5">
 				{/* ANSWER — the primary box takes the panel's bulk; body scrolls inside. */}
 				<InnerBox label="answer" kind="primary" boxClassName="min-h-0 flex-1">
-					<div
-						ref={answerRef}
-						className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-contain px-2.5 py-2"
-					>
-						{answer ? (
+					{stream ? (
+						<StreamText stream={stream} />
+					) : answer ? (
+						<div
+							ref={answerRef}
+							className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-contain px-2.5 py-2"
+						>
 							<p className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-[1.65] text-fg">
 								{answer}
-								{live && <span className="animate-pulse-soft text-blue"> ▌</span>}
 							</p>
-						) : (
-							<p className="px-5 py-8 text-center font-mono text-[11.5px] text-fg-faint">
-								answer pending — run a task to see the result
-							</p>
-						)}
-					</div>
+						</div>
+					) : (
+						<p className="px-5 py-8 text-center font-mono text-[11.5px] text-fg-faint">
+							answer pending — run a task to see the result
+						</p>
+					)}
 				</InnerBox>
 
 				{/* EXECUTION LOG — hugs short content, capped at 10 rows; body scrolls inside. */}

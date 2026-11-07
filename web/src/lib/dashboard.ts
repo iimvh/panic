@@ -45,6 +45,19 @@ export interface StreamRow {
 	status: WorkStatus;
 }
 
+/** One inline chat activity row: an LLM round, a tool call, or a failure. */
+export interface ActivityStep {
+	id: number;
+	label: string;
+	/** Right-aligned timing: "running" while live, formatted duration once settled. */
+	hint: string;
+	phase: "llm" | "tool" | "error";
+	status: WorkStatus;
+	/** Absolute epoch ms the step started; feeds the live elapsed ticker. */
+	startedAt: number;
+	durationMs: number | null;
+}
+
 export interface DashboardModel {
 	/** Root trace event (request received) — carries total duration when closed. */
 	trace: { status: WorkStatus; durationMs: number | null } | null;
@@ -62,7 +75,7 @@ export interface DashboardModel {
 	session: SessionLine[];
 	stream: StreamRow[];
 	/** Numbered evidence lines (tool calls), most recent last. */
-	evidence: { key: string; label: string; detail: string }[];
+	evidence: { key: string; label: string; detail: string; timing: string }[];
 	/** Last finished tool output for the audit panel. */
 	audit: string | null;
 	/** Progress over recorded events: finished of total. */
@@ -188,6 +201,83 @@ function streamTint(event: PipelineEvent): Tint {
 		case "error": return "red";
 		default: return "dim";
 	}
+}
+
+function activityLabel(event: PipelineEvent): string {
+	if (event.phase === "llm") {
+		const model = event.title.match(/LLM call · (.+?) →/)?.[1] ?? event.actor;
+		const arrow = event.title.indexOf("→");
+		const route = arrow >= 0 ? event.title.slice(arrow + 1).trim() : "";
+		return compact([model, route].filter(Boolean).join(" → "), 60);
+	}
+	if (event.phase === "error") {
+		return compact(event.detail ?? event.title, 72);
+	}
+	const sub = event.title.match(/^Sub-agent (.+)$/);
+	if (sub) return compact(`sub-agent ${sub[1].trim()}`, 60);
+	return compact(eventTitleLabel(event), 60);
+}
+
+/** Chronological inline steps: LLM routing rounds, tool calls, failures. */
+function buildActivitySteps(events: PipelineEvent[]): ActivityStep[] {
+	const byId = new Map<number, ActivityStep>();
+	const steps: ActivityStep[] = [];
+	const ordered = events
+		.slice()
+		.sort((a, b) => a.startedAt - b.startedAt || a.id - b.id);
+	for (const event of ordered) {
+		const isErrorFrame = event.phase === "error";
+		if (!isErrorFrame && event.phase !== "llm" && event.phase !== "tool") continue;
+		const existing = byId.get(event.id);
+		if (existing) {
+			// First sighting writes the pending row; the closing frame settles it in place,
+			// anything after that is superseded chatter.
+			if (existing.status !== "running") continue;
+			steps.splice(steps.indexOf(existing), 1);
+		}
+		const step: ActivityStep = {
+			id: event.id,
+			label: activityLabel(event),
+			hint: event.status === "running" ? "running" : formatMs(event.durationMs),
+			phase: isErrorFrame ? "error" : (event.phase as "llm" | "tool"),
+			status: event.status as WorkStatus,
+			startedAt: event.startedAt,
+			durationMs: event.durationMs,
+		};
+		byId.set(event.id, step);
+		steps.push(step);
+	}
+	return steps;
+}
+
+export interface ActivityFeed {
+	/** Steps that happened before the streamed answer's first token. */
+	pre: ActivityStep[];
+	/** Steps recorded while the answer is already typing — render after the text. */
+	post: ActivityStep[];
+}
+
+/** When the first answer token reached the UI one turn (fallback: the recorded assistant message). */
+function tokenBoundary(events: PipelineEvent[], tokenStartedAt: number | null): number {
+	if (tokenStartedAt != null) return tokenStartedAt;
+	const assistantMessage = events.find(
+		(event) => event.phase === "message" && event.role === "assistant"
+	);
+	return assistantMessage?.startedAt ?? Number.POSITIVE_INFINITY;
+}
+
+/**
+ * The interleaved chat timeline: steps split around the moment the answer text
+ * starts typing, so action rows can sandwich the finding like a chat transcript.
+ * A null `tokenStartedAt` (replayed turns) falls back to the assistant message event.
+ */
+export function splitActivity(events: PipelineEvent[], tokenStartedAt: number | null): ActivityFeed {
+	const steps = buildActivitySteps(events);
+	const boundary = tokenBoundary(events, tokenStartedAt);
+	return {
+		pre: steps.filter((step) => step.startedAt < boundary),
+		post: steps.filter((step) => step.startedAt >= boundary),
+	};
 }
 
 /** Maps a recorded trace into everything the workspace panels render. */
@@ -346,6 +436,7 @@ export function buildDashboard(events: PipelineEvent[], rootAgentId: string | nu
 			key: String(event.id),
 			label: eventTitleLabel(event),
 			detail: shortAction(event.detail),
+			timing: event.status === "running" ? "running" : formatMs(event.durationMs) || "—",
 		}));
 
 	const auditEvent = [...toolEvents]

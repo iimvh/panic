@@ -10,4 +10,7 @@ public interface ChatTurnRepository extends JpaRepository<ChatTurn, Long> {
 	List<ChatTurn> findByConversation_IdOrderByIdDesc(String conversationId, Pageable pageable);
 
 	List<ChatTurn> findByConversation_IdOrderByIdAsc(String conversationId);
+
+	/** Cascade helper: deleting a conversation removes its turns first. */
+	void deleteByConversation_Id(String conversationId);
 }

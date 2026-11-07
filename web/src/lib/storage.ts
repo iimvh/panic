@@ -16,8 +16,19 @@ export interface Turn {
 
 export const MAX_TURNS = 20;
 
-const STORAGE_KEY = "panic-workspace:v2";
-const CONVERSATION_KEY = "panic-conversation";
+/**
+ * Everything the workspace remembers across reloads. localStorage is only an accelerant:
+ * the server owns the conversations, and a selection always refetches from it.
+ */
+export interface WorkspaceStore {
+	/** Conversation the dashboard follows; undefined = next send starts a new chat. */
+	activeId?: string;
+	/** Cached turns per conversation id, newest last (accelerant for replay + offline). */
+	sessions: Record<string, Turn[]>;
+}
+
+const STORAGE_KEY = "panic-workspace:v3";
+const SIDEBAR_KEY = "panic-sidebar-collapsed";
 
 export function newId(): string {
 	return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -34,57 +45,83 @@ function normalizePipeline(value: unknown): PipelineEvent[] {
 	);
 }
 
-export function loadTurns(): Turn[] {
-	try {
-		const raw = localStorage.getItem(STORAGE_KEY);
-		if (!raw) return [];
-		const parsed: unknown = JSON.parse(raw);
-		if (!Array.isArray(parsed)) return [];
-		const turns: Turn[] = parsed
-			.filter(
-				(turn): turn is Turn =>
-					typeof turn === "object" &&
-					turn !== null &&
-					typeof (turn as Turn).id === "string" &&
-					typeof (turn as Turn).task === "string"
-			)
-			.map((turn) => ({
+function normalizeTurns(value: unknown): Turn[] {
+	if (!Array.isArray(value)) return [];
+	return value
+		.filter(
+			(turn): turn is Turn =>
+				typeof turn === "object" &&
+				turn !== null &&
+				typeof (turn as Turn).id === "string" &&
+				typeof (turn as Turn).task === "string"
+		)
+		.map((turn) => {
+			const status: TurnStatus =
+				turn.status === "ok" || turn.status === "error" ? turn.status : "running";
+			return {
 				...turn,
 				traceId: typeof turn.traceId === "number" ? turn.traceId : null,
 				pipeline: normalizePipeline(turn.pipeline),
-				status: turn.status === "ok" || turn.status === "error" ? turn.status : "running",
+				status,
 				answer: typeof turn.answer === "string" ? turn.answer : "",
 				at: typeof turn.at === "number" ? turn.at : Date.now(),
-			}));
-		return turns
-			.filter((turn) => turn.status !== "running")
-			.slice(-MAX_TURNS);
+			};
+		})
+		.filter((turn) => turn.status !== "running");
+}
+
+export function loadWorkspace(): WorkspaceStore {
+	try {
+		const raw = localStorage.getItem(STORAGE_KEY);
+		if (!raw) return { sessions: {} };
+		const parsed: unknown = JSON.parse(raw);
+		if (typeof parsed !== "object" || parsed === null) return { sessions: {} };
+		const store = parsed as { activeId?: unknown; sessions?: unknown };
+		const sessions: Record<string, Turn[]> = {};
+		if (typeof store.sessions === "object" && store.sessions !== null) {
+			for (const [id, turns] of Object.entries(store.sessions as Record<string, unknown>)) {
+				const normalized = normalizeTurns(turns).slice(-MAX_TURNS);
+				if (normalized.length > 0) sessions[id] = normalized;
+			}
+		}
+		return {
+			activeId: typeof store.activeId === "string" ? store.activeId : undefined,
+			sessions,
+		};
 	} catch {
-		return [];
+		return { sessions: {} };
 	}
 }
 
-export function saveTurns(turns: Turn[]): void {
+export function saveWorkspace(store: WorkspaceStore): void {
 	try {
-		localStorage.setItem(STORAGE_KEY, JSON.stringify(turns.slice(-MAX_TURNS)));
+		const sessions: Record<string, Turn[]> = {};
+		for (const [id, turns] of Object.entries(store.sessions)) {
+			sessions[id] = turns.slice(-MAX_TURNS);
+		}
+		localStorage.setItem(
+			STORAGE_KEY,
+			JSON.stringify({ activeId: store.activeId, sessions })
+		);
 	} catch {
-		/* storage unavailable: ignore */
+		/* storage unavailable: the server remains the source of truth */
 	}
 }
 
-export function loadConversationId(): string | undefined {
+/** Sidebar preference; undefined = none saved yet (the window width decides). */
+export function loadSidebarCollapsed(): boolean | undefined {
 	try {
-		return localStorage.getItem(CONVERSATION_KEY) ?? undefined;
+		const raw = localStorage.getItem(SIDEBAR_KEY);
+		return raw === "collapsed" ? true : raw === "open" ? false : undefined;
 	} catch {
 		return undefined;
 	}
 }
 
-export function saveConversationId(id: string | undefined): void {
+export function saveSidebarCollapsed(collapsed: boolean): void {
 	try {
-		if (id) localStorage.setItem(CONVERSATION_KEY, id);
-		else localStorage.removeItem(CONVERSATION_KEY);
+		localStorage.setItem(SIDEBAR_KEY, collapsed ? "collapsed" : "open");
 	} catch {
-		/* storage unavailable: ignore */
+		/* storage unavailable: preference simply is not remembered */
 	}
 }

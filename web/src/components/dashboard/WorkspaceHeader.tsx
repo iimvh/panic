@@ -14,18 +14,32 @@ const CHIP_LABEL: Record<WorkspaceState, string> = {
 	failed: "task failed",
 };
 
-/** Masthead: brand, one-line workflow summary, status chip. */
+/** Masthead: session rail toggle, brand, one-line workflow summary, status chip. */
 export default function WorkspaceHeader({
 	state,
 	traceId,
+	sidebarCollapsed,
+	onToggleSidebar,
 	onClear,
 }: {
 	state: WorkspaceState;
 	traceId: number | null;
+	/** Mirrors the sidebar's collapse state — a second toggle next to the sessions edge. */
+	sidebarCollapsed: boolean;
+	onToggleSidebar: () => void;
 	onClear: () => void;
 }) {
 	return (
 		<header className="flex shrink-0 flex-wrap items-center gap-x-6 gap-y-2 border-b border-edge bg-panel px-4 py-3">
+			<button
+				type="button"
+				onClick={onToggleSidebar}
+				title={sidebarCollapsed ? "Expand sessions" : "Collapse sessions"}
+				aria-label={sidebarCollapsed ? "Expand sessions" : "Collapse sessions"}
+				className="shrink-0 border border-edge px-2.5 py-1.5 font-mono text-[12px] text-fg-dim transition-colors hover:border-edge-strong hover:text-fg"
+			>
+				{sidebarCollapsed ? "»" : "«"}
+			</button>
 			<div>
 				<h1 className="text-[22px] font-medium leading-tight tracking-tight text-fg">
 					PANIC
@@ -50,9 +64,10 @@ export default function WorkspaceHeader({
 					type="button"
 					onClick={onClear}
 					disabled={state === "in_progress"}
+					title="Detach from this conversation; the next task starts a fresh session"
 					className="shrink-0 border border-edge px-3 py-1.5 text-[11px] text-fg-dim transition-colors hover:border-edge-strong hover:text-fg disabled:pointer-events-none disabled:opacity-40"
 				>
-					clear
+					new chat
 				</button>
 			</div>
 		</header>

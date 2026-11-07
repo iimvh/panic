@@ -1,5 +1,7 @@
 package com.panic.controller;
 
+import com.panic.core.agent.chat.ChatAccessGuard;
+import com.panic.core.agent.memory.Conversation;
 import com.panic.core.agent.memory.ConversationStore;
 import com.panic.core.agent.runtime.AgentExecutor;
 import com.panic.exception.BookingException;
@@ -10,6 +12,8 @@ import com.panic.pipeline.PipelineRecorder;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -28,19 +32,22 @@ public class AgentController {
 	/** Name of the opening frame (traceId + conversationId). */
 	public static final String START_EVENT = "start";
 
+	private static final Logger log = LoggerFactory.getLogger(AgentController.class);
 	private static final long STREAM_TIMEOUT_MS = 5 * 60 * 1000L;
 
 	private final AgentExecutor executor;
 	private final PipelineRecorder pipeline;
 	private final PipelineBroadcaster broadcaster;
 	private final ConversationStore memory;
+	private final ChatAccessGuard access;
 
 	public AgentController(AgentExecutor executor, PipelineRecorder pipeline, PipelineBroadcaster broadcaster,
-			ConversationStore memory) {
+			ConversationStore memory, ChatAccessGuard access) {
 		this.executor = executor;
 		this.pipeline = pipeline;
 		this.broadcaster = broadcaster;
 		this.memory = memory;
+		this.access = access;
 	}
 
 	/**
@@ -50,9 +57,15 @@ public class AgentController {
 	 * pipeline step is pushed as a `pipeline` frame <em>as it happens</em>, and the final `result` frame
 	 * holds the reply + all steps. Pipeline frames are delivered directly from the recorder, so they do
 	 * not wait for the agent to finish.
+	 * <p>
+	 * Admission (per-conversation quota → 429, run lock → 409, session-creation quota → 429) happens on
+	 * the request thread <em>before</em> the stream opens, so guard rejections surface as ordinary
+	 * HTTP error codes instead of frames. Absent/unknown conversation ids create a fresh session — the
+	 * `start` frame tells the client which one.
 	 */
 	@PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
 	public SseEmitter chat(@RequestBody ChatRequest request) {
+		String conversationId = resolveAdmitted(request.conversationId());
 		SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
 		PipelineRecorder.RequestTrace trace = new PipelineRecorder.RequestTrace();
 		emitter.onTimeout(emitter::complete);
@@ -61,9 +74,7 @@ public class AgentController {
 		// Publish each recorded event straight to this stream (realtime, node by node).
 		broadcaster.register(trace.id(), emitter);
 
-		String conversationId;
 		try {
-			conversationId = resolveConversation(request.conversationId());
 			// Send the header first so the client learns the traceId before any pipeline frame.
 			send(emitter, START_EVENT, new StartFrame(trace.id(), conversationId));
 			pipeline.startResponse(trace);
@@ -72,7 +83,8 @@ public class AgentController {
 					preview(request.message(), 80),
 					PipelineJson.of(Map.of("text", request.message())), 0, null, PipelineEvent.ROLE_USER);
 		} catch (RuntimeException ex) {
-			finishWithError(emitter, trace, ex);
+			access.releaseChat(conversationId);
+			finishWithError(emitter, trace, ex, conversationId);
 			return emitter;
 		}
 
@@ -83,9 +95,20 @@ public class AgentController {
 		return emitter;
 	}
 
-	/** Reuses an existing conversation id, or creates a new one when absent/unknown. */
-	private String resolveConversation(String conversationId) {
-		return memory.exists(conversationId) ? conversationId : memory.create();
+	/**
+	 * Reuses an existing conversation id (admitting the send against its quota and run lock), or
+	 * creates a new one when absent/unknown — the creation itself counts against the per-user
+	 * session quota, and the fresh conversation is locked like any other before its turn runs.
+	 */
+	private String resolveAdmitted(String conversationId) {
+		if (memory.exists(conversationId)) {
+			access.admitChat(conversationId);
+			return conversationId;
+		}
+		access.admitSessionCreation(Conversation.LOCAL_USER);
+		String created = memory.create(Conversation.LOCAL_USER);
+		access.acquireLock(created);
+		return created;
 	}
 
 	private void runAndFinish(SseEmitter emitter, PipelineRecorder.RequestTrace trace, ChatRequest request,
@@ -95,6 +118,7 @@ public class AgentController {
 		try {
 			String reply = executor.runRoot(conversationId, request.message()).text();
 			List<PipelineEvent> events = List.of(pipeline.end(trace, false, null));
+			persistTrace(conversationId, trace.id(), events);
 			send(emitter, RESULT_EVENT, new AgentReply(reply, trace.id(), events, null, conversationId));
 			emitter.complete();
 		} catch (RuntimeException ex) {
@@ -102,11 +126,8 @@ public class AgentController {
 		} finally {
 			pipeline.unbind();
 			broadcaster.unregister(trace.id());
+			access.releaseChat(conversationId);
 		}
-	}
-
-	private void finishWithError(SseEmitter emitter, PipelineRecorder.RequestTrace trace, RuntimeException ex) {
-		finishWithError(emitter, trace, ex, null);
 	}
 
 	private void finishWithError(SseEmitter emitter, PipelineRecorder.RequestTrace trace, RuntimeException ex,
@@ -118,12 +139,26 @@ public class AgentController {
 			pipeline.emitDone(trace, PipelineEvent.PHASE_ERROR, PipelineEvent.STATUS_ERROR, "coordinator",
 					"Pipeline error", error, trace.durationMs());
 			List<PipelineEvent> events = List.of(pipeline.end(trace, true, error));
+			persistTrace(conversationId, trace.id(), events);
 			send(emitter, RESULT_EVENT, new AgentReply(null, trace.id(), events, error, conversationId));
 			emitter.complete();
 		} catch (RuntimeException ignored) {
 			emitter.completeWithError(ex);
 		} finally {
 			broadcaster.unregister(trace.id());
+		}
+	}
+
+	/** The finished trace is part of the session record — but never at the cost of the reply itself. */
+	private void persistTrace(String conversationId, long traceId, List<PipelineEvent> events) {
+		if (conversationId == null || conversationId.isBlank()) {
+			return;
+		}
+		try {
+			memory.recordTrace(conversationId, traceId, events);
+		} catch (RuntimeException ex) {
+			log.warn("Could not persist trace {} of conversation '{}': {}", traceId, conversationId,
+					ex.getMessage());
 		}
 	}
 

@@ -69,18 +69,37 @@ public class AgentExecutor {
 
 	/**
 	 * Root run with conversation memory: loads the conversation's history into the root prompt and
-	 * appends this turn (user + assistant) afterwards. Sub-agents never read or write memory.
+	 * appends this turn (user + assistant) afterwards, both stamped with the run's trace id.
+	 * A failing run still records the user turn (without an assistant partner) so a replay of the
+	 * session shows the question and its failed trace. Sub-agents never read or write memory.
 	 */
 	public AgentResult runRoot(String conversationId, String userMessage) {
 		PipelineRecorder.RequestTrace trace = recorder.currentTrace();
 		long traceId = trace == null ? 0L : trace.id();
 		AgentDefinition root = registry.root();
-		AgentResult result = run(root, AgentContext.root(traceId, userMessage, conversationId));
-		if (memory != null && conversationId != null && !conversationId.isBlank()) {
-			memory.append(conversationId, ChatTurn.Role.USER, userMessage);
-			memory.append(conversationId, ChatTurn.Role.ASSISTANT, result.text());
+		try {
+			AgentResult result = run(root, AgentContext.root(traceId, userMessage, conversationId));
+			recordTurn(conversationId, ChatTurn.Role.USER, userMessage, traceId);
+			recordTurn(conversationId, ChatTurn.Role.ASSISTANT, result.text(), traceId);
+			return result;
+		} catch (RuntimeException ex) {
+			recordTurn(conversationId, ChatTurn.Role.USER, userMessage, traceId);
+			throw ex;
 		}
-		return result;
+	}
+
+	/** Memory is an accretion, not a requirement: a failing write must never fail the chat. */
+	private void recordTurn(String conversationId, ChatTurn.Role role, String content, long traceId) {
+		if (memory == null || conversationId == null || conversationId.isBlank()
+				|| !StringUtils.hasText(content)) {
+			return;
+		}
+		try {
+			memory.append(conversationId, role, content, traceId);
+		} catch (RuntimeException ex) {
+			log.warn("Could not persist {} turn of conversation '{}': {}", role, conversationId,
+					ex.getMessage());
+		}
 	}
 
 	/**

@@ -78,3 +78,5 @@ agents/
 .scratch/
 UI-TEMPLATE.png
 ui-wireframe.md
+.opencode/
+web/minimal.md

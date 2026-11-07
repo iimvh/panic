@@ -242,10 +242,76 @@ class AgentExecutorTest {
 		org.assertj.core.api.Assertions.assertThat(model.prompts().get(0).getInstructions())
 				.anySatisfy(message -> org.assertj.core.api.Assertions.assertThat(message.getText())
 						.contains("my name is Lan"));
+		// Without a bound trace the turns land with trace id 0 (stateless caller).
 		org.mockito.Mockito.verify(memory).append("conv-1",
-				com.panic.core.agent.memory.ChatTurn.Role.USER, "what is my name?");
+				com.panic.core.agent.memory.ChatTurn.Role.USER, "what is my name?", 0L);
 		org.mockito.Mockito.verify(memory).append("conv-1",
-				com.panic.core.agent.memory.ChatTurn.Role.ASSISTANT, "You are Lan");
+				com.panic.core.agent.memory.ChatTurn.Role.ASSISTANT, "You are Lan", 0L);
+	}
+
+	@Test
+	void persistedTurnsCarryTheTraceIdOfTheRun() {
+		com.panic.core.agent.memory.ConversationStore memory =
+				org.mockito.Mockito.mock(com.panic.core.agent.memory.ConversationStore.class);
+		AgentRegistry registry = registry(List.of(coordinator()));
+		AgentExecutor executor = new AgentExecutor(testBuilder(model), registry, noSkills(), recorder,
+				new AgentPromptRenderer(prompts()), memory, broadcaster, "test-key");
+		PipelineRecorder.RequestTrace trace = new PipelineRecorder.RequestTrace();
+		recorder.startResponse(trace);
+		try {
+			model.reply("answer with the trace");
+
+			executor.runRoot("conv-1", "hello");
+
+			org.mockito.Mockito.verify(memory).append("conv-1",
+					com.panic.core.agent.memory.ChatTurn.Role.USER, "hello", trace.id());
+			org.mockito.Mockito.verify(memory).append("conv-1",
+					com.panic.core.agent.memory.ChatTurn.Role.ASSISTANT, "answer with the trace", trace.id());
+		} finally {
+			recorder.end(trace, false, null);
+		}
+	}
+
+	@Test
+	void failedRunStillRecordsTheUserTurnWithoutAnAnswer() {
+		com.panic.core.agent.memory.ConversationStore memory =
+				org.mockito.Mockito.mock(com.panic.core.agent.memory.ConversationStore.class);
+		// No system prompt declared → the run fails before the model, after the message guard.
+		AgentRegistry registry = registry(List.of(AgentDefinition.builder("coordinator").build()));
+		AgentExecutor executor = new AgentExecutor(testBuilder(model), registry, noSkills(), recorder,
+				new AgentPromptRenderer(prompts()), memory, broadcaster, "test-key");
+		PipelineRecorder.RequestTrace trace = new PipelineRecorder.RequestTrace();
+		recorder.startResponse(trace);
+		try {
+			assertThatThrownBy(() -> executor.runRoot("conv-1", "book a room"))
+					.isInstanceOf(BookingException.class)
+					.hasMessageContaining("system prompt");
+
+			org.mockito.Mockito.verify(memory).append("conv-1",
+					com.panic.core.agent.memory.ChatTurn.Role.USER, "book a room", trace.id());
+			org.mockito.Mockito.verify(memory, org.mockito.Mockito.never()).append(
+					org.mockito.ArgumentMatchers.eq("conv-1"),
+					org.mockito.ArgumentMatchers.eq(com.panic.core.agent.memory.ChatTurn.Role.ASSISTANT),
+					org.mockito.ArgumentMatchers.anyString(),
+					org.mockito.ArgumentMatchers.any());
+		} finally {
+			recorder.end(trace, true, "test");
+		}
+	}
+
+	@Test
+	void blankMessageFailsBeforeAnythingIsPersisted() {
+		com.panic.core.agent.memory.ConversationStore memory =
+				org.mockito.Mockito.mock(com.panic.core.agent.memory.ConversationStore.class);
+		AgentRegistry registry = registry(List.of(coordinator()));
+		AgentExecutor executor = new AgentExecutor(testBuilder(model), registry, noSkills(), recorder,
+				new AgentPromptRenderer(prompts()), memory, broadcaster, "test-key");
+
+		assertThatThrownBy(() -> executor.runRoot("conv-1", " "))
+				.isInstanceOf(BookingException.class)
+				.hasMessageContaining("blank");
+
+		org.mockito.Mockito.verifyNoInteractions(memory);
 	}
 
 	@Test

@@ -30,7 +30,7 @@ import org.springframework.context.annotation.Import;
  * summarizer (the two system boundaries) stubbed. Asserts observable behavior — what is stored and
  * what a reader gets back — never internal wiring or the clock implementation.
  */
-@DataJpaTest
+@DataJpaTest(properties = "spring.jpa.properties.hibernate.generate_statistics=true")
 @Import(DigestServiceTest.TestConfig.class)
 class DigestServiceTest {
 
@@ -52,6 +52,9 @@ class DigestServiceTest {
 
 	@Autowired
 	private DigestRepository digests;
+
+	@Autowired
+	private jakarta.persistence.EntityManagerFactory entityManagerFactory;
 
 	private StubFeedReader reader;
 	private StubSummarizer summarizer;
@@ -91,6 +94,43 @@ class DigestServiceTest {
 		assertThat(first.getTitle()).isEqualTo("Tin một");
 		assertThat(first.getCategory()).isEqualTo("society");
 		assertThat(first.getSource().getName()).isEqualTo("VnExpress");
+	}
+
+	/**
+	 * The WAN cost of a poll: every extra statement is a network round trip to the store of record
+	 * (a minute-plus ingest over Postgres made "tin mới nhất?" feel broken). Dedup must talk to
+	 * the database per source — one id query plus the genuinely new inserts — never per article.
+	 */
+	@Test
+	void ingestTalksToTheDatabasePerSourceInsteadOfPerArticle() {
+		// First poll fills the store with 30 items.
+		FetchedArticle[] initial = new FetchedArticle[30];
+		for (int i = 1; i <= 30; i++) {
+			initial[i - 1] = article("g" + i, "Tin " + i, "https://vnexpress.example/" + i);
+		}
+		reader.articles("https://vnexpress.example/rss", "VnExpress", initial);
+		service.ingest();
+		long before = preparedStatements();
+
+		// A later poll re-sees all of them (RSS keeps old entries) and adds 10 fresh stories.
+		FetchedArticle[] later = new FetchedArticle[40];
+		for (int i = 1; i <= 40; i++) {
+			later[i - 1] = article("g" + i, "Tin " + i, "https://vnexpress.example/" + i);
+		}
+		reader.articles("https://vnexpress.example/rss", "VnExpress", later);
+
+		int stored = service.ingest();
+
+		assertThat(stored).as("only the ten genuinely new stories are stored").isEqualTo(10);
+		long used = preparedStatements() - before;
+		// Per-source dedup costs ~13 statements here (source scan + one id query + 10 inserts);
+		// per-article checks would cost 40+ more and tank every poll over a WAN store.
+		assertThat(used).as("statements used by the re-poll: %d", used).isLessThanOrEqualTo(25);
+	}
+
+	private long preparedStatements() {
+		return entityManagerFactory.unwrap(org.hibernate.SessionFactory.class)
+				.getStatistics().getPrepareStatementCount();
 	}
 
 	@Test

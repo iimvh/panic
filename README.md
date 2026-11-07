@@ -33,19 +33,21 @@ Agents are discovered from `agents/*/agent.yaml` on the classpath, so **installi
 - **Progressive skills**: markdown skills are exposed as `name + description`; the LLM loads full content on demand via `load_skill`.
 - **Realtime pipeline**: the chat endpoint streams every step (LLM calls, tool calls, sub-agent nesting) over SSE.
 - **Safe by default**: depth/chain guardrails block loops, structural errors fail fast at startup, and a disabled or missing agent degrades gracefully.
-- **Conversation memory**: the last N turns are replayed into the root agent and persisted in an embedded H2 database.
+- **Conversation sessions**: every chat is a server-persisted session — list, replay (answer + pipeline trace), rename and delete survive restarts, browsers and machines; a `＋ new chat` detaches with a clean context.
+- **Redis accelerator (optional)**: recent-turn hot cache, chat rate limit and per-conversation run lock via Upstash REST (TCP fallback); unreachable Redis never breaks a task.
 
 ## Architecture
 
 | Component | Implementation |
 |---|---|
 | User interface | React + Vite + Tailwind SPA (`web/`, built into `panic-app/src/main/resources/static`) |
-| API | `AgentController` — `POST /api/agent/chat` (the only entry point) |
+| API | `AgentController` — `POST /api/agent/chat` (SSE entry point); `ConversationController` — `POST/GET/PATCH/DELETE /api/conversations` (session sidebar) |
 | Agent runtime | `panic-core`: `AgentRegistry`, `AgentExecutor`, `AgentPromptRenderer`, pipeline recorder |
 | Agent SPI | `Agent`, `AgentDefinition`, `ToolSource`, `Skill`, `AgentPolicy`, `AgentContext` |
 | Bundled agents | `coordinator` (`panic-agents-core`) + example `echo` (`panic-agent-example`) |
 | Tools | local (`@Tool` / `ToolCallback`) or MCP server |
-| Storage | H2 (file-based) for conversation history |
+| Storage | H2 (file-based) by default; Postgres with the `postgres` profile — conversations, turns and pipeline traces |
+| Accelerator | Upstash Redis over REST (TCP fallback) — window cache, chat rate limit, per-conversation lock; all optional |
 | Observability | Actuator — `/actuator/health`, `/actuator/agents` |
 
 ### Request flow
@@ -221,8 +223,19 @@ app.memory.window-turns=20
 | `OPENROUTER_API_KEY` | API key; required for chat |
 | `LLM_MODEL` / `OPENROUTER_MODEL` | Model id (must support tool calling) |
 | `OPENROUTER_REFERER` / `OPENROUTER_TITLE` | Optional OpenRouter attribution headers |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | Postgres for the `postgres` profile (see below) |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST accelerator (optional) |
+| `REDIS_URL` | TCP Redis fallback when the REST credentials are absent |
 
 `OpenAiChatModel` refuses an empty key, so a placeholder is injected; the executor treats it as "not configured" and returns a readable error in chat.
+
+### Store of record
+
+H2 (file-based, zero config) is the dev default. For a durable Postgres (e.g. the Aiven instance in `.env`), run with the `postgres` profile — the schema appears on first boot via `ddl-auto=update`:
+
+```bash
+java -jar panic-app/target/panic-app-1.0.0.jar --spring.profiles.active=postgres
+```
 
 Agents can be enabled or disabled with `app.agents.<id>.enabled`:
 
@@ -237,6 +250,11 @@ Structurally invalid declarations (cycles, duplicate ids) **fail fast** at start
 
 ```
 POST /api/agent/chat     # { "message": "...", "conversationId": "..." } → SSE stream
+POST /api/conversations  # → 201 { "id": "..." } — new empty session
+GET  /api/conversations   # → [ { id, title, lastActivityAt } ] — newest activity first
+GET  /api/conversations/{id}  # → { id, title, turns: [{ task, answer, status, at, pipeline }] } — replay
+PATCH /api/conversations/{id}  # { "title": "..." } → renamed summary
+DELETE /api/conversations/{id}  # → 204; 404 unknown, 409 while a task runs the session
 GET  /actuator/health
 GET  /actuator/agents    # runtime agent tree, tools, skills and policy
 ```

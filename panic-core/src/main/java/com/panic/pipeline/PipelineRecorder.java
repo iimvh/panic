@@ -214,6 +214,16 @@ public class PipelineRecorder {
 			}
 		}
 		PipelineEvent[] events = trace.finish();
+		if (failed) {
+			// The step a run died in stays "running" forever unless closed here — close it with the
+			// failure reason so the UI (and the persisted trace) shows exactly which step failed.
+			for (int i = 0; i < events.length; i++) {
+				if (PipelineEvent.STATUS_RUNNING.equals(events[i].status())) {
+					events[i] = events[i].with(PipelineEvent.STATUS_ERROR, events[i].title(), error,
+							trace.durationMs());
+				}
+			}
+		}
 		ACTIVE_TOOL.remove();
 		ACTIVE_AGENT.remove();
 		CURRENT_TRACE.remove();

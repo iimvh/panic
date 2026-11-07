@@ -49,6 +49,53 @@ export class AgentError extends Error {
 	}
 }
 
+/**
+ * Failures that happen before the stream opens (rejected request, network, timeout) carry no
+ * recorded steps at all — a blank workspace would hide both the task and where it died. Such a
+ * failure still gets a minimal client-side trace: the user's task plus one error step, so the
+ * dashboard renders the attempt like any failed run.
+ */
+function failureTrace(title: string, detail: string, task: string): PipelineEvent[] {
+	const at = Date.now();
+	return [
+		{
+			id: -2,
+			traceId: 0,
+			phase: "message",
+			actor: "user",
+			status: "ok",
+			title: task.split("\n")[0].slice(0, 80),
+			detail: JSON.stringify({ text: task }),
+			startedAt: at,
+			durationMs: 0,
+			parentId: null,
+			agentId: null,
+			depth: 0,
+			role: "user",
+		},
+		{
+			id: -1,
+			traceId: 0,
+			phase: "error",
+			actor: "client",
+			status: "error",
+			title,
+			detail,
+			startedAt: at,
+			durationMs: 0,
+			parentId: null,
+			agentId: null,
+			depth: 0,
+			role: null,
+		},
+	];
+}
+
+/** The recorded steps when the server provided any; the client-side failure trace when it did not. */
+function traceOfFailure(serverEvents: PipelineEvent[], title: string, detail: string, task: string): PipelineEvent[] {
+	return serverEvents.length > 0 ? serverEvents : failureTrace(title, detail, task);
+}
+
 export interface ChatResult {
 	reply: string;
 	pipeline: PipelineEvent[];
@@ -120,12 +167,11 @@ export async function askAgent(args: AskArgs, options: AskOptions = {}): Promise
 		});
 	} catch (error) {
 		if (error instanceof DOMException && error.name === "AbortError") {
-			throw new AgentError("The request took too long to process. Please try again.", "timeout");
+			const detail = "The request took too long to process. Please try again.";
+			throw new AgentError(detail, "timeout", traceOfFailure([], "request timed out", detail, args.message));
 		}
-		throw new AgentError(
-			"Could not connect to the server. Check that the application is running.",
-			"network"
-		);
+		const detail = "Could not connect to the server. Check that the application is running.";
+		throw new AgentError(detail, "network", traceOfFailure([], "connection failed", detail, args.message));
 	} finally {
 		clearTimeout(timeout);
 	}
@@ -173,7 +219,10 @@ export async function askAgent(args: AskArgs, options: AskOptions = {}): Promise
 		} catch {
 			/* keep the default */
 		}
-		throw new AgentError(withKeyHint(detail));
+		// Rejected before the stream opened (guard, validation, or an unhandled server error):
+		// the dashboard still shows the task + a red failure row instead of a blank workspace.
+		throw new AgentError(withKeyHint(detail), "server",
+			traceOfFailure([], "request rejected", withKeyHint(detail), args.message));
 	}
 
 	const reader = response.body.getReader();
@@ -192,7 +241,9 @@ export async function askAgent(args: AskArgs, options: AskOptions = {}): Promise
 
 	const finalResult = result;
 	if (!finalResult) {
-		throw new AgentError("No result received from the server. Please try again.", "server", [], traceId);
+		const detail = "No result received from the server. Please try again.";
+		throw new AgentError(detail, "server",
+			traceOfFailure([], "stream ended without a result", detail, args.message), traceId);
 	}
 
 	const reply = typeof finalResult.reply === "string" ? finalResult.reply.trim() : "";
@@ -203,7 +254,8 @@ export async function askAgent(args: AskArgs, options: AskOptions = {}): Promise
 	const pipeline = normalizePipeline(finalResult.pipeline);
 
 	if (error) {
-		throw new AgentError(withKeyHint(error), "server", pipeline, finalTrace);
+		throw new AgentError(withKeyHint(error), "server",
+			traceOfFailure(pipeline, "request failed", withKeyHint(error), args.message), finalTrace);
 	}
 
 	return {

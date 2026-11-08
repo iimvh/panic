@@ -55,10 +55,19 @@ public class RuntimeLlmProviderChatFactory implements LlmProviderChatFactory {
 	}
 
 	private ChatClient.Builder build(LlmProviderStore.ProviderSnapshot snapshot) {
+		// Normalize array-shaped `content` from providers (e.g. Mistral leanstral) before Spring AI
+		// 1.0.0 parses it, on both the blocking RestClient and the streaming WebClient.
+		org.springframework.web.client.RestClient.Builder rest = org.springframework.web.client.RestClient.builder()
+				.requestInterceptor(OpenAiContentNormalizers.restInterceptor());
+		org.springframework.web.reactive.function.client.WebClient.Builder web = org.springframework.web.reactive.function.client.WebClient
+				.builder()
+				.filter(OpenAiContentNormalizers.webFilter());
 		org.springframework.ai.openai.api.OpenAiApi api =
 				org.springframework.ai.openai.api.OpenAiApi.builder()
 						.baseUrl(snapshot.baseUrl())
 						.apiKey(snapshot.apiKey())
+						.restClientBuilder(rest)
+						.webClientBuilder(web)
 						.build();
 		if (!StringUtils.hasText(snapshot.model())) {
 			throw new BookingException("The connected provider has no model selected");

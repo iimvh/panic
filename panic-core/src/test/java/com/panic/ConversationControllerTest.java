@@ -146,6 +146,32 @@ class ConversationControllerTest {
 	}
 
 	@Test
+	void replayAssistantMessageCarriesToolCallPartsAndFinalText() throws Exception {
+		String id = store.create("local");
+		store.append(id, com.panic.core.agent.memory.ChatTurn.Role.USER, "hôm nay có tin gì?", 91L);
+		store.append(id, com.panic.core.agent.memory.ChatTurn.Role.ASSISTANT, "Có 3 tin mới", 91L);
+		store.recordTrace(id, 91L, List.of(
+				// Tool call recorded twice with the same id: running (with args), then finished.
+				new PipelineEvent(5, 91L, "tool", "coordinator", "running", "Sub-agent digest",
+						"{\"args\":{\"query\":\"hôm nay có tin gì?\"}}", 1_000L, null, 0L, "coordinator", 0, "tool"),
+				new PipelineEvent(5, 91L, "tool", "coordinator", "ok", "Sub-agent digest",
+						"{\"output\":\"Có 3 tin mới\"}", 1_000L, 12L, 0L, "coordinator", 0, "tool"),
+				// A tool-source listing event is NOT a tool call and must not become a part.
+				new PipelineEvent(6, 91L, "tool", "digest", "ok", "Tool source digest-tools (LOCAL)",
+						"{\"provider\":\"LOCAL\",\"tools\":[\"today\"]}", 1_100L, 1L, 5L, "digest", 1, "tool")));
+
+		mvc.perform(get("/api/conversations/" + id)).andExpect(status().isOk())
+				// Assistant content is an array of parts: one tool-call, then the final text.
+				.andExpect(jsonPath("$.messages[1].role").value("assistant"))
+				.andExpect(jsonPath("$.messages[1].content[0].type").value("tool-call"))
+				.andExpect(jsonPath("$.messages[1].content[0].toolName").value("digest"))
+				.andExpect(jsonPath("$.messages[1].content[0].args.query").value("hôm nay có tin gì?"))
+				.andExpect(jsonPath("$.messages[1].content[0].result").value("Có 3 tin mới"))
+				.andExpect(jsonPath("$.messages[1].content[?(@.type=='tool-call')]").value(org.hamcrest.Matchers.hasSize(1)))
+				.andExpect(jsonPath("$.messages[1].content[?(@.type=='text')].text").value(org.hamcrest.Matchers.contains("Có 3 tin mới")));
+	}
+
+	@Test
 	void unknownConversationAnswers404Everywhere() throws Exception {
 		mvc.perform(get("/api/conversations/nope")).andExpect(status().isNotFound())
 				.andExpect(jsonPath("$.error").isNotEmpty());

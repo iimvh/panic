@@ -64,13 +64,17 @@ public final class AgentDefinitionLoader {
 		return loadAll(location, sources, enabled, List.of());
 	}
 
-	/**
-	 * @param existing definitions already supplied as beans by agent modules. A YAML declaration and
-	 *                 a bean are two ways to install the same agent, so the bean wins and the YAML
-	 *                 is only the fallback: its tool refs are resolved here.
-	 */
 	public static List<AgentDefinition> loadAll(String location, AgentToolSources sources,
 			Predicate<String> enabled, List<AgentDefinition> existing) {
+		return loadAll(location, sources, enabled, existing, ToolPluginHub.empty());
+	}
+
+	/**
+	 * @param hub the tool-plugin hub; {@code hubTools} refs are validated against it so a typo or a
+	 *            plugin whose module is missing fails fast at startup.
+	 */
+	public static List<AgentDefinition> loadAll(String location, AgentToolSources sources,
+			Predicate<String> enabled, List<AgentDefinition> existing, ToolPluginHub hub) {
 		Resource[] resources;
 		try {
 			resources = new PathMatchingResourcePatternResolver().getResources(location);
@@ -95,7 +99,7 @@ public final class AgentDefinitionLoader {
 			if (!enabled.test(id) || fromBeans.contains(id)) {
 				continue;
 			}
-			result.add(build(id, entry.getValue(), sources));
+			result.add(build(id, entry.getValue(), sources, hub));
 		}
 		for (AgentDefinition definition : existing) {
 			if (!enabled.test(definition.id())) {
@@ -104,15 +108,19 @@ public final class AgentDefinitionLoader {
 			// The module's own bean is authoritative for metadata; a YAML declaration of the same id
 			// only adds what the bean omits (tool refs resolve here, not in the module).
 			Map<String, Object> raw = srcById.get(definition.id());
-			result.add(raw == null ? definition : withTools(definition, raw, sources));
+			result.add(raw == null ? definition : withTools(definition, raw, sources, hub));
 		}
 		return result;
 	}
 
 	/** Loads a single agent from a resource; used by tests. */
 	static AgentDefinition load(Resource resource, AgentToolSources sources) {
+		return load(resource, sources, ToolPluginHub.empty());
+	}
+
+	static AgentDefinition load(Resource resource, AgentToolSources sources, ToolPluginHub hub) {
 		Map<String, Object> raw = read(resource);
-		return build(idOf(raw, resource), raw, sources);
+		return build(idOf(raw, resource), raw, sources, hub);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -134,7 +142,8 @@ public final class AgentDefinitionLoader {
 		return id;
 	}
 
-	private static AgentDefinition build(String id, Map<String, Object> raw, AgentToolSources sources) {
+	private static AgentDefinition build(String id, Map<String, Object> raw, AgentToolSources sources,
+			ToolPluginHub hub) {
 		AgentDefinition.Builder builder = AgentDefinition.builder(id)
 				.description(string(raw.get("description")))
 				.promptFile(promptPath(id, string(raw.get("prompt"))))
@@ -144,12 +153,15 @@ public final class AgentDefinitionLoader {
 		for (String ref : strings(raw.get("tools"))) {
 			builder.addToolSource(resolveTool(ref, sources, id));
 		}
+		for (String pluginId : strings(raw.get("hubTools"))) {
+			builder.addHubToolId(resolveHubTool(pluginId, hub, id));
+		}
 		return builder.build();
 	}
 
-	/** Bean definition + the tool refs declared in the same agent's YAML. */
+	/** Bean definition + the tool refs + hub grants declared in the same agent's YAML. */
 	private static AgentDefinition withTools(AgentDefinition definition, Map<String, Object> raw,
-			AgentToolSources sources) {
+			AgentToolSources sources, ToolPluginHub hub) {
 		AgentDefinition.Builder builder = AgentDefinition.builder(definition.id())
 				.description(definition.description())
 				.promptFile(definition.promptFile())
@@ -158,8 +170,12 @@ public final class AgentDefinitionLoader {
 				.subAgentIds(definition.subAgentIds())
 				.policy(definition.policy());
 		definition.toolSources().forEach(builder::addToolSource);
+		definition.hubToolIds().forEach(builder::addHubToolId);
 		for (String ref : strings(raw.get("tools"))) {
 			builder.addToolSource(resolveTool(ref, sources, definition.id()));
+		}
+		for (String pluginId : strings(raw.get("hubTools"))) {
+			builder.addHubToolId(resolveHubTool(pluginId, hub, definition.id()));
 		}
 		return builder.build();
 	}
@@ -187,6 +203,20 @@ public final class AgentDefinitionLoader {
 			default -> throw new IllegalStateException("agent '" + agentId + "' declares tool '" + ref
 					+ "' with an unsupported kind: " + kind);
 		};
+	}
+
+	/**
+	 * Resolves a {@code hubTools} grant against the tool-plugin hub. An unknown id (typo, or the
+	 * plugin's module not on the classpath) fails fast at startup, like an unknown tool source.
+	 */
+	private static String resolveHubTool(String pluginId, ToolPluginHub hub, String agentId) {
+		if (pluginId == null || pluginId.isBlank()) {
+			throw new IllegalStateException("agent '" + agentId + "' declares a blank hub tool id");
+		}
+		hub.find(pluginId).orElseThrow(() -> new IllegalStateException("agent '" + agentId
+				+ "' references hub tool '" + pluginId + "' which is not registered (available: "
+				+ String.join(", ", hub.ids()) + ")"));
+		return pluginId;
 	}
 
 	private static AgentPolicy policy(Object raw) {

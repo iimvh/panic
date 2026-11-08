@@ -51,10 +51,12 @@ public class AgentRuntimeConfig {
 	}
 	@Bean
 	public AgentRegistry agentRegistry(@Qualifier("agentToolSources") AgentToolSources sources,
+			@Qualifier("toolPluginHub") ToolPluginHub hub,
 			ObjectProvider<AgentDefinition> beanDefinitions, Environment environment) {
 		AgentCatalogProperties catalog = catalog(environment);
 		List<AgentDefinition> definitions = AgentDefinitionLoader.loadAll(
-				AgentDefinitionLoader.DEFAULT_LOCATION, sources, catalog::isEnabled, beanDefinitions.orderedStream().toList());
+				AgentDefinitionLoader.DEFAULT_LOCATION, sources, catalog::isEnabled,
+				beanDefinitions.orderedStream().toList(), hub);
 		AgentRegistry registry = new AgentRegistry(definitions, catalog.root(),
 				new LinkedHashSet<>(catalog.declaredIds()));
 		registry.all().forEach(agent -> {
@@ -71,6 +73,15 @@ public class AgentRuntimeConfig {
 	@Bean
 	public AgentPromptRenderer agentPromptRenderer(PromptRepository prompts) {
 		return new AgentPromptRenderer(prompts);
+	}
+
+	/**
+	 * Collects every {@link com.panic.core.agent.spi.ToolPlugin} bean into the hub. Agents grant
+	 * these common tools explicitly through {@code hubTools} in their YAML declaration.
+	 */
+	@Bean
+	public ToolPluginHub toolPluginHub(ObjectProvider<com.panic.core.agent.spi.ToolPlugin> plugins) {
+		return new ToolPluginHub(plugins.orderedStream().toList());
 	}
 
 	/**

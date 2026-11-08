@@ -34,12 +34,12 @@ class AgentTreeWiringTest {
 	}
 
 	@Test
-	void digestAgentAndItsSubAgentsAreReachableFromTheCoordinator() {
-		assertThat(registry.require("digest").subAgentIds())
-				.containsExactly("newsScout", "digestWriter");
-		assertThat(registry.require("newsScout").toolSources()).hasSize(1);
-		assertThat(registry.require("digestWriter").toolSources()).hasSize(1);
-		assertThat(registry.reachable()).contains("coordinator", "digest", "newsScout", "digestWriter");
+	void digestAgentIsReachableAndUsesWebSearchFromTheHub() {
+		var digest = registry.require("digest");
+		assertThat(digest.subAgentIds()).isEmpty();
+		assertThat(digest.toolSources()).isEmpty();
+		assertThat(digest.hubToolIds()).contains("web-search");
+		assertThat(registry.reachable()).contains("coordinator", "digest", "echo");
 	}
 
 	@SuppressWarnings("unchecked")

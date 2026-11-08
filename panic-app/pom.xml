@@ -33,6 +33,12 @@
 			<artifactId>panic-agent-digest</artifactId>
 			<version>${project.version}</version>
 		</dependency>
+		<!-- Tool-plugin hub: common tools agents can be granted (web-search). -->
+		<dependency>
+			<groupId>com.panic</groupId>
+			<artifactId>panic-tool-plugins</artifactId>
+			<version>${project.version}</version>
+		</dependency>
 		<!-- Prod store of record for the postgres profile (H2 stays the dev default). -->
 		<dependency>
 			<groupId>org.postgresql</groupId>

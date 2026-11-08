@@ -25,6 +25,7 @@ import {
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DropdownMenu } from "radix-ui";
 import { cn } from "@/lib/utils";
 import type { FreeLlmModel } from "@/lib/provider";
 import {
@@ -37,7 +38,6 @@ import {
   ErrorPrimitive,
   groupPartByType,
   MessagePrimitive,
-  SuggestionPrimitive,
   ThreadPrimitive,
   type FileMessagePartComponent,
   type ImageMessagePartComponent,
@@ -48,8 +48,9 @@ import {
 import {
   ArrowDownIcon,
   ArrowUpIcon,
-  AudioLinesIcon,
-  CheckIcon,
+	AudioLinesIcon,
+	ChevronDownIcon,
+	CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
@@ -61,12 +62,14 @@ import {
   RefreshCwIcon,
   SquareIcon,
   PlayIcon,
-  ThumbsDownIcon,
-  ThumbsUpIcon,
+	ThumbsDownIcon,
+	ThumbsUpIcon,
+	ZapIcon,
 } from "lucide-react";
 import {
   createContext,
   useContext,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -287,9 +290,6 @@ const ThreadRoot: FC<{
             <ThreadScrollToBottom />
             <ThreadFollowupSuggestions />
             <Composer autoFocus={autoFocus} models={models} onModelChange={onModelChange} />
-            <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
-              <ThreadSuggestions />
-            </AuiIf>
           </ThreadPrimitive.ViewportFooter>
         </div>
       </ThreadPrimitive.Viewport>
@@ -503,37 +503,56 @@ const ThreadWelcome: FC = () => {
   );
 };
 
-const ThreadSuggestions: FC = () => {
+const ModelPill: FC<{
+  models: FreeLlmModel[];
+  model: string;
+  onModelChange?: (model: string) => void;
+}> = ({ models, model, onModelChange }) => {
+  const current = models.find((row) => row.id === model);
   return (
-    <div className="aui-thread-welcome-suggestions flex w-full flex-col">
-      <ThreadPrimitive.Suggestions>
-        {() => <ThreadSuggestionItem />}
-      </ThreadPrimitive.Suggestions>
-    </div>
-  );
-};
-
-const ThreadSuggestionItem: FC = () => {
-  return (
-    <div className="aui-thread-welcome-suggestion-display fade-in slide-in-from-bottom-2 animate-in fill-mode-both duration-200">
-      <SuggestionPrimitive.Trigger send asChild>
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
         <button
           type="button"
-          className="aui-thread-welcome-suggestion group hover:bg-foreground/[0.03] focus-visible:ring-ring/50 flex w-full items-baseline gap-2.5 rounded-md px-2 py-2 text-start text-sm transition-colors outline-none focus-visible:ring-1 motion-reduce:transition-none"
+          aria-label="Model"
+          className="flex items-center gap-1.5 rounded-md border border-input bg-input/50 px-2 py-1 text-xs font-mono text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-accent"
         >
-          <span
-            aria-hidden
-            className="text-muted-foreground/60 group-hover:text-foreground font-mono text-xs transition-colors motion-reduce:transition-none"
-          >
-            {">"}
-          </span>
-          <span className="min-w-0 flex-1 truncate">
-            <SuggestionPrimitive.Title className="aui-thread-welcome-suggestion-text-1 text-foreground" />{" "}
-            <SuggestionPrimitive.Description className="aui-thread-welcome-suggestion-text-2 text-muted-foreground empty:hidden" />
-          </span>
+          <ZapIcon className="size-3.5 shrink-0" />
+          <span className="max-w-40 truncate">{current?.name || model}</span>
+          <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
         </button>
-      </SuggestionPrimitive.Trigger>
-    </div>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          side="bottom"
+          align="start"
+          sideOffset={6}
+          className="bg-popover text-popover-foreground data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:animate-out data-[side=bottom]:slide-in-from-top-2 data-[side=top]:slide-in-from-bottom-2 scrollbar-none z-50 max-h-64 min-w-56 overflow-y-auto rounded-xl border border-border p-1.5 shadow-lg"
+        >
+          {models.length === 0 ? (
+            <DropdownMenu.Item
+              disabled
+              className="text-muted-foreground px-2.5 py-1.5 text-sm"
+            >
+              No models available
+            </DropdownMenu.Item>
+          ) : (
+            models.map((row, index) => (
+              <DropdownMenu.Item
+                key={`${row.id}-${index}`}
+                onSelect={() => onModelChange?.(row.id)}
+                className="hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 font-mono text-xs outline-none select-none"
+              >
+                <span className="truncate">{row.name || row.id}</span>
+                {row.id === model && (
+                  <CheckIcon className="size-3.5 shrink-0" />
+                )}
+              </DropdownMenu.Item>
+            ))
+          )}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 };
 
@@ -543,6 +562,9 @@ const ThreadSuggestionItem: FC = () => {
 		onModelChange?: (model: string) => void;
 	}> = ({ autoFocus, models = [], onModelChange }) => {
 	  const [model, setModel] = useState(models[0]?.id ?? "");
+	  useEffect(() => {
+	    if (!model && models[0]?.id) setModel(models[0].id);
+	  }, [model, models]);
 	  return (
 	    <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
 	      <div className="mx-auto max-w-3xl w-full">
@@ -551,36 +573,23 @@ const ThreadSuggestionItem: FC = () => {
 	            data-slot="aui_composer-shell"
 	            className="border-foreground/10 focus-within:border-foreground/25 data-[dragging=true]:border-ring flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
 	          >
-	            <div className="flex w-full items-center gap-2">
-	              <ComposerAttachments />
-	              <div className="flex items-center gap-2 flex-1 min-w-0">
-	                <ComposerPrimitive.Input
-	                  placeholder="Send a message..."
-	                  className="aui-composer-input caret-primary placeholder:text-muted-foreground/60 max-h-48 min-h-10 flex-1 min-w-0 resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
-	                  rows={1}
-	                  autoFocus={autoFocus}
-	                  enterKeyHint="send"
-	                  aria-label="Message input"
-	                />
-	                <select
-	                  value={model}
-	                  onChange={(event) => {
-	                    const next = event.target.value;
-	                    setModel(next);
-	                    onModelChange?.(next);
-	                  }}
-	                  aria-label="Model"
-	                  className="flex-shrink-0 border border-input bg-input/50 rounded-md px-2 py-1 text-xs font-mono text-foreground outline-none focus:ring-1 focus:ring-ring"
-	                >
-	                  {models.map((row) => (
-	                    <option key={row.id} value={row.id}>
-	                      {row.name}
-	                    </option>
-	                  ))}
-	                </select>
-	              </div>
-	              <ComposerAction />
-	            </div>
+            <div className="flex w-full flex-col gap-2">
+              <ComposerAttachments />
+              <ComposerPrimitive.Input
+                placeholder="Send a message..."
+                className="aui-composer-input caret-primary placeholder:text-muted-foreground/60 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
+                rows={1}
+                autoFocus={autoFocus}
+                enterKeyHint="send"
+                aria-label="Message input"
+              />
+              <ComposerAction
+                models={models}
+                model={model}
+                setModel={setModel}
+                onModelChange={onModelChange}
+              />
+            </div>
 	          </div>
 	        </ComposerPrimitive.AttachmentDropzone>
 	      </div>
@@ -588,7 +597,12 @@ const ThreadSuggestionItem: FC = () => {
 	  );
 	};
 
-const ComposerAction: FC = () => {
+const ComposerAction: FC<{
+  models: FreeLlmModel[];
+  model: string;
+  setModel: (model: string) => void;
+  onModelChange?: (model: string) => void;
+}> = ({ models, model, setModel, onModelChange }) => {
   const { ComposerExtra } = useContext(ThreadComponentsContext);
   // The stop control only cancels the send while no run it could stop is going.
   const isSending = useAuiState(
@@ -599,14 +613,18 @@ const ComposerAction: FC = () => {
 
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between">
-      {ComposerExtra ? (
-        <div className="aui-composer-action-start flex items-center gap-1.5">
-          <ComposerAddAttachment />
-          <ComposerExtra />
-        </div>
-      ) : (
+      <div className="aui-composer-action-start flex items-center gap-1.5">
         <ComposerAddAttachment />
-      )}
+        <ModelPill
+          models={models}
+          model={model}
+          onModelChange={(next) => {
+            setModel(next);
+            onModelChange?.(next);
+          }}
+        />
+        {ComposerExtra ? <ComposerExtra /> : null}
+      </div>
       <div className="flex items-center gap-1.5">
         <AuiIf condition={(s) => s.thread.capabilities.dictation}>
           <AuiIf condition={(s) => s.composer.dictation == null}>

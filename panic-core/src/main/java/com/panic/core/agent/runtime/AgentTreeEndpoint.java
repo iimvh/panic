@@ -46,6 +46,8 @@ public class AgentTreeEndpoint {
 				.flatMap(src -> src.toolCallbacks().stream())
 				.map(cb -> ToolNamePrefix.apply(agent.id(), cb.getToolDefinition().name()))
 				.toList());
+		// Common tools granted from the tool-plugin hub (mounted at run time as <id>__<tool>).
+		map.put("hubTools", agent.hubToolIds());
 		map.put("subAgents", registry.visibleSubAgents(agent.id()).stream().map(AgentDefinition::id).toList());
 		map.put("disabledSubAgents", registry.disabledSubAgents(agent.id()));
 		map.put("missingSubAgents", registry.missingSubAgents(agent.id()));

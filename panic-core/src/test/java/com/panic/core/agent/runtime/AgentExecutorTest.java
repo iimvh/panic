@@ -404,9 +404,59 @@ class AgentExecutorTest {
 		assertThat(result.text()).isEqualTo("Xin chào, tôi là Panic.");
 	}
 
+	/**
+	 * Regression: some OpenAI-compatible providers (Mistral leanstral) return a non-streaming
+	 * response whose {@code content} is not a string, so Spring AI's blocking {@code .content()}
+	 * throws {@code IllegalStateException("The content is not a string!")}. A sub-agent must answer
+	 * through the streaming path (accumulating, without publishing) and never make the blocking call.
+	 */
+	@Test
+	void subAgentAnswersThroughStreamWhenBlockingContentIsNotAString() {
+		var model = new NonStringBlockingModel("Tin mới nhất: ...");
+		AgentRegistry registry = registry(List.of(coordinator("search"), searchAgent(LocalToolSource.of("t", tools))));
+		AgentExecutor executor = new AgentExecutor(LlmProviderChatFactory.fixed(ChatClient.builder(model)),
+				registry, noSkills(), recorder, new AgentPromptRenderer(prompts()), null, broadcaster);
+		recorder.startResponse(new PipelineRecorder.RequestTrace());
+
+		// depth = 1 → the sub-agent branch that used to call .content() and throw.
+		var subContext = new com.panic.core.agent.spi.AgentContext(1L, null, 1, List.of("coordinator"), "news?", null);
+		var result = executor.run(registry.require("search"), subContext);
+		recorder.unbind();
+
+		assertThat(result.text()).isEqualTo("Tin mới nhất: ...");
+		assertThat(model.blockingCalls).as("the blocking call must not be attempted").isZero();
+	}
+
+	/**
+	 * Blocking {@code call()} throws the Spring AI content error; {@code stream()} answers normally.
+	 * Counts blocking calls so the test can assert the sub-agent never makes one.
+	 */
+	static final class NonStringBlockingModel implements org.springframework.ai.chat.model.ChatModel {
+
+		private final String answer;
+		int blockingCalls;
+
+		NonStringBlockingModel(String answer) {
+			this.answer = answer;
+		}
+
+		@Override
+		public org.springframework.ai.chat.model.ChatResponse call(org.springframework.ai.chat.prompt.Prompt prompt) {
+			blockingCalls++;
+			throw new IllegalStateException("The content is not a string!");
+		}
+
+		@Override
+		public reactor.core.publisher.Flux<org.springframework.ai.chat.model.ChatResponse> stream(
+				org.springframework.ai.chat.prompt.Prompt prompt) {
+			return reactor.core.publisher.Flux.just(new org.springframework.ai.chat.model.ChatResponse(List.of(
+					new org.springframework.ai.chat.model.Generation(
+							new org.springframework.ai.chat.messages.AssistantMessage(answer)))));
+		}
+	}
+
 	/** Streaming ChatModel that emits the given text chunks and no tool calls. */
 	static final class StreamingModel implements org.springframework.ai.chat.model.ChatModel {
-
 		private final String[] chunks;
 
 		StreamingModel(String[] chunks) {

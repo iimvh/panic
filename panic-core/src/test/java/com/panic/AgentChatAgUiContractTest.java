@@ -152,6 +152,21 @@ class AgentChatAgUiContractTest {
 		return events.get(events.size() - 1).path("runId").asText();
 	}
 
+	/** Text of a replayed message: plain string for user turns, joined text parts for assistant turns. */
+	private static String replayText(JsonNode message) {
+		JsonNode content = message.path("content");
+		if (content.isTextual()) {
+			return content.asText();
+		}
+		StringBuilder text = new StringBuilder();
+		for (JsonNode part : content) {
+			if ("text".equals(part.path("type").asText())) {
+				text.append(part.path("text").asText());
+			}
+		}
+		return text.toString();
+	}
+
 	@Test
 	void failedRunClosesWithRunErrorOnly() throws Exception {
 		SCENARIO.set(Scenario.FAILED_RUN);
@@ -181,7 +196,7 @@ class AgentChatAgUiContractTest {
 		assertThat(replayMessages.size()).isEqualTo(4);
 		// The failed exchange replays without an assistant partner; only the retry gets an answer.
 		assertThat(replayMessages.get(2).path("content").asText()).isEqualTo("try again later");
-		assertThat(replayMessages.get(3).path("content").asText()).isEqualTo("Xin chào Panic");
+		assertThat(replayText(replayMessages.get(3))).isEqualTo("Xin chào Panic");
 		assertThat(session.path("turns").size()).isEqualTo(2);
 		assertThat(session.path("turns").get(0).path("status").asText()).isEqualTo("error");
 		assertThat(session.path("turns").get(1).path("status").asText()).isEqualTo("ok");

@@ -52,9 +52,10 @@ public class ConversationController {
 
 	/**
 	 * Replay of one session in the AG-UI message shape the runtime restores directly
-	 * (`fromAgUiMessages`): one user record + one assistant record per paired turn, ids stable
-	 * per replay. `turns` travels beside the messages because the ExecutionLedger renders the
-	 * recorded pipeline of each turn from it (the messages array cannot carry pipeline data).
+	 * (`fromAgUiMessages`). Each assistant turn carries its tool calls as `tool-call` parts
+	 * (reconstructed from the recorded pipeline) followed by a final `text` part, so the Thread
+	 * renders the same execution steps it showed live — not just the final answer. `turns` still
+	 * travels beside the messages for any consumer that wants the raw trace.
 	 */
 	@GetMapping("/{id}")
 	public ConversationReplay session(@PathVariable String id) {
@@ -115,13 +116,21 @@ public class ConversationController {
 			for (int index = 0; index < session.turns().size(); index++) {
 				ConversationStore.ConversationSession.ReplayedTurn turn = session.turns().get(index);
 				messages.add(new AgUiReplayMessage("t" + index + "-u", "user", turn.task()));
-				messages.add(new AgUiReplayMessage("t" + index + "-a", "assistant", turn.answer()));
+				// The assistant turn is an array of parts: each recorded tool call (sub-agent
+				// delegation, tool result) followed by the final answer text. `fromAgUiMessages`
+				// restores these as tool-call + text parts, so history matches the live run.
+				messages.add(new AgUiReplayMessage("t" + index + "-a", "assistant",
+						ReplayParts.forTurn(turn.pipeline(), turn.answer())));
 			}
 			return new ConversationReplay(session.id(), session.title(), List.copyOf(messages), session.turns());
 		}
 	}
 
-	/** One replayed conversation record: user/assistant pair, AG-UI inbound/outbound shape. */
-	public record AgUiReplayMessage(String id, String role, String content) {
+	/**
+	 * One replayed conversation record. {@code content} is a plain string for user turns and a
+	 * list of AG-UI parts ({@code {type:"tool-call",...}} then {@code {type:"text",text:...}})
+	 * for assistant turns — the same shape the live stream produces.
+	 */
+	public record AgUiReplayMessage(String id, String role, Object content) {
 	}
 }

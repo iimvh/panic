@@ -19,6 +19,7 @@ public record AgentDefinition(
 		String promptFile,
 		String inlinePrompt,
 		List<ToolSource> toolSources,
+		List<String> hubToolIds,
 		List<String> subAgentIds,
 		List<String> skillIds,
 		AgentPolicy policy) implements Agent {
@@ -35,6 +36,8 @@ public record AgentDefinition(
 			inlinePrompt = "";
 		}
 		toolSources = toolSources == null ? List.of() : List.copyOf(toolSources);
+		hubToolIds = hubToolIds == null ? List.of()
+				: List.copyOf(new java.util.LinkedHashSet<>(hubToolIds));
 		subAgentIds = subAgentIds == null ? List.of() : List.copyOf(subAgentIds);
 		skillIds = skillIds == null ? List.of() : List.copyOf(skillIds);
 		policy = policy == null ? AgentPolicy.DEFAULT : policy;
@@ -72,6 +75,7 @@ public record AgentDefinition(
 		private String promptFile;
 		private String inlinePrompt = "";
 		private List<ToolSource> toolSources = List.of();
+		private List<String> hubToolIds = List.of();
 		private List<String> subAgentIds = List.of();
 		private List<String> skillIds = List.of();
 		private AgentPolicy policy = AgentPolicy.DEFAULT;
@@ -114,6 +118,26 @@ public record AgentDefinition(
 			return this;
 		}
 
+		/** Common tool plugins granted from the hub, by id (e.g. {@code web-search}). */
+		public Builder hubToolIds(String... value) {
+			this.hubToolIds = List.of(value);
+			return this;
+		}
+
+		public Builder hubToolIds(List<String> value) {
+			this.hubToolIds = value;
+			return this;
+		}
+
+		public Builder addHubToolId(String value) {
+			List<String> merged = new java.util.ArrayList<>(this.hubToolIds);
+			if (!merged.contains(value)) {
+				merged.add(value);
+			}
+			this.hubToolIds = merged;
+			return this;
+		}
+
 		/** Prompt path relative to the agent directory, e.g. {@code system.md}. */
 		public Builder promptFile(String value) {
 			this.promptFile = value;
@@ -146,8 +170,8 @@ public record AgentDefinition(
 		}
 
 		public AgentDefinition build() {
-			return new AgentDefinition(id, description, promptFile, inlinePrompt, toolSources, subAgentIds,
-					skillIds, policy);
+			return new AgentDefinition(id, description, promptFile, inlinePrompt, toolSources, hubToolIds,
+					subAgentIds, skillIds, policy);
 		}
 	}
 }

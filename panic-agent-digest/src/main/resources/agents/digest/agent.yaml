@@ -1,5 +1,6 @@
 id: digest
-description: Bản tin mỗi sáng — answers with today's or a past day's Vietnamese digest and can trigger generation.
+description: Digest — summarizes and presents daily tech news from web-search results, replying in the user's language.
 prompt: system.md
 skills: []
-tools: [local:digest-tools]
+subAgents: []
+hubTools: [web-search]

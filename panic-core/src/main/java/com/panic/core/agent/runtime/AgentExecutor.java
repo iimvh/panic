@@ -52,10 +52,12 @@ public class AgentExecutor {
 	private final AgentPromptRenderer renderer;
 	private final ConversationStore memory;
 	private final PipelineBroadcaster broadcaster;
+	private final ToolPluginHub hub;
 
+	@org.springframework.beans.factory.annotation.Autowired
 	public AgentExecutor(LlmProviderChatFactory chatFactory, AgentRegistry registry, SkillRepository skills,
 			PipelineRecorder recorder, AgentPromptRenderer renderer, ConversationStore memory,
-			PipelineBroadcaster broadcaster) {
+			PipelineBroadcaster broadcaster, ToolPluginHub hub) {
 		this.chatFactory = chatFactory;
 		this.registry = registry;
 		this.skills = skills;
@@ -63,6 +65,14 @@ public class AgentExecutor {
 		this.renderer = renderer;
 		this.memory = memory;
 		this.broadcaster = broadcaster;
+		this.hub = hub;
+	}
+
+	/** No hub tools: used by tests and callers that mount no common plugins. */
+	public AgentExecutor(LlmProviderChatFactory chatFactory, AgentRegistry registry, SkillRepository skills,
+			PipelineRecorder recorder, AgentPromptRenderer renderer, ConversationStore memory,
+			PipelineBroadcaster broadcaster) {
+		this(chatFactory, registry, skills, recorder, renderer, memory, broadcaster, ToolPluginHub.empty());
 	}
 
 	/** Root run without conversation memory (used by tests and any stateless caller). */
@@ -120,6 +130,7 @@ public class AgentExecutor {
 		warnMissingMcpSkills(agent, agentSkills);
 
 		List<ToolCallback> tools = new ArrayList<>(ToolCallbacks.ownTools(agent, recorder, trace));
+		tools.addAll(ToolCallbacks.hubTools(agent, hub, recorder, trace));
 		Map<String, AgentDefinition> subById = new LinkedHashMap<>();
 		for (AgentDefinition sub : callable) {
 			ToolCallback callback = ToolCallbacks.subAgentTool(agent, sub);
@@ -185,8 +196,8 @@ public class AgentExecutor {
 					.toolContext(Map.of("traceId", context.traceId(), "agentId", agent.id(), "depth", context.depth()))
 					.advisors(LlmCallAdvisor.forAgent(agent.id(), recorder, trace, context.parentEventId()));
 			// The root agent streams its answer token by token on the chat stream so the UI can render
-			// it as it is generated. Sub-agents run inside a blocking tool callback, so they stay blocking
-			// (their result travels back through the tool response).
+			// it as it is generated. Sub-agents stream internally (accumulated, never published) so the
+			// provider parses their answer as deltas rather than a possibly non-string blocking body.
 			boolean stream = context.depth() == 0 && broadcaster != null && trace != null;
 			String reply;
 			if (stream) {
@@ -196,7 +207,7 @@ public class AgentExecutor {
 					reply = callSpec.call().content();
 				}
 			} else {
-				reply = callSpec.call().content();
+				reply = blockingAnswer(callSpec, agent.id());
 			}
 			return AgentResult.ok(agent.id(), reply == null ? "" : reply, context.depth());
 		} catch (BookingException ex) {
@@ -206,6 +217,29 @@ public class AgentExecutor {
 					+ ex.getClass().getSimpleName() + (ex.getMessage() == null ? "" : ": " + ex.getMessage()));
 		} finally {
 			recorder.popAgent(previous);
+		}
+	}
+
+	/**
+	 * Answers a sub-agent's call as a stream, accumulated here. Some OpenAI-compatible providers
+	 * (e.g. the Mistral leanstral models) return a non-streaming response whose {@code content} is a
+	 * structured array instead of a string, so Spring AI's blocking {@code .content()} throws
+	 * {@code IllegalStateException("The content is not a string!")}. The streaming wire format carries
+	 * the same answer as plain deltas that parse fine, so sub-agents stream internally: the tokens are
+	 * accumulated and returned through the tool response, never published to the root chat stream.
+	 */
+	private String blockingAnswer(ChatClient.ChatClientRequestSpec callSpec, String agentId) {
+		try {
+			StringBuilder accumulated = new StringBuilder();
+			callSpec.stream().content().toIterable().forEach(accumulated::append);
+			return accumulated.toString();
+		} catch (RuntimeException ex) {
+			if (ex instanceof UnsupportedOperationException) {
+				log.debug("Model does not support streaming for agent '{}'; falling back to a blocking call",
+						agentId);
+				return callSpec.call().content();
+			}
+			throw ex;
 		}
 	}
 

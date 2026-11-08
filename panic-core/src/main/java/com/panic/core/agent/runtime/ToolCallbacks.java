@@ -64,6 +64,47 @@ final class ToolCallbacks {
 		return result;
 	}
 
+	/**
+	 * Common tools granted from the tool-plugin hub ({@code hubTools} in YAML). Names are prefixed
+	 * like built-in tools. A granted plugin that is unavailable (missing config) is skipped with a
+	 * warn so the agent still runs; a plugin whose callbacks throw contributes none.
+	 */
+	static List<ToolCallback> hubTools(AgentDefinition agent, ToolPluginHub hub, PipelineRecorder recorder,
+			PipelineRecorder.RequestTrace trace) {
+		List<ToolCallback> result = new java.util.ArrayList<>();
+		for (String pluginId : agent.hubToolIds()) {
+			var plugin = hub.find(pluginId).orElse(null);
+			if (plugin == null) {
+				log.warn("agent '{}' was granted hub tool '{}' but it is not registered", agent.id(), pluginId);
+				continue;
+			}
+			if (!plugin.available()) {
+				recorder.emitDone(trace, PipelineEvent.PHASE_TOOL, PipelineEvent.STATUS_ERROR, agent.id(),
+						"Hub tool " + pluginId + " unavailable", PipelineJson.text("granted but not available"),
+						0, agent.id());
+				continue;
+			}
+			long start = System.currentTimeMillis();
+			String status = PipelineEvent.STATUS_OK;
+			String detail;
+			List<ToolCallback> callbacks;
+			try {
+				callbacks = plugin.toolCallbacks();
+				detail = PipelineJson.of(Map.of("source", "hub", "plugin", pluginId,
+						"tools", callbacks.stream().map(c -> c.getToolDefinition().name()).toList()));
+			} catch (RuntimeException ex) {
+				callbacks = List.of();
+				status = PipelineEvent.STATUS_ERROR;
+				detail = PipelineJson.text(String.valueOf(ex.getMessage()));
+				log.warn("Hub tool '{}' of agent '{}' failed: {}", pluginId, agent.id(), ex.getMessage());
+			}
+			recorder.emitDone(trace, PipelineEvent.PHASE_TOOL, status, agent.id(),
+					"Hub tool " + pluginId, detail, System.currentTimeMillis() - start, agent.id());
+			callbacks.stream().map(callback -> new PrefixedToolCallback(callback, agent.id())).forEach(result::add);
+		}
+		return result;
+	}
+
 	/** A sub-agent = one tool {@code call_<id>}; the description comes from AgentDefinition. */
 	static ToolCallback subAgentTool(AgentDefinition parent, AgentDefinition sub) {
 		String name = CALL_PREFIX + sub.id();

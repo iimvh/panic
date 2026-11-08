@@ -13,9 +13,11 @@ import {
   useAuiState,
 } from "@assistant-ui/react";
 import {
+  ArchiveIcon,
   Loader2Icon,
   MoreHorizontalIcon,
   PencilIcon,
+  PinIcon,
   PlusIcon,
   SearchIcon,
   TrashIcon,
@@ -464,6 +466,20 @@ const ThreadListItemMore: FC<{ onRename: () => void }> = ({ onRename }) => {
         >
           <PencilIcon className="size-4" />
           Rename
+        </ThreadListItemMorePrimitive.Item>
+        <ThreadListItemMorePrimitive.Item
+          data-slot="aui_thread-list-item-more-item"
+          className="hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none"
+        >
+          <PinIcon className="size-4" />
+          Pin
+        </ThreadListItemMorePrimitive.Item>
+        <ThreadListItemMorePrimitive.Item
+          data-slot="aui_thread-list-item-more-item"
+          className="hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none"
+        >
+          <ArchiveIcon className="size-4" />
+          Archive
         </ThreadListItemMorePrimitive.Item>
         <ThreadListItemPrimitive.Delete asChild>
           <ThreadListItemMorePrimitive.Item

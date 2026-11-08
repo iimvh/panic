@@ -18,6 +18,7 @@
 	<modules>
 		<module>panic-core</module>
 		<module>panic-agents-core</module>
+		<module>panic-tool-plugins</module>
 		<module>panic-agent-example</module>
 		<module>panic-agent-digest</module>
 		<module>panic-app</module>

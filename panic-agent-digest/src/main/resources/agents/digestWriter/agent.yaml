@@ -1,6 +1,0 @@
-id: digestWriter
-description: Selects and summarizes the day's items and persists the digest.
-prompt: system.md
-skills: []
-subAgents: []
-tools: [local:digest-writer-tools]

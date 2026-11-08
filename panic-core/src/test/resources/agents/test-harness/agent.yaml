@@ -4,3 +4,4 @@ prompt: system.md
 skills: []
 subAgents: [ghost]
 tools: [local:stub-tools]
+hubTools: [web-search]

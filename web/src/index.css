@@ -32,32 +32,32 @@
 	--popover-foreground: var(--panic-fg);
 	--muted: var(--panic-edge-soft);
 	--muted-foreground: var(--panic-fg-mute);
-	--accent: #c84b31;
-	--accent-foreground: #ffffff;
+	--accent: #f0f0f0;
+	--accent-foreground: #111111;
 	--primary: var(--panic-fg);
 	--primary-foreground: var(--panic-canvas);
 	--secondary: var(--panic-edge-soft);
 	--secondary-foreground: var(--panic-fg-body);
-	--destructive: #c84b31;
+	--destructive: #dc2626;
 	--destructive-foreground: #ffffff;
 	--border: var(--panic-edge);
 	--input: var(--panic-edge);
-	--ring: #c84b31;
-	--radius: 0px;
+	--ring: #a1a1aa;
+	--radius: 0.625rem;
 }
 
 .dark {
 	--panic-canvas: #0a0a0a;
 	--panic-surface: #111111;
 	--panic-surface-raised: #141417;
-	--panic-edge: #1a1a1a;
-	--panic-edge-soft: #222222;
+	--panic-edge: #262626;
+	--panic-edge-soft: #1a1a1a;
 	--panic-fg: #ededed;
 	--panic-fg-body: #d4d4d8;
 	--panic-fg-dim: #a0a0a5;
-	--panic-fg-mute: #999999;
-	--panic-fg-faint: #787880;
-	--panic-scrollbar: #27272a;
+	--panic-fg-mute: #9a9a9f;
+	--panic-fg-faint: #6b6b70;
+	--panic-scrollbar: #2e2e33;
 	--panic-shimmer: rgba(136, 136, 136, 0.16);
 	/* shadcn tokens read by assistant-ui styled components (non-prefixed). */
 	--background: var(--panic-canvas);
@@ -68,18 +68,18 @@
 	--popover-foreground: var(--panic-fg);
 	--muted: var(--panic-edge-soft);
 	--muted-foreground: var(--panic-fg-mute);
-	--accent: #c84b31;
-	--accent-foreground: #ffffff;
+	--accent: #1c1c1f;
+	--accent-foreground: var(--panic-fg);
 	--primary: var(--panic-fg);
 	--primary-foreground: var(--panic-canvas);
 	--secondary: var(--panic-edge-soft);
 	--secondary-foreground: var(--panic-fg-body);
-	--destructive: #c84b31;
+	--destructive: #ef4444;
 	--destructive-foreground: #ffffff;
 	--border: var(--panic-edge);
 	--input: var(--panic-edge);
-	--ring: #c84b31;
-	--radius: 0px;
+	--ring: #52525b;
+	--radius: 0.625rem;
 }
 
 @theme inline {
@@ -97,12 +97,11 @@
 	--color-fg-mute: var(--panic-fg-mute);
 	--color-fg-faint: var(--panic-fg-faint);
 
-	/* Single hue of the system: terracotta accent. */
-	--color-accent: #c84b31;
+	/* Neutral system accent: the template uses white/ink, no terracotta. */
+	--color-accent: var(--accent);
 
 	/* shadcn token vocabulary: what assistant-ui styled components read.
-	   The ink/paper inversion keeps the same pairing relations, with the
-	   terracotta reserved for ringing and destructive states. */
+	   Neutral pairing: accent is a soft raised surface, ring a neutral focus. */
 	--color-background: var(--panic-canvas);
 	--color-foreground: var(--panic-fg);
 	--color-card: var(--panic-surface);
@@ -115,17 +114,17 @@
 	--color-secondary-foreground: var(--panic-fg-body);
 	--color-primary: var(--panic-fg);
 	--color-primary-foreground: var(--panic-canvas);
-	--color-destructive: #c84b31;
-	--color-destructive-foreground: #ffffff;
+	--color-destructive: var(--destructive);
+	--color-destructive-foreground: var(--destructive-foreground);
 	--color-border: var(--panic-edge);
 	--color-input: var(--panic-edge);
-	--color-ring: #c84b31;
+	--color-ring: var(--ring);
 
-	--radius: 0px;
-	--radius-sm: 0px;
-	--radius-md: 0px;
-	--radius-lg: 0px;
-	--radius-xl: 0px;
+	--radius: 0.625rem;
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) + 4px);
 
 	--animate-cursor-blink: cursor-blink 700ms ease-in-out infinite;
 	--animate-shimmer: shimmer-sweep 1.5s linear infinite;
@@ -198,16 +197,56 @@
 		height: 100%;
 	}
 
+	/* Tailwind v4 resets border-color to currentColor; restore the token so a
+	   bare `border` utility renders the themed edge, not the white text color. */
+	*,
+	*::before,
+	*::after {
+		border-color: var(--color-border, var(--panic-edge));
+	}
+
+	/* Tailwind v4 drops the pointer cursor on buttons; restore it for every
+	   clickable surface so links, buttons, menu items and toggles feel clickable. */
+	button:not(:disabled),
+	[role="button"]:not([aria-disabled="true"]),
+	[role="menuitem"]:not([aria-disabled="true"]),
+	[role="option"]:not([aria-disabled="true"]),
+	[role="tab"]:not([aria-disabled="true"]),
+	label[for],
+	summary,
+	a[href] {
+		cursor: pointer;
+	}
+
 	body {
 		@apply bg-canvas font-sans text-fg antialiased;
 	}
 
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: var(--panic-scrollbar) transparent;
+	}
+
+	*::-webkit-scrollbar {
+		width: 6px;
+		height: 6px;
+	}
+
+	*::-webkit-scrollbar-thumb {
+		background: var(--panic-scrollbar);
+		border-radius: 9999px;
+	}
+
+	*::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
 	::selection {
-		@apply bg-accent text-white;
+		@apply bg-fg text-canvas;
 	}
 
 	:focus-visible {
-		outline: 1px solid #c84b31;
+		outline: 1px solid var(--ring);
 		outline-offset: -1px;
 	}
 
@@ -260,16 +299,27 @@
 	}
 
 	.scrollbar-thin::-webkit-scrollbar {
-		width: 5px;
-		height: 5px;
+		width: 6px;
+		height: 6px;
 	}
 
 	.scrollbar-thin::-webkit-scrollbar-thumb {
 		background: var(--panic-scrollbar);
+		border-radius: 9999px;
 	}
 
 	.scrollbar-thin::-webkit-scrollbar-track {
 		background: transparent;
+	}
+
+	/* Hidden scrollbar: still scrolls, but no visible track or thumb. */
+	.scrollbar-none {
+		scrollbar-width: none;
+	}
+
+	.scrollbar-none::-webkit-scrollbar {
+		width: 0;
+		height: 0;
 	}
 }
 

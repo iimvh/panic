@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	AssistantRuntimeProvider,
 	fromThreadMessageLike,
-	useAssistantDataUI,
 } from "@assistant-ui/react";
 import { fromAgUiMessages, useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { HttpAgent } from "@ag-ui/client";
@@ -11,13 +10,11 @@ import type {
 } from "@assistant-ui/core";
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { ThreadList } from "@/components/assistant-ui/elements/thread-list.aui";
-import { PipelineTraceFrame } from "@/components/pipeline/PipelineTraceFrame";
 import { ProviderConnectDialog } from "@/components/provider/ProviderConnectDialog";
 import { Button } from "@/components/ui/button";
 import { ConversationSummary, createConversation, deleteConversation, fetchConversation, listConversations, renameConversation } from "@/lib/conversations";
-import { PIPELINE_EVENT_NAME } from "@/lib/pipeline";
 import { connectProvider, fetchFreeModels, fetchProviderStatus, type FreeLlmModel, type ProviderStatus } from "@/lib/provider";
-import { Maximize2Icon, MoreHorizontalIcon } from "lucide-react";
+import { Maximize2Icon, MoreHorizontalIcon, PanelLeftIcon } from "lucide-react";
 
 
 /**
@@ -33,6 +30,7 @@ export default function App() {
 	/** Server-held provider connection; the settings dialog mirrors it. */
 	const [provider, setProvider] = useState<ProviderStatus | null>(null);
 	const [freeModels, setFreeModels] = useState<FreeLlmModel[]>([]);
+	const [sidebarOpen, setSidebarOpen] = useState(true);
 
 	const sessionsRef = useRef(sessions);
 	sessionsRef.current = sessions;
@@ -48,6 +46,18 @@ export default function App() {
 	useEffect(() => {
 		refreshSessions();
 	}, [refreshSessions]);
+
+	useEffect(() => {
+		const root = document.documentElement;
+		const media = window.matchMedia("(prefers-color-scheme: dark)");
+		const update = () => {
+			if (media.matches) root.classList.add("dark");
+			else root.classList.remove("dark");
+		};
+		update();
+		media.addEventListener("change", update);
+		return () => media.removeEventListener("change", update);
+	}, []);
 
 	useEffect(() => {
 		void fetchProviderStatus()
@@ -163,10 +173,19 @@ export default function App() {
 
 	return (
 		<AssistantRuntimeProvider runtime={runtime}>
-			<PipelineDataRegistration />
 			<div className="flex h-dvh flex-col bg-background text-foreground">
-				<header className="flex shrink-0 items-center justify-between px-4 py-3 border-b border-border bg-background">
+				<header className="flex shrink-0 items-center justify-between border-b border-border bg-background px-4 py-3">
 					<div className="flex items-center gap-2">
+						<Button
+							variant="ghost"
+							size="icon"
+							className="size-5 hover:bg-accent"
+							aria-label="Toggle sidebar"
+							aria-pressed={sidebarOpen}
+							onClick={() => setSidebarOpen((open) => !open)}
+						>
+							<PanelLeftIcon className="size-4" />
+						</Button>
 						<span className="px-1 text-sm font-semibold tracking-tight">PANIC</span>
 						<span className="text-xs font-medium text-foreground">New chat</span>
 					</div>
@@ -180,7 +199,7 @@ export default function App() {
 						<Button
 							variant="ghost"
 							size="icon"
-							className="size-6 hover:bg-muted"
+							className="size-6 hover:bg-accent"
 							aria-label="More"
 						>
 							<MoreHorizontalIcon className="size-4" />
@@ -188,7 +207,7 @@ export default function App() {
 						<Button
 							variant="ghost"
 							size="icon"
-							className="size-6 hover:bg-muted"
+							className="size-6 hover:bg-accent"
 							aria-label="Toggle fullscreen"
 						>
 							<Maximize2Icon className="size-4" />
@@ -196,14 +215,15 @@ export default function App() {
 					</div>
 				</header>
 				<div className="flex flex-1 min-w-0 overflow-hidden">
-					<aside className="flex w-72 shrink-0 flex-col border-r border-border bg-muted/30">
-						<div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+					{sidebarOpen && (
+					<aside className="flex w-72 shrink-0 flex-col border-r border-border bg-surface">
+						<div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 py-3">
 							<ThreadList />
 						</div>
 						<div className="border-t border-border p-3">
 							<Button
 								variant="ghost"
-								className="w-full justify-start text-xs text-muted-foreground"
+								className="w-full justify-start gap-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
 								onClick={() => {
 									/* sign-in placeholder */
 								}}
@@ -212,6 +232,7 @@ export default function App() {
 							</Button>
 						</div>
 					</aside>
+					)}
 					<main className="min-w-0 flex-1">
 						<Thread
 							models={freeModels}
@@ -233,10 +254,4 @@ export default function App() {
 			</div>
 		</AssistantRuntimeProvider>
 	);
-}
-
-/** Registers the pipeline data-part renderer once inside the runtime. */
-function PipelineDataRegistration(): null {
-	useAssistantDataUI({ name: PIPELINE_EVENT_NAME, render: PipelineTraceFrame });
-	return null;
 }

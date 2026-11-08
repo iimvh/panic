@@ -29,7 +29,8 @@ export interface ConversationReplay {
 export interface AgUiReplayMessage {
 	id: string;
 	role: "user" | "assistant";
-	content: string;
+	/** User turns carry text; assistant turns carry AG-UI parts (tool-call + text). */
+	content: string | readonly unknown[];
 }
 
 const CONVERSATIONS_ENDPOINT = "/api/conversations";
@@ -134,7 +135,11 @@ function replayMessages(value: unknown): AgUiReplayMessage[] {
 		.map((message) => ({
 			id: String(message.id ?? ""),
 			role: message.role === "assistant" ? ("assistant" as const) : ("user" as const),
-			content: typeof message.content === "string" ? message.content : "",
+			content: Array.isArray(message.content)
+				? (message.content as readonly unknown[])
+				: typeof message.content === "string"
+					? message.content
+					: "",
 		}))
 		.filter((message) => message.id !== "");
 }

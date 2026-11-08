@@ -5,6 +5,7 @@ import com.panic.core.agent.memory.Conversation;
 import com.panic.core.agent.memory.ConversationStore;
 import com.panic.exception.BookingException;
 import java.net.HttpURLConnection;
+import java.util.ArrayList;
 import java.util.List;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -49,15 +50,20 @@ public class ConversationController {
 		return sessions.list(Conversation.LOCAL_USER);
 	}
 
-	/** Replay of one session: task, answer, status and recorded pipeline of every turn. */
+	/**
+	 * Replay of one session in the AG-UI message shape the runtime restores directly
+	 * (`fromAgUiMessages`): one user record + one assistant record per paired turn, ids stable
+	 * per replay. `turns` travels beside the messages because the ExecutionLedger renders the
+	 * recorded pipeline of each turn from it (the messages array cannot carry pipeline data).
+	 */
 	@GetMapping("/{id}")
-	public ConversationStore.ConversationSession session(@PathVariable String id) {
+	public ConversationReplay session(@PathVariable String id) {
 		ConversationStore.ConversationSession session = sessions.session(id);
 		if (session == null) {
 			throw new BookingException("Conversation '" + id + "' does not exist",
 					HttpURLConnection.HTTP_NOT_FOUND);
 		}
-		return session;
+		return ConversationReplay.of(session);
 	}
 
 	@PatchMapping("/{id}")
@@ -98,5 +104,24 @@ public class ConversationController {
 	}
 
 	public record TitleChange(String title) {
+	}
+
+	/** Session replay: AG-UI conversation records for the Thread, recorded turns for the ledger. */
+	public record ConversationReplay(String id, String title, List<AgUiReplayMessage> messages,
+			List<ConversationStore.ConversationSession.ReplayedTurn> turns) {
+
+		public static ConversationReplay of(ConversationStore.ConversationSession session) {
+			List<AgUiReplayMessage> messages = new ArrayList<>();
+			for (int index = 0; index < session.turns().size(); index++) {
+				ConversationStore.ConversationSession.ReplayedTurn turn = session.turns().get(index);
+				messages.add(new AgUiReplayMessage("t" + index + "-u", "user", turn.task()));
+				messages.add(new AgUiReplayMessage("t" + index + "-a", "assistant", turn.answer()));
+			}
+			return new ConversationReplay(session.id(), session.title(), List.copyOf(messages), session.turns());
+		}
+	}
+
+	/** One replayed conversation record: user/assistant pair, AG-UI inbound/outbound shape. */
+	public record AgUiReplayMessage(String id, String role, String content) {
 	}
 }

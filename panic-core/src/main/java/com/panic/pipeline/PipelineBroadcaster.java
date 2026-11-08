@@ -1,77 +1,64 @@
 package com.panic.pipeline;
 
-import java.io.IOException;
+import com.panic.pipeline.agui.AgUiStreamListener;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
- * Publishes each {@link PipelineEvent} to the emitters registered for its trace. The chat endpoint
- * registers its own {@link SseEmitter} so pipeline frames stream in realtime on the same response.
- * No history is kept: the final chat result still carries the full trace.
+ * Publishes each {@link PipelineEvent} and answer chunk to the {@link AgUiStreamListener}s
+ * registered for its trace. The chat endpoint registers its own listener so steps and answer
+ * deltas stream in realtime on the same response. No history is kept: the recorder's trace
+ * does not survive in here.
  */
 @Component
 public class PipelineBroadcaster {
 
-	public static final String EVENT_PIPELINE = "pipeline";
-	/** One incremental chunk of the assistant's answer, streamed token by token. */
-	public static final String EVENT_TOKEN = "token";
+	private final Map<Long, List<AgUiStreamListener>> listeners = new ConcurrentHashMap<>();
 
-	private final Map<Long, List<SseEmitter>> emitters = new ConcurrentHashMap<>();
-
-	/** Registers a raw emitter (e.g. the chat stream) to receive `pipeline` frames for a trace. */
-	public void register(long traceId, SseEmitter emitter) {
-		emitters.computeIfAbsent(traceId, key -> new CopyOnWriteArrayList<>()).add(emitter);
+	/** Registers the realtime listener of the chat stream for a trace. */
+	public void register(long traceId, AgUiStreamListener stream) {
+		listeners.computeIfAbsent(traceId, key -> new CopyOnWriteArrayList<>()).add(stream);
 	}
 
+	/** Removes the listener registry of a trace (its stream is closing). */
 	public void unregister(long traceId) {
-		emitters.remove(traceId);
+		listeners.remove(traceId);
 	}
 
+	/** Publishes one recorded pipeline step to every listener registered for its trace. */
 	public void publish(PipelineEvent event) {
-		publish(event.traceId(), EVENT_PIPELINE, event.toMap());
+		publish(event.traceId(), event);
 	}
 
-	/** Streams one chunk of the assistant answer to the client as it is produced. */
+	/** Publishes one answer chunk to every listener registered for the trace. */
 	public void publishToken(long traceId, String text, String agentId) {
 		if (text == null || text.isEmpty()) {
 			return;
 		}
-		Map<String, Object> data = new java.util.LinkedHashMap<>();
-		data.put("text", text);
-		data.put("agentId", agentId);
-		publish(traceId, EVENT_TOKEN, data);
-	}
-
-	public void publishAll(PipelineEvent[] events) {
-		for (PipelineEvent event : events) {
-			publish(event);
-		}
-	}
-
-	/** Sends one event to every emitter registered for the trace; unregistered traces are ignored. */
-	public void publish(long traceId, String eventName, Map<String, Object> data) {
-		List<SseEmitter> targets = emitters.get(traceId);
+		List<AgUiStreamListener> targets = listeners.get(traceId);
 		if (targets == null) {
 			return;
 		}
-		for (SseEmitter emitter : targets) {
-			try {
-				emitter.send(SseEmitter.event().name(eventName).data(data, MediaType.APPLICATION_JSON));
-			} catch (IOException | IllegalStateException ex) {
-				emitter.completeWithError(ex);
-			}
+		for (AgUiStreamListener stream : targets) {
+			stream.answerDelta(text, agentId);
 		}
 	}
 
-	public void complete(long traceId) {
-		List<SseEmitter> list = emitters.remove(traceId);
-		if (list != null) {
-			list.forEach(SseEmitter::complete);
+	private void publish(long traceId, PipelineEvent event) {
+		List<AgUiStreamListener> targets = listeners.get(traceId);
+		if (targets == null) {
+			return;
+		}
+		for (AgUiStreamListener stream : targets) {
+			try {
+				stream.pipelineStep(event);
+			} catch (RuntimeException ex) {
+				// One broken listener must not break the recorder's own emitting thread;
+				// the stream reports its send failure to the servlet container directly.
+			}
 		}
 	}
 }

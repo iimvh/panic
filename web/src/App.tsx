@@ -1,507 +1,195 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ExecutionLedger, { type LedgerState } from "./components/workspace/ExecutionLedger";
-import ConversationTranscript from "./components/workspace/ConversationTranscript";
-import InquiryComposer from "./components/workspace/InquiryComposer";
-import SessionDirectory from "./components/workspace/SessionDirectory";
-import SettingsPanel from "./components/workspace/SettingsPanel";
-import WorkspaceHeader, { type WorkspaceView } from "./components/workspace/WorkspaceHeader";
-import { usePipelineStream } from "./hooks/usePipelineStream";
-import { useTextStream } from "./hooks/useTextStream";
-import { AgentError, askAgent, fetchAgentTree } from "./lib/api";
 import {
-	deleteConversation,
-	fetchConversation,
-	listConversations,
-	type ConversationSummary,
-} from "./lib/conversations";
-import { connectProvider, fetchFreeModels, fetchProviderStatus, type FreeLlmModel, type ProviderStatus } from "./lib/provider";
-import { splitActivity, buildDashboard } from "./lib/dashboard";
-import {
-	MAX_TURNS,
-	MIN_SIDEBAR_WIDTH,
-	loadTheme,
-	loadWorkspace,
-	loadSidebarCollapsed,
-	loadSidebarWidth,
-	newId,
-	saveSidebarCollapsed,
-	saveSidebarWidth,
-	saveTheme,
-	saveWorkspace,
-	type Turn,
-	type WorkspaceStore,
-	type WorkspaceTheme,
-} from "./lib/storage";
+	AssistantRuntimeProvider,
+	fromThreadMessageLike,
+	useAssistantDataUI,
+} from "@assistant-ui/react";
+import { fromAgUiMessages, useAgUiRuntime } from "@assistant-ui/react-ag-ui";
+import { HttpAgent } from "@ag-ui/client";
+import type {
+	ExternalStoreThreadListAdapter,
+} from "@assistant-ui/core";
+import { Thread } from "@/components/assistant-ui/elements/thread.aui";
+import { ThreadList } from "@/components/assistant-ui/elements/thread-list.aui";
+import { PipelineTraceFrame } from "@/components/pipeline/PipelineTraceFrame";
+import { ProviderConnectDialog } from "@/components/provider/ProviderConnectDialog";
+import { Button } from "@/components/ui/button";
+import { ConversationSummary, createConversation, deleteConversation, fetchConversation, listConversations, renameConversation } from "@/lib/conversations";
+import { PIPELINE_EVENT_NAME } from "@/lib/pipeline";
+import { connectProvider, fetchFreeModels, fetchProviderStatus, type FreeLlmModel, type ProviderStatus } from "@/lib/provider";
+import { PlusIcon } from "lucide-react";
 
-const DEFAULT_WORKSPACE_STATE: LedgerState = "idle";
 
+/**
+ * The PANIC workspace: an assistant-ui ThreadList over the server's
+ * conversation records beside an assistant-ui Thread wired to the AG-UI
+ * agent run. The runtime owns the whole chat life cycle; pipeline frames
+ * stream in as data parts and render inline in the assistant messages.
+ */
 export default function App() {
-	const [workspace, setWorkspace] = useState<WorkspaceStore>(() => loadWorkspace());
 	const [sessions, setSessions] = useState<ConversationSummary[]>([]);
-	const [draft, setDraft] = useState("");
-	const [busy, setBusy] = useState(false);
-	const [liveTask, setLiveTask] = useState("");
-	const [liveTraceId, setLiveTraceId] = useState<number | null>(null);
-	const [rootAgentId, setRootAgentId] = useState<string | null>(null);
-	const [agentCount, setAgentCount] = useState(0);
-	const [view, setView] = useState<WorkspaceView>("synthesis");
-	const [theme, setTheme] = useState<WorkspaceTheme>(() => loadTheme() ?? "light");
-	/** Conversation the current run drives; the workspace streams it until the run closes. */
-	const [runningConversationId, setRunningConversationId] = useState<string | undefined>(undefined);
-	/** Wall-clock moment the first answer token arrived; the interleaving boundary of the chat timeline. */
-	const [tokenStartedAt, setTokenStartedAt] = useState<number | null>(null);
-	const tokenStartedRef = useRef<number | null>(null);
-	/** Server-held provider connection; the model selector mirrors it. */
+	/** Selected conversation; null is the in-memory new chat (no server id yet). */
+	const [selectedId, setSelectedId] = useState<string | null>(null);
+	/** Server-held provider connection; the settings dialog mirrors it. */
 	const [provider, setProvider] = useState<ProviderStatus | null>(null);
-	const [settingsOpen, setSettingsOpen] = useState(false);
-	/** ComposerPickable free-model list; refreshed when the connection changes. */
 	const [freeModels, setFreeModels] = useState<FreeLlmModel[]>([]);
-	/** Directory layout preference: collapsed rail + dragged width, remembered across reloads. */
-	const [directoryCollapsed, setDirectoryCollapsed] = useState<boolean>(() => loadSidebarCollapsed() ?? false);
-	const [directoryWidth, setDirectoryWidth] = useState<number>(() => loadSidebarWidth() ?? MIN_SIDEBAR_WIDTH);
 
-	const toggleDirectoryCollapsed = useCallback(() => {
-		setDirectoryCollapsed((current) => {
-			saveSidebarCollapsed(!current);
-			return !current;
-		});
-	}, []);
-
-	const changeDirectoryWidth = useCallback((width: number) => {
-		setDirectoryWidth(width);
-		saveSidebarWidth(width);
-	}, []);
-
-	const pipeline = usePipelineStream();
-	/** Smoothed typewriter view of the live answer tokens (skeleton → typed text → cursor off). */
-	const answerStream = useTextStream();
-	const busyRef = useRef(false);
-	/** Trace id of the turn currently running; set by onStart, read by the turn finaliser. */
-	const runningTraceRef = useRef<number | null>(null);
-	/** Conversation the running turn belongs to; captured from the start frame. */
-	const runningConversationRef = useRef<string | undefined>(undefined);
-
-	const activeId = workspace.activeId;
-
-	// Theme is a document class so the paired CSS variables flip globally.
-	useEffect(() => {
-		document.documentElement.classList.toggle("dark", theme === "dark");
-		saveTheme(theme);
-	}, [theme]);
-
-	const toggleTheme = useCallback(() => {
-		setTheme((current) => (current === "dark" ? "light" : "dark"));
-	}, []);
-
-	const updateWorkspace = useCallback((mutate: (current: WorkspaceStore) => WorkspaceStore) => {
-		setWorkspace((current) => {
-			const next = mutate(current);
-			saveWorkspace(next);
-			return next;
-		});
-	}, []);
-
-	const detachFromConversations = useCallback(() => {
-		updateWorkspace((current) => ({ ...current, activeId: undefined }));
-	}, [updateWorkspace]);
-
-	const openSession = useCallback(
-		async (id: string) => {
-			try {
-				const replay = await fetchConversation(id);
-				if (!replay) {
-					// Gone server-side (deleted from another browser): detach quietly.
-					detachFromConversations();
-					return;
-				}
-				const turns: Turn[] = replay.turns.map((turn) => ({
-					id: newId(),
-					task: turn.task,
-					traceId: turn.pipeline[0]?.traceId ?? null,
-					pipeline: turn.pipeline,
-					status: turn.status,
-					answer: turn.answer,
-					at: turn.at,
-				}));
-				updateWorkspace((current) => ({ ...current, sessions: { ...current.sessions, [id]: turns } }));
-			} catch {
-				/* offline or server hiccup: the cached copy stays as the accelerant */
-			}
-		},
-		[updateWorkspace, detachFromConversations]
-	);
+	const sessionsRef = useRef(sessions);
+	sessionsRef.current = sessions;
 
 	const refreshSessions = useCallback(() => {
 		listConversations()
 			.then((rows) => setSessions(rows))
 			.catch(() => {
-				/* the directory simply keeps its last known list */
+				/* the list keeps its last known rows */
 			});
 	}, []);
 
 	useEffect(() => {
-		void fetchAgentTree().then((tree) => {
-			setRootAgentId(tree?.root ?? null);
-			setAgentCount(tree?.agents.length ?? 0);
-		});
 		refreshSessions();
+	}, [refreshSessions]);
+
+	useEffect(() => {
 		void fetchProviderStatus()
 			.then((status) => setProvider(status))
 			.catch(() => {
-				/* the selector keeps its unknown state until the backend answers */
+				/* the dialog keeps its unknown state until the backend answers */
 			});
 		void fetchFreeModels()
 			.then((models) => setFreeModels(models))
 			.catch(() => {
 				/* the picker stays on whatever the last successful fetch cached */
 			});
-	}, [refreshSessions]);
+	}, []);
 
-	/** Settings save: a failed key throws and both panel and status stay untouched. */
-	const saveProviderConnection = useCallback(async (kind: string, apiKey: string, model: string) => {
+	/** Settings save: a failed key throws and the dialog reports it. */
+	const connectProviderAndRefresh = useCallback(async (kind: string, apiKey: string, model: string) => {
 		const status = await connectProvider(kind, apiKey, model);
 		setProvider(status);
 		void fetchFreeModels()
 			.then((models) => setFreeModels(models))
 			.catch(() => {});
-		setSettingsOpen(false);
 	}, []);
 
-	/** Composer model switch: blank key keeps the stored credential; applies for the next request. */
-	const selectProviderModel = useCallback((model: string) => {
-		// Optimistic label: the picker closes instantly; a failure is corrected by the refetch.
-		setProvider((current) => (current ? { ...current, model } : current));
-		connectProvider("openrouter", "", model)
-			.then((status) => setProvider(status))
-			.catch(() => {
-				void fetchProviderStatus()
-					.then((status) => setProvider(status))
-					.catch(() => {});
-			});
-	}, []);
+	/** The AG-UI agent for the open conversation; recreated on every switch. */
+	const agent = useMemo(() => {
+		const instance = new HttpAgent({
+			url: "/api/agent/chat",
+			...(selectedId !== null ? { threadId: selectedId } : {}),
+		});
+		// A settled run refreshed the directory once; titles arrive server-side.
+		instance.subscribe({
+			onRunFinalized: () => refreshSessions(),
+		});
+		return instance;
+	}, [selectedId, refreshSessions]);
 
-	// Server truth wins: open on the session the last visit was in, replayed from the store.
-	useEffect(() => {
-		if (activeId && !busyRef.current) void openSession(activeId);
-		// Only on mount: re-opening would race with the live stream of a freshly used session.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, []);
-
-	const turns = useMemo(
-		() => (activeId ? workspace.sessions[activeId] ?? [] : []),
-		[workspace, activeId]
-	);
-
-	const finishedTurns = useMemo(
-		() => turns.filter((turn) => turn.status !== "running"),
-		[turns]
-	);
-
-	/** The run drives this conversation; while the transcript appends the live turn, panels mirror it. */
-	const showingLive = busy && activeId === runningConversationId;
-
-	/** The pipeline the panels mirror: live frames while streaming this conversation, last turn otherwise. */
-	const viewEvents = useMemo(() => {
-		if (showingLive) return pipeline.events;
-		if (activeId) return finishedTurns[finishedTurns.length - 1]?.pipeline ?? [];
-		return [];
-	}, [showingLive, pipeline.events, finishedTurns, activeId]);
-
-	const dashboard = useMemo(() => buildDashboard(viewEvents, rootAgentId), [viewEvents, rootAgentId]);
-
-	/** Interleaved chat timeline of the mirrored events: work rows before and after
-	 * the answer's first token. Replayed turns split on their assistant message. */
-	const activity = useMemo(
-		() => splitActivity(viewEvents, showingLive ? tokenStartedAt : null),
-		[viewEvents, showingLive, tokenStartedAt]
-	);
-
-	/** Wall-clock the live turn started (the transcript's clock mark). */
-	const [liveStartedAt, setLiveStartedAt] = useState<number | null>(null);
-
-	/** Mirrored turn while idle (for the trace hash + failure state). */
-	const mirroredTurn = finishedTurns[finishedTurns.length - 1] ?? null;
-
-	const ledgerState: LedgerState = useMemo(() => {
-		if (showingLive || pipeline.state === "connecting") return "running";
-		if (mirroredTurn?.status === "error" || dashboard.trace?.status === "error") return "failed";
-		if (viewEvents.length === 0) return DEFAULT_WORKSPACE_STATE;
-		return "complete";
-	}, [showingLive, pipeline.state, viewEvents.length, mirroredTurn, dashboard.trace]);
-
-	const shownTraceId = showingLive ? liveTraceId : mirroredTurn?.traceId ?? null;
-
-	// Viewport UX: the register scroller follows the growing feed while the user
-	// reads near the bottom, and yields the moment they scroll away to review.
-	const registerScrollerRef = useRef<HTMLDivElement>(null);
-	const registerStickRef = useRef(true);
-
-	const onRegisterScroll = useCallback(() => {
-		const element = registerScrollerRef.current;
-		if (!element) return;
-		registerStickRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
-	}, []);
-
-	useEffect(() => {
-		if (!registerStickRef.current) return;
-		const element = registerScrollerRef.current;
-		if (element) element.scrollTop = element.scrollHeight;
-	}, [finishedTurns.length, answerStream.text, activity.post.length, showingLive]);
-
-	const sendTask = useCallback(async () => {
-		const task = draft.trim();
-		if (!task || busyRef.current) return;
-
-		busyRef.current = true;
-		setBusy(true);
-		setDraft("");
-		setLiveTask(task);
-		setLiveTraceId(null);
-		setTokenStartedAt(null);
-		tokenStartedRef.current = null;
-		setLiveStartedAt(Date.now());
-		pipeline.begin();
-		answerStream.begin();
-
-		const finish = (status: "ok" | "error", answer: string, events: Turn["pipeline"]) => {
-			const conversationId = runningConversationRef.current;
-			if (!conversationId) return;
-			const turn: Turn = {
-				id: newId(),
-				task,
-				traceId: runningTraceRef.current,
-				pipeline: events,
-				status,
-				answer,
-				at: Date.now(),
-			};
-			updateWorkspace((current) => {
-				const existing = current.sessions[conversationId] ?? [];
-				return {
-					...current,
-					sessions: {
-						...current.sessions,
-						[conversationId]: [...existing, turn].slice(-MAX_TURNS),
-					},
-				};
-			});
-		};
-
-		try {
-			const result = await askAgent(
-				{ message: task, conversationId: activeId },
-				{
-					onStart: (info) => {
-						runningTraceRef.current = info.traceId;
-						setLiveTraceId(info.traceId);
-						if (info.conversationId) {
-							runningConversationRef.current = info.conversationId;
-							setRunningConversationId(info.conversationId);
-							const id = info.conversationId;
-							updateWorkspace((current) => ({ ...current, activeId: id }));
-						}
-					},
-					onPipeline: (event) => pipeline.push(event),
-					onToken: (chunk) => {
-						// Stamp the first arrival once: the point the chat text begins typing.
-						if (tokenStartedRef.current == null) {
-							tokenStartedRef.current = Date.now();
-							setTokenStartedAt(tokenStartedRef.current);
-						}
-						answerStream.append(chunk);
-					},
-				}
-			);
-			pipeline.merge(result.pipeline, { status: "ok", durationMs: result.durationMs });
-			if (result.conversationId) {
-				const id = result.conversationId;
-				updateWorkspace((current) => ({ ...current, activeId: id }));
-			}
-			finish("ok", result.reply, result.pipeline);
-		} catch (caughtError) {
-			let detail = "Something went wrong.";
-			if (caughtError instanceof AgentError) {
-				detail = caughtError.message;
-				pipeline.merge(caughtError.pipeline, {
-					status: "error",
-					error: caughtError.message,
-					durationMs: 0,
-				});
-				finish("error", detail, caughtError.pipeline);
-			} else if (caughtError instanceof Error) {
-				detail = caughtError.message;
-				pipeline.fail(detail);
-				finish("error", detail, []);
-			} else {
-				pipeline.fail(detail);
-				finish("error", detail, []);
-			}
-		} finally {
-			// Close the typewriter: the buffered tail drains at speed, then the cursor retires
-			// and the register switches to the finished turn's replay text.
-			answerStream.end();
-			runningTraceRef.current = null;
-			runningConversationRef.current = undefined;
-			busyRef.current = false;
-			setBusy(false);
-			setRunningConversationId(undefined);
-			// Activity ordering and the freshly seeded title come from the server.
-			refreshSessions();
-		}
-	}, [draft, activeId, pipeline, answerStream, updateWorkspace, refreshSessions]);
-
-	/** `+ New Session`: detach so the next sent task creates a brand-new session. */
-	const startNewSession = useCallback(() => {
-		detachFromConversations();
-		setLiveTraceId(null);
-		if (!busyRef.current) {
-			pipeline.reset();
-			answerStream.reset();
-		}
-	}, [pipeline, answerStream, detachFromConversations]);
-
-	/** Directory selection always triggers a server fetch; the local cache renders instantly meanwhile. */
-	const selectSession = useCallback(
-		(id: string) => {
-			if (id === activeId) return;
-			setLiveTraceId(null);
-			updateWorkspace((current) => ({ ...current, activeId: id }));
-			void openSession(id);
-		},
-		[activeId, updateWorkspace, openSession]
-	);
-
-	/** Forget a session for good; deleting the active one detaches the workspace. */
-	const deleteSession = useCallback(
-		async (id: string) => {
-			if (id === runningConversationId) return;
-			try {
-				await deleteConversation(id);
-				if (id === activeId) {
-					detachFromConversations();
-					setLiveTraceId(null);
-				}
-				updateWorkspace((current) => {
-					const sessions = { ...current.sessions };
-					delete sessions[id];
-					return { ...current, sessions };
-				});
+	/**
+	 * Conversation sync as an external-store thread list: metadata rows from
+	 * GET /api/conversations, hydration per switch from the session replay.
+	 */
+	const threadListAdapters = useMemo(
+		(): Pick<
+			ExternalStoreThreadListAdapter,
+			"threadId" | "threads" | "onRename" | "onDelete"
+		> => ({
+			threadId: selectedId ?? undefined,
+			threads: sessions.map((session) => ({
+				id: session.id,
+				status: "regular" as const,
+				threadId: session.id,
+				...(session.title !== null ? { title: session.title } : {}),
+			})),
+			onRename: async (threadId, title) => {
+				setSessions((current) =>
+					current.map((session) =>
+						session.id === threadId ? { ...session, title } : session,
+					),
+				);
+				await renameConversation(threadId, title).catch(() => refreshSessions());
+			},
+			onDelete: async (threadId) => {
+				await deleteConversation(threadId);
+				if (threadId === selectedId) setSelectedId(null);
 				refreshSessions();
-			} catch {
-				// offline or the server refused while busy: the row keeps living in the directory
-				console.error(`The server could not delete session ${id}.`);
-			}
+			},
+		}),
+		[selectedId, sessions, refreshSessions],
+	);
+
+	const onSwitchToNewThread = useCallback(async () => {
+		const id = await createConversation();
+		setSessions((current) => {
+			if (current.some((session) => session.id === id)) return current;
+			return [{ id, title: null, lastActivityAt: Date.now() }, ...current];
+		});
+		setSelectedId(id);
+	}, []);
+
+	/** A switch fetches the replay once; the runtime keeps later turns live. */
+	const onSwitchToThread = useCallback(async (threadId: string) => {
+		setSelectedId(threadId);
+		const replay = await fetchConversation(threadId).catch(() => null);
+		if (!replay || replay.messages.length === 0) return { messages: [] };
+		const messages = fromAgUiMessages(replay.messages).map((like, index) =>
+			fromThreadMessageLike(like, `replay-${index}`, {
+				type: "complete",
+				reason: "unknown",
+			}),
+		);
+		return { messages };
+	}, []);
+
+	const runtime = useAgUiRuntime({
+		agent,
+		adapters: {
+			threadList: {
+				...threadListAdapters,
+				onSwitchToNewThread,
+				onSwitchToThread,
+			},
 		},
-		[runningConversationId, activeId, detachFromConversations, updateWorkspace, refreshSessions]
-	);
-
-	/** Offline fallback rows so cached sessions stay reachable when the list cannot load. */
-	const shownSessions = useMemo(
-		() =>
-			sessions.length > 0
-				? sessions
-				: Object.keys(workspace.sessions).map<ConversationSummary>((id) => ({
-						id,
-						title: null,
-						lastActivityAt: Date.now(),
-					})),
-		[sessions, workspace.sessions]
-	);
-
-	const showSynthesis = view !== "trace";
-	const showLedger = view !== "synthesis";
+	});
 
 	return (
-		<div className="flex h-full w-full flex-col overflow-hidden bg-canvas text-fg transition-colors duration-150">
-			<WorkspaceHeader
-				view={view}
-				onViewChange={setView}
-				theme={theme}
-				onToggleTheme={toggleTheme}
-				traceId={shownTraceId}
-				onNewSession={startNewSession}
-			/>
-
-			<div className="flex min-h-0 flex-1 overflow-hidden">
-				<div className="hidden md:flex">
-					<SessionDirectory
-						sessions={shownSessions}
-						taskCache={workspace.sessions}
-						activeId={activeId}
-						runningId={runningConversationId}
-						agentCount={agentCount}
-						onSelect={selectSession}
-						onDelete={(id) => void deleteSession(id)}
-						onOpenSettings={() => setSettingsOpen((open) => !open)}
-						settingsOpen={settingsOpen}
-						width={directoryWidth}
-						collapsed={directoryCollapsed}
-						onToggleCollapsed={toggleDirectoryCollapsed}
-						onWidthChange={changeDirectoryWidth}
-					/>
-				</div>
-
-				<main className="flex min-h-0 flex-1 overflow-hidden">
-					{showSynthesis ? (
-						<section
-							className={`flex min-h-0 flex-col overflow-hidden bg-canvas transition-all lg:px-0 ${
-								showLedger ? "flex-1 border-r border-edge" : "flex-1"
-							}`}
-						>
-						<div
-							ref={registerScrollerRef}
-							onScroll={onRegisterScroll}
-							className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-6 pb-4 pt-8 lg:px-16"
-						>
-						<ConversationTranscript
-							turns={finishedTurns}
-							live={
-								showingLive
-									? {
-											task: liveTask,
-											activity,
-											stream: answerStream,
-											liveStartedAt,
-											totalMs: dashboard.trace?.durationMs ?? null,
-											traceKey: `live:${liveTraceId ?? "pending"}`,
-										}
-									: null
-							}
+		<AssistantRuntimeProvider runtime={runtime}>
+			<PipelineDataRegistration />
+			<div className="flex h-dvh items-stretch bg-background text-foreground">
+				<aside className="flex w-72 shrink-0 flex-col border-r bg-muted/30">
+					<div className="flex items-center justify-between px-3 py-2">
+						<span className="px-1 text-sm font-semibold tracking-tight">PANIC</span>
+						<ProviderConnectDialog
+							status={provider}
+							models={freeModels}
+							onConnect={connectProviderAndRefresh}
 						/>
-						</div>
-							<InquiryComposer
-								value={draft}
-								onChange={setDraft}
-								onSend={() => void sendTask()}
-								busy={busy}
-								modelLabel={provider?.model ?? dashboard.model ?? "PANIC Orchestrator"}
-								live={showingLive}
-								models={freeModels}
-								onSelectModel={selectProviderModel}
-								onOpenSettings={() => setSettingsOpen(true)}
-							/>
-						</section>
-					) : null}
-
-					{showLedger ? (
-						<section
-							className={`min-h-0 overflow-hidden bg-surface ${
-								view === "trace" ? "flex w-full flex-1" : "w-[480px] shrink-0 lg:w-[540px]"
-							} border-l border-edge`}
+					</div>
+					<div className="min-h-0 flex-1 overflow-y-auto">
+						<ThreadList />
+					</div>
+					<div className="border-t">
+						<Button
+							variant="ghost"
+							className="w-full justify-start text-xs"
+							onClick={() => {
+								void runtime.threads.switchToNewThread();
+							}}
 						>
-							<ExecutionLedger dashboard={dashboard} state={ledgerState} traceId={shownTraceId} />
-						</section>
-					) : null}
+							<PlusIcon aria-hidden="true" className="size-4" />
+							New chat
+						</Button>
+					</div>
+				</aside>
+				<main className="min-w-0 flex-1">
+					<Thread />
 				</main>
 			</div>
-
-			{settingsOpen ? (
-				<SettingsPanel
-					status={provider}
-					onClose={() => setSettingsOpen(false)}
-					onConnect={saveProviderConnection}
-				/>
-			) : null}
-		</div>
+		</AssistantRuntimeProvider>
 	);
+}
+
+/** Registers the pipeline data-part renderer once inside the runtime. */
+function PipelineDataRegistration(): null {
+	useAssistantDataUI({ name: PIPELINE_EVENT_NAME, render: PipelineTraceFrame });
+	return null;
 }

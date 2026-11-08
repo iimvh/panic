@@ -9,7 +9,7 @@ import com.panic.pipeline.PipelineBroadcaster;
 import com.panic.pipeline.PipelineEvent;
 import com.panic.pipeline.PipelineJson;
 import com.panic.pipeline.PipelineRecorder;
-import java.io.IOException;
+import com.panic.pipeline.agui.RunAgentInput;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -25,15 +25,10 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RequestMapping("/api/agent")
 public class AgentController {
 
-	/** Name of the frame holding the final /chat result. */
-	public static final String RESULT_EVENT = "result";
-	/** Name of the frame carrying each realtime pipeline step. */
-	public static final String PIPELINE_EVENT = PipelineBroadcaster.EVENT_PIPELINE;
-	/** Name of the opening frame (traceId + conversationId). */
-	public static final String START_EVENT = "start";
-
 	private static final Logger log = LoggerFactory.getLogger(AgentController.class);
 	private static final long STREAM_TIMEOUT_MS = 5 * 60 * 1000L;
+	private static final String ERROR_CODE_REJECTED = "guard_rejected";
+	private static final String ERROR_CODE_INTERNAL = "agent_failed";
 
 	private final AgentExecutor executor;
 	private final PipelineRecorder pipeline;
@@ -51,44 +46,45 @@ public class AgentController {
 	}
 
 	/**
-	 * Chat endpoint routed through the Orchestrator/Coordinator (idea.md).
-	 * <p>
-	 * Returns text/event-stream. The first frame (`start`) carries the traceId + conversationId; every
-	 * pipeline step is pushed as a `pipeline` frame <em>as it happens</em>, and the final `result` frame
-	 * holds the reply + all steps. Pipeline frames are delivered directly from the recorder, so they do
-	 * not wait for the agent to finish.
+	 * Chat endpoint routed through the Orchestrator/Coordinator (idea.md), speaking the AG-UI
+	 * protocol (docs.ag-ui.com). The body is a `RunAgentInput`: `threadId` names the conversation
+	 * and the last user message of `messages` is the task. The stream opens with `RUN_STARTED`
+	 * (echoing `threadId` + `runId` = traceId), streams the answer as a `TEXT_MESSAGE_*` trio,
+	 * every pipeline step realtime as a `CUSTOM` `panic.pipeline` data part, and closes with
+	 * `RUN_FINISHED` (metadata: traceId, durationMs) — or `RUN_ERROR` when the run fails.
 	 * <p>
 	 * Admission (per-conversation quota → 429, run lock → 409, session-creation quota → 429) happens on
 	 * the request thread <em>before</em> the stream opens, so guard rejections surface as ordinary
-	 * HTTP error codes instead of frames. Absent/unknown conversation ids create a fresh session — the
-	 * `start` frame tells the client which one.
+	 * HTTP error codes instead of in-stream events. Absent/unknown conversation ids create a fresh
+	 * session — `RUN_STARTED` tells the client which one.
 	 */
 	@PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-	public SseEmitter chat(@RequestBody ChatRequest request) {
-		String conversationId = resolveAdmitted(request.conversationId());
+	public SseEmitter chat(@RequestBody RunAgentInput input) {
+		String userText = input.lastUserText();
+		String conversationId = resolveAdmitted(input.threadId());
 		SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
 		PipelineRecorder.RequestTrace trace = new PipelineRecorder.RequestTrace();
 		emitter.onTimeout(emitter::complete);
 		emitter.onError(error -> emitter.complete());
+		AgUiChatStream stream = new AgUiChatStream(emitter, conversationId, trace.id());
 
 		// Publish each recorded event straight to this stream (realtime, node by node).
-		broadcaster.register(trace.id(), emitter);
+		broadcaster.register(trace.id(), stream);
 
 		try {
-			// Send the header first so the client learns the traceId before any pipeline frame.
-			send(emitter, START_EVENT, new StartFrame(trace.id(), conversationId));
+			stream.runStarted();
 			pipeline.startResponse(trace);
 			// The user's message as the first conversational entry of the trajectory stream.
 			pipeline.emitDone(trace, PipelineEvent.PHASE_MESSAGE, PipelineEvent.STATUS_OK, "user",
-					preview(request.message(), 80),
-					PipelineJson.of(Map.of("text", request.message())), 0, null, PipelineEvent.ROLE_USER);
+					preview(userText, 80),
+					PipelineJson.of(Map.of("text", userText)), 0, null, PipelineEvent.ROLE_USER);
 		} catch (RuntimeException ex) {
 			access.releaseChat(conversationId);
-			finishWithError(emitter, trace, ex, conversationId);
+			finishWithError(emitter, stream, trace, ex, conversationId);
 			return emitter;
 		}
 
-		Thread worker = new Thread(() -> runAndFinish(emitter, trace, request, conversationId),
+		Thread worker = new Thread(() -> runAndFinish(emitter, stream, trace, userText, conversationId),
 				"agent-chat-" + trace.id());
 		worker.setDaemon(true);
 		worker.start();
@@ -111,18 +107,18 @@ public class AgentController {
 		return created;
 	}
 
-	private void runAndFinish(SseEmitter emitter, PipelineRecorder.RequestTrace trace, ChatRequest request,
-			String conversationId) {
+	private void runAndFinish(SseEmitter emitter, AgUiChatStream stream, PipelineRecorder.RequestTrace trace,
+			String userText, String conversationId) {
 		// The trace was opened on the request thread; bind it here so the agent loop records into it.
 		pipeline.bind(trace);
 		try {
-			String reply = executor.runRoot(conversationId, request.message()).text();
+			executor.runRoot(conversationId, userText).text();
 			List<PipelineEvent> events = List.of(pipeline.end(trace, false, null));
 			persistTrace(conversationId, trace.id(), events);
-			send(emitter, RESULT_EVENT, new AgentReply(reply, trace.id(), events, null, conversationId));
+			stream.runFinished(trace.durationMs());
 			emitter.complete();
 		} catch (RuntimeException ex) {
-			finishWithError(emitter, trace, ex, conversationId);
+			finishWithError(emitter, stream, trace, ex, conversationId);
 		} finally {
 			pipeline.unbind();
 			broadcaster.unregister(trace.id());
@@ -130,17 +126,18 @@ public class AgentController {
 		}
 	}
 
-	private void finishWithError(SseEmitter emitter, PipelineRecorder.RequestTrace trace, RuntimeException ex,
-			String conversationId) {
+	private void finishWithError(SseEmitter emitter, AgUiChatStream stream, PipelineRecorder.RequestTrace trace,
+			RuntimeException ex, String conversationId) {
 		String error = ex instanceof BookingException
 				? ex.getMessage()
 				: ex.getClass().getSimpleName() + (ex.getMessage() == null ? "" : ": " + ex.getMessage());
+		String code = ex instanceof BookingException ? ERROR_CODE_REJECTED : ERROR_CODE_INTERNAL;
 		try {
 			pipeline.emitDone(trace, PipelineEvent.PHASE_ERROR, PipelineEvent.STATUS_ERROR, "coordinator",
 					"Pipeline error", error, trace.durationMs());
 			List<PipelineEvent> events = List.of(pipeline.end(trace, true, error));
 			persistTrace(conversationId, trace.id(), events);
-			send(emitter, RESULT_EVENT, new AgentReply(null, trace.id(), events, error, conversationId));
+			stream.runFailed(error, code);
 			emitter.complete();
 		} catch (RuntimeException ignored) {
 			emitter.completeWithError(ex);
@@ -174,27 +171,5 @@ public class AgentController {
 		}
 		String cut = text.substring(0, end);
 		return (cut.length() < text.length() ? cut + "…" : cut).trim();
-	}
-
-	private static void send(SseEmitter emitter, String name, Object data) {
-		try {
-			emitter.send(SseEmitter.event().name(name).data(PipelineJson.json(data), MediaType.TEXT_PLAIN));
-		} catch (IOException | IllegalStateException ex) {
-			emitter.completeWithError(ex);
-		}
-	}
-
-	public record ChatRequest(String message, String conversationId) {
-	}
-
-	public record StartFrame(long traceId, String conversationId) {
-	}
-
-	/**
-	 * Final result of one chat turn. A non-null `error` means the agent failed;
-	 * `pipeline` always holds the executed steps so the UI can draw them even when SSE is unavailable.
-	 */
-	public record AgentReply(String reply, long traceId, List<PipelineEvent> pipeline, String error,
-			String conversationId) {
 	}
 }

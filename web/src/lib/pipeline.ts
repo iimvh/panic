@@ -1,6 +1,9 @@
 export type PipelinePhase = "trace" | "llm" | "tool" | "parse" | "error" | "message";
 export type PipelineStatus = "running" | "ok" | "error";
 
+/** CUSTOM event name on the AG-UI run stream; value = verbatim PipelineEvent JSON. */
+export const PIPELINE_EVENT_NAME = "panic.pipeline";
+
 export interface PipelineEvent {
 	id: number;
 	traceId: number;
@@ -34,6 +37,13 @@ export function normalizePipeline(value: unknown): PipelineEvent[] {
 			typeof (event as PipelineEvent).title === "string"
 	);
 }
+
+/** Narrows one streamed CUSTOM value into a PipelineEvent, or drops the junk frame. */
+export function normalizePipelineEvent(value: unknown): PipelineEvent | null {
+	if (typeof value !== "object" || value === null) return null;
+	return normalizePipeline([value])[0] ?? null;
+}
+
 
 export interface TreeNode {
 	event: PipelineEvent;

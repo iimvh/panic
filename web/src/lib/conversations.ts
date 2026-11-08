@@ -19,7 +19,17 @@ export interface ReplayTurn {
 export interface ConversationReplay {
 	id: string;
 	title: string | null;
+	/** AG-UI conversation records (t<n>-u / t<n>-a pairs) for the assistant-ui Thread. */
+	messages: AgUiReplayMessage[];
+	/** Recorded turns for the ExecutionLedger; `turns` travels beside `messages`. */
 	turns: ReplayTurn[];
+}
+
+/** One replayed record: HTTP shape of the backend's AgUiReplayMessage. */
+export interface AgUiReplayMessage {
+	id: string;
+	role: "user" | "assistant";
+	content: string;
 }
 
 const CONVERSATIONS_ENDPOINT = "/api/conversations";
@@ -73,6 +83,7 @@ export async function fetchConversation(id: string): Promise<ConversationReplay 
 	return {
 		id: String(json.id ?? id),
 		title: typeof json.title === "string" ? json.title : null,
+		messages: replayMessages(json.messages),
 		turns: replayTurns(json.turns),
 	};
 }
@@ -114,4 +125,16 @@ function replayTurns(value: unknown): ReplayTurn[] {
 			};
 		})
 		.filter((turn) => turn.task !== "");
+}
+
+function replayMessages(value: unknown): AgUiReplayMessage[] {
+	if (!Array.isArray(value)) return [];
+	return value
+		.filter((message): message is Record<string, unknown> => typeof message === "object" && message !== null)
+		.map((message) => ({
+			id: String(message.id ?? ""),
+			role: message.role === "assistant" ? ("assistant" as const) : ("user" as const),
+			content: typeof message.content === "string" ? message.content : "",
+		}))
+		.filter((message) => message.id !== "");
 }

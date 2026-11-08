@@ -22,12 +22,36 @@
 	--panic-shimmer: rgba(136, 136, 136, 0.22);
 }
 
+/* shadcn tokens read by assistant-ui styled components (non-prefixed, no `color-`). */
+:root {
+	--background: var(--panic-canvas);
+	--foreground: var(--panic-fg);
+	--card: var(--panic-surface);
+	--card-foreground: var(--panic-fg);
+	--popover: var(--panic-surface-raised);
+	--popover-foreground: var(--panic-fg);
+	--muted: var(--panic-edge-soft);
+	--muted-foreground: var(--panic-fg-mute);
+	--accent: #c84b31;
+	--accent-foreground: #ffffff;
+	--primary: var(--panic-fg);
+	--primary-foreground: var(--panic-canvas);
+	--secondary: var(--panic-edge-soft);
+	--secondary-foreground: var(--panic-fg-body);
+	--destructive: #c84b31;
+	--destructive-foreground: #ffffff;
+	--border: var(--panic-edge);
+	--input: var(--panic-edge);
+	--ring: #c84b31;
+	--radius: 0px;
+}
+
 .dark {
-	--panic-canvas: #0f0f11;
-	--panic-surface: #141417;
+	--panic-canvas: #0a0a0a;
+	--panic-surface: #111111;
 	--panic-surface-raised: #141417;
-	--panic-edge: #222226;
-	--panic-edge-soft: #1e1e22;
+	--panic-edge: #1a1a1a;
+	--panic-edge-soft: #222222;
 	--panic-fg: #ededed;
 	--panic-fg-body: #d4d4d8;
 	--panic-fg-dim: #a0a0a5;
@@ -35,6 +59,27 @@
 	--panic-fg-faint: #787880;
 	--panic-scrollbar: #27272a;
 	--panic-shimmer: rgba(136, 136, 136, 0.16);
+	/* shadcn tokens read by assistant-ui styled components (non-prefixed). */
+	--background: var(--panic-canvas);
+	--foreground: var(--panic-fg);
+	--card: var(--panic-surface);
+	--card-foreground: var(--panic-fg);
+	--popover: var(--panic-surface-raised);
+	--popover-foreground: var(--panic-fg);
+	--muted: var(--panic-edge-soft);
+	--muted-foreground: var(--panic-fg-mute);
+	--accent: #c84b31;
+	--accent-foreground: #ffffff;
+	--primary: var(--panic-fg);
+	--primary-foreground: var(--panic-canvas);
+	--secondary: var(--panic-edge-soft);
+	--secondary-foreground: var(--panic-fg-body);
+	--destructive: #c84b31;
+	--destructive-foreground: #ffffff;
+	--border: var(--panic-edge);
+	--input: var(--panic-edge);
+	--ring: #c84b31;
+	--radius: 0px;
 }
 
 @theme inline {

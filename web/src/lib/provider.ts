@@ -43,9 +43,12 @@ export async function connectProvider(
 }
 
 /** Free models of the connected provider surface; a failed fetch answers an empty list. */
-export async function fetchFreeModels(): Promise<FreeLlmModel[]> {
+export async function fetchFreeModels(provider?: string): Promise<FreeLlmModel[]> {
+	const url = provider
+		? `${PROVIDER_ENDPOINT}/models?provider=${encodeURIComponent(provider)}`
+		: `${PROVIDER_ENDPOINT}/models`;
 	try {
-		const response = await fetch(`${PROVIDER_ENDPOINT}/models`, { headers: { Accept: "application/json" } });
+		const response = await fetch(url, { headers: { Accept: "application/json" } });
 		if (!response.ok) return [];
 		const rows = await response.json();
 		if (!Array.isArray(rows)) return [];
@@ -62,11 +65,11 @@ export async function fetchFreeModels(): Promise<FreeLlmModel[]> {
 	}
 }
 
-export async function testProviderKey(apiKey: string): Promise<ProviderTestResult> {
+export async function testProviderKey(apiKey: string, provider?: string): Promise<ProviderTestResult> {
 	const response = await fetch(`${PROVIDER_ENDPOINT}/test`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json", Accept: "application/json" },
-		body: JSON.stringify({ apiKey }),
+		body: JSON.stringify({ provider, apiKey }),
 	});
 	const json = await response.json().catch(() => ({}));
 	return {

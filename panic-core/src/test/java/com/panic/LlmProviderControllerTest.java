@@ -11,6 +11,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.panic.core.agent.chat.provider.LlmProviderRepository;
 import com.panic.core.agent.chat.provider.LlmProviderStore;
+import com.panic.core.agent.chat.provider.MistralFreeModelCatalog;
+import com.panic.core.agent.chat.provider.MistralKeyTester;
 import com.panic.core.agent.chat.provider.OpenRouterFreeModelCatalog;
 import com.panic.core.agent.chat.provider.OpenRouterKeyTester;
 import java.util.List;
@@ -184,6 +186,44 @@ class LlmProviderControllerTest {
 				.andExpect(jsonPath("$.ok").value(true));
 	}
 
+	@Test
+	void mistralConnectVerifiesStoresAndAnswersTheStatus() throws Exception {
+		mvc.perform(put("/api/provider")
+						.contentType("application/json")
+						.content("""
+								{"provider":"mistral","apiKey":"sk-or-v1-test-key-1234",
+								 "model":"mistral-small-latest"}"""))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.provider").value("mistral"))
+				.andExpect(jsonPath("$.model").value("mistral-small-latest"))
+				.andExpect(jsonPath("$.connected").value(true))
+				.andExpect(jsonPath("$.keyHint").isString());
+
+		assertThat(store.connected()).isTrue();
+		assertThat(store.current().orElseThrow().apiKey()).isEqualTo("sk-or-v1-test-key-1234");
+	}
+
+	@Test
+	void mistralRejectedKeyNeverReachesTheDatabase() throws Exception {
+		mvc.perform(put("/api/provider")
+						.contentType("application/json")
+						.content("""
+								{"provider":"mistral","apiKey":"sk-or-v1-test-key-1234",
+								 "model":"mistral-small-latest"}"""))
+				.andExpect(status().isOk());
+
+		mvc.perform(put("/api/provider")
+						.contentType("application/json")
+						.content("""
+								{"provider":"mistral","apiKey":"BAD-key",
+								 "model":"mistral-small-latest"}"""))
+				.andExpect(status().isUnprocessableEntity())
+				.andExpect(jsonPath("$.error").isNotEmpty());
+
+		assertThat(store.connected()).isTrue();
+		assertThat(store.current().orElseThrow().model()).isEqualTo("mistral-small-latest");
+	}
+
 	/** Fake OpenRouter: the model catalog and the key verdict come from fakes, never the network. */
 	static class FixedFreeModelCatalog extends OpenRouterFreeModelCatalog {
 
@@ -212,6 +252,34 @@ class LlmProviderControllerTest {
 		}
 	}
 
+	/** Fake Mistral: the model catalog and the key verdict come from fakes, never the network. */
+	static class FixedMistralCatalog extends MistralFreeModelCatalog {
+
+		FixedMistralCatalog(LlmProviderStore store) {
+			super(store, RestClient.builder());
+		}
+
+		@Override
+		public List<FreeModel> freeModels() {
+			return List.of(
+					new FreeModel("mistral-small-latest", "Mistral Small Latest", 32000),
+					new FreeModel("mistral-medium-latest", "Mistral Medium Latest", 32000));
+		}
+	}
+
+	static class AcceptingMistralKeyTester extends MistralKeyTester {
+
+		AcceptingMistralKeyTester() {
+			super(RestClient.builder());
+		}
+
+		@Override
+		public TestOutcome check(String apiKey) {
+			boolean rejected = apiKey != null && apiKey.contains("BAD");
+			return new TestOutcome(!rejected, rejected ? "Mistral rejected the key" : "Key connected ('test')");
+		}
+	}
+
 	@SpringBootConfiguration
 	@AutoConfigurationPackage(basePackages = "com.panic")
 	@EnableAutoConfiguration
@@ -227,6 +295,16 @@ class LlmProviderControllerTest {
 		@Bean
 		AcceptingKeyTester keyTester() {
 			return new AcceptingKeyTester();
+		}
+
+		@Bean
+		FixedMistralCatalog mistralModelCatalog(LlmProviderStore store) {
+			return new FixedMistralCatalog(store);
+		}
+
+		@Bean
+		AcceptingMistralKeyTester mistralKeyTester() {
+			return new AcceptingMistralKeyTester();
 		}
 	}
 }

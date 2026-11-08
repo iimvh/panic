@@ -26,6 +26,7 @@ import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-ic
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import type { FreeLlmModel } from "@/lib/provider";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -163,6 +164,10 @@ const taskAwareGroupBy = (
 export type ThreadProps = {
   components?: ThreadComponents | undefined;
   autoFocus?: boolean | undefined;
+  /** Free models of the connected provider; used to populate the model picker. */
+  models?: FreeLlmModel[];
+  /** Fires when the user picks a different model. */
+  onModelChange?: (model: string) => void;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
@@ -207,19 +212,28 @@ const ThreadHistorySkeleton: FC = () => (
 export const Thread: FC<ThreadProps> = ({
   components = EMPTY_COMPONENTS,
   autoFocus = true,
+  models = [],
+  onModelChange,
 }) => {
   const isEmpty = useAuiState(isNewChatView);
 
   return (
     <ThreadComponentsContext.Provider value={components}>
-      <ThreadRoot isEmpty={isEmpty} autoFocus={autoFocus} />
+      <ThreadRoot isEmpty={isEmpty} autoFocus={autoFocus} models={models} onModelChange={onModelChange} />
     </ThreadComponentsContext.Provider>
   );
 };
 
-const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
+const ThreadRoot: FC<{
+  isEmpty: boolean;
+  autoFocus: boolean;
+  models: FreeLlmModel[];
+  onModelChange?: (model: string) => void;
+}> = ({
   isEmpty,
   autoFocus,
+  models,
+  onModelChange,
 }) => {
   const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext);
 
@@ -272,7 +286,7 @@ const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
           >
             <ThreadScrollToBottom />
             <ThreadFollowupSuggestions />
-            <Composer autoFocus={autoFocus} />
+            <Composer autoFocus={autoFocus} models={models} onModelChange={onModelChange} />
             <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
               <ThreadSuggestions />
             </AuiIf>
@@ -523,29 +537,56 @@ const ThreadSuggestionItem: FC = () => {
   );
 };
 
-const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
-  return (
-    <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
-      <ComposerPrimitive.AttachmentDropzone asChild>
-        <div
-          data-slot="aui_composer-shell"
-          className="border-foreground/10 focus-within:border-foreground/25 data-[dragging=true]:border-ring flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
-        >
-          <ComposerAttachments />
-          <ComposerPrimitive.Input
-            placeholder="Send a message..."
-            className="aui-composer-input caret-primary placeholder:text-muted-foreground/60 max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
-            rows={1}
-            autoFocus={autoFocus}
-            enterKeyHint="send"
-            aria-label="Message input"
-          />
-          <ComposerAction />
-        </div>
-      </ComposerPrimitive.AttachmentDropzone>
-    </ComposerPrimitive.Root>
-  );
-};
+	const Composer: FC<{
+		autoFocus: boolean;
+		models: FreeLlmModel[];
+		onModelChange?: (model: string) => void;
+	}> = ({ autoFocus, models = [], onModelChange }) => {
+	  const [model, setModel] = useState(models[0]?.id ?? "");
+	  return (
+	    <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
+	      <div className="mx-auto max-w-3xl w-full">
+	        <ComposerPrimitive.AttachmentDropzone asChild>
+	          <div
+	            data-slot="aui_composer-shell"
+	            className="border-foreground/10 focus-within:border-foreground/25 data-[dragging=true]:border-ring flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
+	          >
+	            <div className="flex w-full items-center gap-2">
+	              <ComposerAttachments />
+	              <div className="flex items-center gap-2 flex-1 min-w-0">
+	                <ComposerPrimitive.Input
+	                  placeholder="Send a message..."
+	                  className="aui-composer-input caret-primary placeholder:text-muted-foreground/60 max-h-48 min-h-10 flex-1 min-w-0 resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
+	                  rows={1}
+	                  autoFocus={autoFocus}
+	                  enterKeyHint="send"
+	                  aria-label="Message input"
+	                />
+	                <select
+	                  value={model}
+	                  onChange={(event) => {
+	                    const next = event.target.value;
+	                    setModel(next);
+	                    onModelChange?.(next);
+	                  }}
+	                  aria-label="Model"
+	                  className="flex-shrink-0 border border-input bg-input/50 rounded-md px-2 py-1 text-xs font-mono text-foreground outline-none focus:ring-1 focus:ring-ring"
+	                >
+	                  {models.map((row) => (
+	                    <option key={row.id} value={row.id}>
+	                      {row.name}
+	                    </option>
+	                  ))}
+	                </select>
+	              </div>
+	              <ComposerAction />
+	            </div>
+	          </div>
+	        </ComposerPrimitive.AttachmentDropzone>
+	      </div>
+	    </ComposerPrimitive.Root>
+	  );
+	};
 
 const ComposerAction: FC = () => {
   const { ComposerExtra } = useContext(ThreadComponentsContext);

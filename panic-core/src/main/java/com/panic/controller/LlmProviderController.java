@@ -2,6 +2,8 @@ package com.panic.controller;
 
 import com.panic.core.agent.chat.provider.LlmProviderKind;
 import com.panic.core.agent.chat.provider.LlmProviderStore;
+import com.panic.core.agent.chat.provider.MistralFreeModelCatalog;
+import com.panic.core.agent.chat.provider.MistralKeyTester;
 import com.panic.core.agent.chat.provider.OpenRouterFreeModelCatalog;
 import com.panic.core.agent.chat.provider.OpenRouterKeyTester;
 import com.panic.exception.BookingException;
@@ -12,6 +14,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -28,14 +31,19 @@ public class LlmProviderController {
 	private static final int KEY_HINT_CHARS = 4;
 
 	private final LlmProviderStore store;
-	private final OpenRouterFreeModelCatalog models;
-	private final OpenRouterKeyTester keyTester;
+	private final OpenRouterFreeModelCatalog openrouterModels;
+	private final MistralFreeModelCatalog mistralModels;
+	private final OpenRouterKeyTester openrouterKeyTester;
+	private final MistralKeyTester mistralKeyTester;
 
-	public LlmProviderController(LlmProviderStore store, OpenRouterFreeModelCatalog models,
-			OpenRouterKeyTester keyTester) {
+	public LlmProviderController(LlmProviderStore store, OpenRouterFreeModelCatalog openrouterModels,
+			MistralFreeModelCatalog mistralModels, OpenRouterKeyTester openrouterKeyTester,
+			MistralKeyTester mistralKeyTester) {
 		this.store = store;
-		this.models = models;
-		this.keyTester = keyTester;
+		this.openrouterModels = openrouterModels;
+		this.mistralModels = mistralModels;
+		this.openrouterKeyTester = openrouterKeyTester;
+		this.mistralKeyTester = mistralKeyTester;
 	}
 
 	/** Current connection: null provider ids while nothing is configured yet. */
@@ -48,8 +56,16 @@ public class LlmProviderController {
 
 	/** Composer's list: free models only, so picks stay no-cost. */
 	@GetMapping("/models")
-	public List<OpenRouterFreeModelCatalog.FreeModel> freeModels() {
-		return models.freeModels();
+	public List<?> freeModels(@RequestParam(required = false) String provider) {
+		LlmProviderKind kind = provider != null
+				? LlmProviderKind.ofExternalId(provider)
+				: store.current()
+						.map(LlmProviderStore.ProviderSnapshot::kind)
+						.orElse(null);
+		if (kind == LlmProviderKind.MISTRAL) {
+			return mistralModels.freeModels();
+		}
+		return openrouterModels.freeModels();
 	}
 
 	/**
@@ -67,17 +83,15 @@ public class LlmProviderController {
 				? reuseStoredKey(kind)
 				: change.apiKey();
 		if (!StringUtils.hasText(apiKey)) {
-			// No stored credential to fall back on: connecting needs an actual key.
 			throw new BookingException("API key must not be blank: enter a key to connect", 422);
 		}
 		if (!StringUtils.hasText(change.model())) {
 			throw new BookingException("Model must not be blank", 422);
 		}
 		if (change.apiKey() == null || !change.apiKey().isBlank()) {
-			OpenRouterKeyTester.TestOutcome check = keyTester.check(apiKey);
-			if (!check.ok()) {
-				// 422: the request is well-formed but the credential does not verify.
-				throw new BookingException(check.detail(), 422);
+			KeyTestResult result = checkKey(kind, apiKey);
+			if (!result.ok()) {
+				throw new BookingException(result.detail(), 422);
 			}
 		}
 		return statusOf(store.connect(kind, apiKey, change.model()));
@@ -97,8 +111,23 @@ public class LlmProviderController {
 		String candidate = probe.apiKey() == null || probe.apiKey().isBlank()
 				? store.current().map(LlmProviderStore.ProviderSnapshot::apiKey).orElse("")
 				: probe.apiKey();
-		OpenRouterKeyTester.TestOutcome check = keyTester.check(candidate);
-		return new TestResult(check.ok(), check.detail());
+		LlmProviderKind kind = probe.provider() != null
+				? LlmProviderKind.ofExternalId(probe.provider())
+				: store.current()
+						.map(LlmProviderStore.ProviderSnapshot::kind)
+						.orElse(LlmProviderKind.OPENROUTER);
+		KeyTestResult result = checkKey(kind, candidate);
+		return new TestResult(result.ok(), result.detail());
+	}
+
+	/** Verifies a key against the right provider and returns a common verdict. */
+	private KeyTestResult checkKey(LlmProviderKind kind, String apiKey) {
+		if (kind == LlmProviderKind.MISTRAL) {
+			MistralKeyTester.TestOutcome outcome = mistralKeyTester.check(apiKey);
+			return new KeyTestResult(outcome.ok(), outcome.detail());
+		}
+		OpenRouterKeyTester.TestOutcome outcome = openrouterKeyTester.check(apiKey);
+		return new KeyTestResult(outcome.ok(), outcome.detail());
 	}
 
 	private static LlmProviderStatus statusOf(LlmProviderStore.ProviderSnapshot snapshot) {
@@ -123,10 +152,14 @@ public class LlmProviderController {
 	}
 
 	/** POST /test body: a candidate key, or blank for the stored one. */
-	public record KeyProbe(String apiKey) {
+	public record KeyProbe(String provider, String apiKey) {
 	}
 
 	/** POST /test answer: the live verdict and its reason. */
 	public record TestResult(boolean ok, String detail) {
+	}
+
+	/** Common probe verdict shared by every provider key tester. */
+	public record KeyTestResult(boolean ok, String detail) {
 	}
 }

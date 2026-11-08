@@ -4,7 +4,10 @@ package com.panic.core.agent.chat.provider;
 public enum LlmProviderKind {
 
 	/** Spring AI appends {@code /v1/chat/completions} itself, so the base host stays bare. */
-	OPENROUTER("https://openrouter.ai/api", "https://openrouter.ai/api/v1");
+	OPENROUTER("https://openrouter.ai/api", "https://openrouter.ai/api/v1"),
+
+	/** Mistral's own REST surface: models list and chat completions. */
+	MISTRAL("https://api.mistral.ai", "https://api.mistral.ai");
 
 	private final String baseUrl;
 	private final String apiRoot;

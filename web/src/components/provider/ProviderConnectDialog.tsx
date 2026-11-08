@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -20,38 +20,47 @@ import { SettingsIcon } from "lucide-react";
 
 interface ProviderConnectDialogProps {
 	status: ProviderStatus | null;
-	models: FreeLlmModel[];
+	/** Initial free models (fallback before provider-specific fetch). */
+	initialModels: FreeLlmModel[];
+	/** Fetches free models for a given provider id. */
+	fetchModels: (provider: string) => Promise<FreeLlmModel[]>;
 	/** Persists the connection; rejects with the server's message when the key fails. */
 	onConnect: (provider: string, apiKey: string, model: string) => Promise<void>;
 }
 
-/**
- * The provider connection dialog: one provider card (OpenRouter), the key
- * field and the free-model picker. Keys live server-side; the dialog only
- * forwards them through /api/provider.
- */
+const PROVIDERS: { id: string; label: string; keyPlaceholder: string }[] = [
+	{ id: "openrouter", label: "OPENROUTER", keyPlaceholder: "sk-or-v1-..." },
+	{ id: "mistral", label: "MISTRAL", keyPlaceholder: "sk-..." },
+];
+
 export function ProviderConnectDialog({
 	status,
-	models,
+	initialModels,
+	fetchModels,
 	onConnect,
 }: ProviderConnectDialogProps) {
 	const [open, setOpen] = useState(false);
+	const [selectedProvider, setSelectedProvider] = useState<string>(
+		status?.provider ?? "openrouter",
+	);
 	const [apiKey, setApiKey] = useState("");
 	const [model, setModel] = useState<string | "">(status?.model ?? "");
+	const [models, setModels] = useState<FreeLlmModel[]>(initialModels);
 	const [probe, setProbe] = useState<{ ok: boolean; detail: string } | null>(
 		null,
 	);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	const connected = status?.connected === true;
+	const provider = PROVIDERS.find((p) => p.id === selectedProvider) ?? PROVIDERS[0];
+	const connected = status?.connected === true && status?.provider === selectedProvider;
 	const effectiveModel = model || status?.model || models[0]?.id || "";
 
-	const runProbe = async () => {
+		const runProbe = async () => {
 		setProbe(null);
 		setError(null);
 		try {
-			setProbe(await testProviderKey(apiKey.trim()));
+			setProbe(await testProviderKey(apiKey.trim(), selectedProvider));
 		} catch (probeError) {
 			setProbe({
 				ok: false,
@@ -67,13 +76,13 @@ export function ProviderConnectDialog({
 			return;
 		}
 		if (!connected && apiKey.trim() === "") {
-			setError("Enter your OpenRouter API key to connect.");
+			setError(`Enter your ${provider.label} API key to connect.`);
 			return;
 		}
 		setSaving(true);
 		setError(null);
 		try {
-			await onConnect("openrouter", apiKey.trim(), effectiveModel);
+			await onConnect(selectedProvider, apiKey.trim(), effectiveModel);
 			setApiKey("");
 			setProbe(null);
 			setOpen(false);
@@ -87,6 +96,13 @@ export function ProviderConnectDialog({
 			setSaving(false);
 		}
 	};
+
+	useEffect(() => {
+		void fetchModels(selectedProvider).then((rows) => {
+			setModels(rows);
+			setModel(rows[0]?.id ?? "");
+		});
+	}, [selectedProvider, fetchModels, connected]);
 
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
@@ -109,9 +125,26 @@ export function ProviderConnectDialog({
 					</DialogDescription>
 				</DialogHeader>
 
-				<div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
+				<label
+					className="mt-1 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+				>
+					Provider
+				</label>
+				<select
+					value={selectedProvider}
+					onChange={(event) => setSelectedProvider(event.target.value)}
+					className="border-input bg-background h-9 rounded-md border px-2 font-mono text-xs w-full"
+				>
+					{PROVIDERS.map((p) => (
+						<option key={p.id} value={p.id}>
+							{p.label}
+						</option>
+					))}
+				</select>
+
+				<div className="flex items-center justify-between rounded-md border bg-background px-3 py-2 mt-2">
 					<span className="font-mono text-xs font-semibold tracking-tight">
-						OPENROUTER
+						{provider.label}
 					</span>
 					<span
 						className={cn(
@@ -133,7 +166,7 @@ export function ProviderConnectDialog({
 					<Input
 						id="provider-key"
 						type="password"
-						placeholder={connected ? "Stored — leave blank to keep" : "sk-or-v1-..."}
+						placeholder={connected ? "Stored — leave blank to keep" : provider.keyPlaceholder}
 						value={apiKey}
 						onChange={(event) => setApiKey(event.target.value)}
 						className="font-mono text-xs"
@@ -171,7 +204,7 @@ export function ProviderConnectDialog({
 					id="provider-model"
 					value={effectiveModel}
 					onChange={(event) => setModel(event.target.value)}
-					className="border-input bg-background h-9 rounded-md border px-2 font-mono text-xs"
+					className="border-input bg-background h-9 rounded-md border px-2 font-mono text-xs w-full"
 				>
 					{effectiveModel && !models.some((row) => row.id === effectiveModel) ? (
 						<option value={effectiveModel}>{effectiveModel}</option>

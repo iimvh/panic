@@ -7,8 +7,9 @@ import org.springframework.ai.tool.ToolCallback;
 
 /**
  * The {@code web-search} common tool of the tool-plugin hub. Any agent granted {@code hubTools:
- * [web-search]} can call {@code <agentId>__webSearch}. Backed by DuckDuckGo's HTML endpoint by
- * default (zero-config, no key); swapping to another engine is a change of {@link SearchBackend}.
+ * [web-search]} can call {@code <agentId>__webSearch}. Backed by Google News' RSS feed by default
+ * (zero-config, no key, dated items); swapping to another engine is a change of
+ * {@link SearchBackend}.
  */
 public final class WebSearchPlugin implements ToolPlugin {
 
@@ -27,7 +28,7 @@ public final class WebSearchPlugin implements ToolPlugin {
 
 	@Override
 	public String description() {
-		return "Search the public web (title, url, snippet) for current news and recent events.";
+		return "Search the latest news and public web (title, url, published time, snippet) for current events.";
 	}
 
 	@Override

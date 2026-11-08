@@ -26,6 +26,12 @@ Agents are discovered from `agents/*/agent.yaml` on the classpath, so **installi
 >
 > This repository is a working reference implementation. The bundled `coordinator` + example `echo` agent show the module contract; domain agents are added as their own modules.
 
+<p align="center">
+<img src="web/public/panic-demo.gif" alt="Panic demo — sub-agent delegation and pipeline trace" width="720" />
+<br/>
+<em>1. Chat workspace · 2. User sends "echo: hello from panic" · 3. Pipeline trace expanded: coordinator delegates to echo sub-agent</em>
+</p>
+
 ## Features
 
 - **One agent type, recursive**: `AgentDefinition` is the single source of truth (`id`, `description`, `prompt`, `tools`, `subAgents`, `skills`, `hubTools`, `policy`).
@@ -59,13 +65,13 @@ Agents are discovered from `agents/*/agent.yaml` on the classpath, so **installi
 ```mermaid
 flowchart TD
     U[User] -->|POST /api/agent/chat| AC[AgentController]
-    AC -->|run(root, depth=0)| AE[AgentExecutor]
-    AE --> RP[render system prompt<br/>{now}, {tools}, {subAgents}, {skills}]
+    AC -->|run root agent| AE[AgentExecutor]
+    AE --> RP[render system prompt]
     RP --> LLM[LLM call]
     LLM -->|local tool| TS[tool source → service]
     LLM -->|MCP tool| MS[MCP server]
-    LLM -->|hub tool| TH[ToolPluginHub<br/>web-search …]
-    LLM -->|call_<subId>| SA[AgentExecutor.run(sub, depth+1)]
+    LLM -->|hub tool| TH[ToolPluginHub]
+    LLM -->|call sub-agent| SA[AgentExecutor recurse]
     SA --> AE
     TS -->|result| AE
     MS -->|result| AE

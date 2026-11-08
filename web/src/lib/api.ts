@@ -268,7 +268,7 @@ export async function askAgent(args: AskArgs, options: AskOptions = {}): Promise
 }
 
 function withKeyHint(detail: string): string {
-	return /OPENROUTER_API_KEY/i.test(detail)
-		? `${detail}\n\nHint: set the OPENROUTER_API_KEY environment variable and restart the server.`
+	return /OPENROUTER_API_KEY|provider connected/i.test(detail)
+		? `${detail}\n\nHint: open the Settings panel in the sidebar and connect a provider.`
 		: detail;
 }

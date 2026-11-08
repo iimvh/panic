@@ -58,8 +58,10 @@ class SubAgentStreamTraceTest {
 		OpenAiChatModel model = transport().model();
 		PipelineRecorder recorder = new PipelineRecorder(new PipelineBroadcaster());
 		AgentRegistry registry = new AgentRegistry(List.of(coordinator("echo"), echoAgent()), "coordinator");
-		AgentExecutor executor = new AgentExecutor(ChatClient.builder(model), registry, noSkills(), recorder,
-				new AgentPromptRenderer(location -> Optional.empty()), null, new PipelineBroadcaster(), "test-key");
+		AgentExecutor executor = new AgentExecutor(
+				com.panic.core.agent.chat.provider.LlmProviderChatFactory.fixed(ChatClient.builder(model)),
+				registry, noSkills(), recorder, new AgentPromptRenderer(location -> Optional.empty()), null,
+				new PipelineBroadcaster());
 		PipelineRecorder.RequestTrace trace = new PipelineRecorder.RequestTrace();
 		recorder.startResponse(trace);
 		recorder.bind(trace);

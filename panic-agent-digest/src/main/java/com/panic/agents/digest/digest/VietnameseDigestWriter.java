@@ -3,7 +3,7 @@ package com.panic.agents.digest.digest;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.panic.agents.digest.feed.NewsItem;
-import com.panic.core.agent.runtime.AgentApiKey;
+import com.panic.core.agent.chat.provider.LlmProviderChatFactory;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -28,19 +28,17 @@ public class VietnameseDigestWriter implements DigestSummarizer {
 	/** Answer budget: enough for intro + 5–10 items after the model's reasoning, with headroom. */
 	private static final int MAX_ANSWER_TOKENS = 8192;
 
-	private final ChatClient.Builder chatClientBuilder;
+	private final LlmProviderChatFactory chatFactory;
 	private final DigestWriterPrompt prompt = new DigestWriterPrompt();
-	private final boolean aiEnabled;
 
-	public VietnameseDigestWriter(ChatClient.Builder chatClientBuilder, String apiKey) {
-		this.chatClientBuilder = chatClientBuilder;
-		this.aiEnabled = AgentApiKey.isConfigured(apiKey);
+	public VietnameseDigestWriter(LlmProviderChatFactory chatFactory) {
+		this.chatFactory = chatFactory;
 	}
 
 	@Override
 	public DigestSections summarize(LocalDate date, List<NewsItem> candidates, int maxItems) {
-		if (!aiEnabled) {
-			throw new IllegalStateException("Summarization needs OPENROUTER_API_KEY");
+		if (!chatFactory.connected()) {
+			throw new IllegalStateException("No LLM provider connected: connect one in the Settings panel");
 		}
 		if (candidates.isEmpty()) {
 			return DigestSections.empty();
@@ -48,7 +46,7 @@ public class VietnameseDigestWriter implements DigestSummarizer {
 		// Bound the prompt: the reasoning model spends its token budget thinking, so a huge feed of
 		// candidates would starve the JSON answer. Choose from at most a few times the item count.
 		List<NewsItem> bounded = bound(candidates, maxItems);
-		String reply = chatClientBuilder.clone().build()
+		String reply = chatFactory.chatClientBuilder().build()
 				.prompt()
 				.options(org.springframework.ai.openai.OpenAiChatOptions.builder()
 						.maxTokens(MAX_ANSWER_TOKENS)

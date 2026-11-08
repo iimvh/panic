@@ -29,6 +29,7 @@ export interface WorkspaceStore {
 
 const STORAGE_KEY = "panic-workspace:v3";
 const SIDEBAR_KEY = "panic-sidebar-collapsed";
+const SIDEBAR_WIDTH_KEY = "panic-sidebar-width";
 const THEME_KEY = "panic-workspace-theme";
 
 export type WorkspaceTheme = "light" | "dark";
@@ -145,3 +146,28 @@ export function saveSidebarCollapsed(collapsed: boolean): void {
 		/* storage unavailable: preference simply is not remembered */
 	}
 }
+
+/** Sidebar width in px; undefined = none saved yet (the default wins). */
+export function loadSidebarWidth(): number | undefined {
+	try {
+		const raw = localStorage.getItem(SIDEBAR_WIDTH_KEY);
+		const width = raw === null ? Number.NaN : Number(raw);
+		return Number.isFinite(width) && width >= MIN_SIDEBAR_WIDTH && width <= MAX_SIDEBAR_WIDTH
+			? width
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export function saveSidebarWidth(width: number): void {
+	try {
+		localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(width)));
+	} catch {
+		/* storage unavailable: the width simply is not remembered */
+	}
+}
+
+export const MIN_SIDEBAR_WIDTH = 208;
+export const MAX_SIDEBAR_WIDTH = 360;
+export const DEFAULT_SIDEBAR_WIDTH = 256;

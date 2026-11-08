@@ -90,12 +90,14 @@ java -jar panic-app/target/panic-app-1.0.0.jar
 Open <http://localhost:8080> and start chatting. The UI is already bundled into the app.
 
 > [!TIP]
-> Put `OPENROUTER_API_KEY` in a `.env` file at the repository root. The entry point finds the nearest `.env`, even when Maven runs the app from `panic-app/`.
+> The LLM provider (API key + model) is configured in the app itself: open the
+> ⚙ Settings icon in the sidebar, connect the OpenRouter provider and pick a
+> free model from the composer's selector. No `.env` / environment key is read.
 
 ### Run from source
 
 ```bash
-export OPENROUTER_API_KEY=sk-or-...
+# The provider is set up in the UI (Settings panel); no key export is needed.
 
 # Backend (always with -am so the latest core is built)
 mvn -pl panic-app -am spring-boot:run
@@ -206,28 +208,32 @@ spring.ai.mcp.client.sse.connections.<name>.url=http://localhost:8081/sse
 
 If the server is unreachable the app logs a warning and the agent degrades — it does not crash.
 
-## Configuration
+## Provider & Configuration
+
+The provider connection is data, not environment: `llm_provider_config` (H2) holds the
+active OpenRouter row — its API key and the selected free model. The Settings panel
+writes it through `PUT /api/provider`, the composer reads free models through
+`GET /api/provider/models`, and `AgentExecutor` resolves the active connection on
+every run (a save applies from the next request on).
 
 `panic-app/src/main/resources/application.properties`:
 
 ```properties
 spring.ai.openai.base-url=https://openrouter.ai/api   # no /v1: Spring AI appends it
-spring.ai.openai.api-key=${OPENROUTER_API_KEY:missing-openrouter-api-key}
-spring.ai.openai.chat.options.model=${LLM_MODEL:${OPENROUTER_MODEL:openai/gpt-4o-mini}}
+spring.ai.openai.api-key=missing-openrouter-api-key   # placeholder only, so the app boots
+app.provider.chat-temperature=0.2
+app.provider.chat-max-tokens=4096
 app.agents.root=coordinator
 app.memory.window-turns=20
 ```
 
 | Environment variable | Purpose |
 |---|---|
-| `OPENROUTER_API_KEY` | API key; required for chat |
-| `LLM_MODEL` / `OPENROUTER_MODEL` | Model id (must support tool calling) |
-| `OPENROUTER_REFERER` / `OPENROUTER_TITLE` | Optional OpenRouter attribution headers |
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | Postgres for the `postgres` profile (see below) |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST accelerator (optional) |
 | `REDIS_URL` | TCP Redis fallback when the REST credentials are absent |
 
-`OpenAiChatModel` refuses an empty key, so a placeholder is injected; the executor treats it as "not configured" and returns a readable error in chat.
+The placeholder OpenAI key only keeps the auto-configured beans alive until a provider is connected; agents then answer `No LLM provider connected` in chat while none is.
 
 ### Store of record
 
@@ -292,8 +298,8 @@ The suite covers registry validation, the executor's tool/sub-agent loop, prompt
 
 | Symptom | Fix |
 |---|---|
-| Chat returns `OPENROUTER_API_KEY required` | Set the key in `.env` or the environment and restart |
-| 400 with a model/tool error | Pick a model that supports tool calling in `LLM_MODEL` |
+| Chat returns `No LLM provider connected` | Open the ⚙ Settings panel in the sidebar and connect the OpenRouter provider |
+| 400/422 with a model/tool error | Pick a model that supports tool calling in the composer's model selector |
 | Agent missing from the tree | Add its module to `panic-app/pom.xml`, or check `app.agents.<id>.enabled` |
 | Stale JAR after changing core | Always run module commands with `-am` |
 | UI changes not visible | Rebuild with `./dev.ps1 ui` (or `npm run build`) and restart the app |

@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ConversationSummary } from "../../lib/conversations";
 import type { Turn } from "../../lib/storage";
+import { DEFAULT_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from "../../lib/storage";
 
 /** One sidebar record: server title (fallback: latest cached task) plus its activity stamp. */
 export interface SessionRow {
@@ -59,6 +60,17 @@ interface SessionDirectoryProps {
 	onSelect: (id: string) => void;
 	/** Removes the session from the server; absent while the store cannot forget. */
 	onDelete?: (id: string) => void;
+	/** Opens the floating Settings (provider connection) panel. */
+	onOpenSettings?: () => void;
+	/** Highlighted while the settings panel sits above the footer. */
+	settingsOpen?: boolean;
+	/** Current width in px; falls back to the fixed default while absent. */
+	width?: number;
+	/** Compact rail state; the rail only offers expanding again. */
+	collapsed?: boolean;
+	onToggleCollapsed?: () => void;
+	/** Live width updates while the user drags the right edge. */
+	onWidthChange?: (width: number) => void;
 }
 
 /** Sessions directory: filter input, hairline-rowed inquiry list and the agent footer. */
@@ -70,10 +82,41 @@ export default function SessionDirectory({
 	agentCount,
 	onSelect,
 	onDelete,
+	onOpenSettings,
+	settingsOpen,
+	width,
+	collapsed,
+	onToggleCollapsed,
+	onWidthChange,
 }: SessionDirectoryProps) {
 	const [query, setQuery] = useState("");
 	/** Row showing the red DELETE? strip; any other interaction folds it back. */
 	const [confirmingId, setConfirmingId] = useState<string | null>(null);
+	const asideRef = useRef<HTMLElement>(null);
+
+	// Drag the right hairline to re-width the directory; the width follows the cursor live.
+	const startResize = useCallback(
+		(downEvent: React.MouseEvent) => {
+			downEvent.preventDefault();
+			const asideLeft = asideRef.current?.getBoundingClientRect().left ?? 0;
+			const onMove = (moveEvent: MouseEvent) => {
+				const next = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, moveEvent.clientX - asideLeft));
+				onWidthChange?.(next);
+			};
+			const onUp = () => {
+				document.removeEventListener("mousemove", onMove);
+				document.removeEventListener("mouseup", onUp);
+			};
+			document.addEventListener("mousemove", onMove);
+			document.addEventListener("mouseup", onUp);
+		},
+		[onWidthChange]
+	);
+
+	// Selecting a row clears any focus residue in the rail; nothing else transactional.
+	useEffect(() => {
+		if (!collapsed) setConfirmingId(null);
+	}, [collapsed]);
 
 	const rows = useMemo(
 		() => rowsFor(sessions, taskCache, activeId, runningId),
@@ -88,10 +131,58 @@ export default function SessionDirectory({
 		);
 	}, [rows, query]);
 
+	if (collapsed) {
+		return (
+			<aside
+				className="flex w-12 shrink-0 flex-col items-center justify-between border-r border-edge bg-surface py-4"
+				aria-label="Sessions (collapsed)"
+			>
+				<button
+					type="button"
+					onClick={onToggleCollapsed}
+					aria-label="Expand session directory"
+					title="Expand directory"
+					className="cursor-pointer rounded-none px-1.5 py-1 font-mono text-xs text-fg-faint transition-colors hover:bg-canvas hover:text-fg"
+				>
+					»
+				</button>
+				{onOpenSettings ? (
+					<button
+						type="button"
+						onClick={onOpenSettings}
+						aria-label="Open provider settings"
+						className={`cursor-pointer text-xs leading-none transition-colors hover:text-fg ${
+							settingsOpen ? "text-accent" : "text-fg-faint"
+						}`}
+					>
+						⚙
+					</button>
+				) : null}
+			</aside>
+		);
+	}
+
 	return (
-		<aside className="flex w-64 shrink-0 flex-col overflow-hidden border-r border-edge bg-surface">
+		<aside
+			ref={asideRef}
+			className="relative flex shrink-0 flex-col overflow-hidden border-r border-edge bg-surface"
+			style={width ? { width } : undefined}
+		>
 			<div className="shrink-0 border-b border-edge p-4">
-				<div className="micro-label text-fg-faint">Directory</div>
+				<div className="flex items-center justify-between">
+					<div className="micro-label text-fg-faint">Directory</div>
+					{onToggleCollapsed ? (
+						<button
+							type="button"
+							onClick={onToggleCollapsed}
+							aria-label="Collapse session directory"
+							title="Collapse directory"
+							className="cursor-pointer px-1 font-mono text-xs text-fg-faint transition-colors hover:text-fg"
+						>
+							«
+						</button>
+					) : null}
+				</div>
 				<input
 					type="text"
 					value={query}
@@ -190,10 +281,35 @@ export default function SessionDirectory({
 				)}
 			</div>
 
-			<div className="flex shrink-0 justify-between border-t border-edge bg-surface p-3.5 font-mono text-[10px] text-fg-faint">
+			<div className="flex shrink-0 items-center justify-between border-t border-edge bg-surface p-3.5 font-mono text-[10px] text-fg-faint">
 				<span>AGENTS: {String(agentCount).padStart(2, "0")} ONLINE</span>
-				<span>SSE</span>
+				<span className="flex items-center gap-2.5">
+					<span>SSE</span>
+					{onOpenSettings ? (
+						<button
+							type="button"
+							onClick={onOpenSettings}
+							aria-label="Open provider settings"
+							className={`cursor-pointer text-xs leading-none transition-colors hover:text-fg ${
+								settingsOpen ? "text-accent" : "text-fg-faint"
+							}`}
+						>
+							⚙
+						</button>
+					) : null}
+				</span>
 			</div>
+
+			{onWidthChange ? (
+				<div
+					role="separator"
+					aria-orientation="vertical"
+					aria-label="Resize directory"
+					onMouseDown={startResize}
+					onDoubleClick={() => onWidthChange?.(DEFAULT_SIDEBAR_WIDTH)}
+					className="absolute bottom-0 right-0 top-0 z-20 w-1 cursor-col-resize transition-colors hover:bg-accent/40"
+				/>
+			) : null}
 		</aside>
 	);
 }

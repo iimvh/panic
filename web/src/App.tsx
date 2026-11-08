@@ -3,6 +3,7 @@ import ExecutionLedger, { type LedgerState } from "./components/workspace/Execut
 import ConversationTranscript from "./components/workspace/ConversationTranscript";
 import InquiryComposer from "./components/workspace/InquiryComposer";
 import SessionDirectory from "./components/workspace/SessionDirectory";
+import SettingsPanel from "./components/workspace/SettingsPanel";
 import WorkspaceHeader, { type WorkspaceView } from "./components/workspace/WorkspaceHeader";
 import { usePipelineStream } from "./hooks/usePipelineStream";
 import { useTextStream } from "./hooks/useTextStream";
@@ -13,12 +14,18 @@ import {
 	listConversations,
 	type ConversationSummary,
 } from "./lib/conversations";
+import { connectProvider, fetchFreeModels, fetchProviderStatus, type FreeLlmModel, type ProviderStatus } from "./lib/provider";
 import { splitActivity, buildDashboard } from "./lib/dashboard";
 import {
 	MAX_TURNS,
+	MIN_SIDEBAR_WIDTH,
 	loadTheme,
 	loadWorkspace,
+	loadSidebarCollapsed,
+	loadSidebarWidth,
 	newId,
+	saveSidebarCollapsed,
+	saveSidebarWidth,
 	saveTheme,
 	saveWorkspace,
 	type Turn,
@@ -44,6 +51,26 @@ export default function App() {
 	/** Wall-clock moment the first answer token arrived; the interleaving boundary of the chat timeline. */
 	const [tokenStartedAt, setTokenStartedAt] = useState<number | null>(null);
 	const tokenStartedRef = useRef<number | null>(null);
+	/** Server-held provider connection; the model selector mirrors it. */
+	const [provider, setProvider] = useState<ProviderStatus | null>(null);
+	const [settingsOpen, setSettingsOpen] = useState(false);
+	/** ComposerPickable free-model list; refreshed when the connection changes. */
+	const [freeModels, setFreeModels] = useState<FreeLlmModel[]>([]);
+	/** Directory layout preference: collapsed rail + dragged width, remembered across reloads. */
+	const [directoryCollapsed, setDirectoryCollapsed] = useState<boolean>(() => loadSidebarCollapsed() ?? false);
+	const [directoryWidth, setDirectoryWidth] = useState<number>(() => loadSidebarWidth() ?? MIN_SIDEBAR_WIDTH);
+
+	const toggleDirectoryCollapsed = useCallback(() => {
+		setDirectoryCollapsed((current) => {
+			saveSidebarCollapsed(!current);
+			return !current;
+		});
+	}, []);
+
+	const changeDirectoryWidth = useCallback((width: number) => {
+		setDirectoryWidth(width);
+		saveSidebarWidth(width);
+	}, []);
 
 	const pipeline = usePipelineStream();
 	/** Smoothed typewriter view of the live answer tokens (skeleton → typed text → cursor off). */
@@ -118,7 +145,40 @@ export default function App() {
 			setAgentCount(tree?.agents.length ?? 0);
 		});
 		refreshSessions();
+		void fetchProviderStatus()
+			.then((status) => setProvider(status))
+			.catch(() => {
+				/* the selector keeps its unknown state until the backend answers */
+			});
+		void fetchFreeModels()
+			.then((models) => setFreeModels(models))
+			.catch(() => {
+				/* the picker stays on whatever the last successful fetch cached */
+			});
 	}, [refreshSessions]);
+
+	/** Settings save: a failed key throws and both panel and status stay untouched. */
+	const saveProviderConnection = useCallback(async (kind: string, apiKey: string, model: string) => {
+		const status = await connectProvider(kind, apiKey, model);
+		setProvider(status);
+		void fetchFreeModels()
+			.then((models) => setFreeModels(models))
+			.catch(() => {});
+		setSettingsOpen(false);
+	}, []);
+
+	/** Composer model switch: blank key keeps the stored credential; applies for the next request. */
+	const selectProviderModel = useCallback((model: string) => {
+		// Optimistic label: the picker closes instantly; a failure is corrected by the refetch.
+		setProvider((current) => (current ? { ...current, model } : current));
+		connectProvider("openrouter", "", model)
+			.then((status) => setProvider(status))
+			.catch(() => {
+				void fetchProviderStatus()
+					.then((status) => setProvider(status))
+					.catch(() => {});
+			});
+	}, []);
 
 	// Server truth wins: open on the session the last visit was in, replayed from the store.
 	useEffect(() => {
@@ -372,6 +432,12 @@ export default function App() {
 						agentCount={agentCount}
 						onSelect={selectSession}
 						onDelete={(id) => void deleteSession(id)}
+						onOpenSettings={() => setSettingsOpen((open) => !open)}
+						settingsOpen={settingsOpen}
+						width={directoryWidth}
+						collapsed={directoryCollapsed}
+						onToggleCollapsed={toggleDirectoryCollapsed}
+						onWidthChange={changeDirectoryWidth}
 					/>
 				</div>
 
@@ -408,8 +474,11 @@ export default function App() {
 								onChange={setDraft}
 								onSend={() => void sendTask()}
 								busy={busy}
-								modelLabel={dashboard.model ?? "PANIC Orchestrator"}
+								modelLabel={provider?.model ?? dashboard.model ?? "PANIC Orchestrator"}
 								live={showingLive}
+								models={freeModels}
+								onSelectModel={selectProviderModel}
+								onOpenSettings={() => setSettingsOpen(true)}
 							/>
 						</section>
 					) : null}
@@ -425,6 +494,14 @@ export default function App() {
 					) : null}
 				</main>
 			</div>
+
+			{settingsOpen ? (
+				<SettingsPanel
+					status={provider}
+					onClose={() => setSettingsOpen(false)}
+					onConnect={saveProviderConnection}
+				/>
+			) : null}
 		</div>
 	);
 }

@@ -3,6 +3,7 @@ package com.panic.core.agent.runtime;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.panic.core.agent.chat.provider.LlmProviderChatFactory;
 import com.panic.core.agent.spi.AgentDefinition;
 import com.panic.core.agent.spi.AgentPolicy;
 import com.panic.core.agent.spi.Skill;
@@ -51,9 +52,8 @@ class AgentExecutorTest {
 
 	private AgentExecutor executor(List<AgentDefinition> agents, SkillRepository skills) {
 		AgentRegistry registry = new AgentRegistry(agents, "coordinator");
-		ChatClient.Builder builder = testBuilder(model);
-		return new AgentExecutor(builder, registry, skills, recorder, new AgentPromptRenderer(prompts()), null, broadcaster,
-				"test-key");
+		return new AgentExecutor(LlmProviderChatFactory.fixed(testBuilder(model)), registry, skills, recorder,
+				new AgentPromptRenderer(prompts()), null, broadcaster);
 	}
 
 	/** Test prompt repository: returns inline templates so tests do not depend on resource files. */
@@ -231,8 +231,8 @@ class AgentExecutorTest {
 				new org.springframework.ai.chat.messages.AssistantMessage("Nice to meet you, Lan")));
 
 		AgentRegistry registry = registry(List.of(coordinator()));
-		AgentExecutor executor = new AgentExecutor(testBuilder(model), registry, noSkills(), recorder,
-				new AgentPromptRenderer(prompts()), memory, broadcaster, "test-key");
+		AgentExecutor executor = new AgentExecutor(LlmProviderChatFactory.fixed(testBuilder(model)), registry,
+				noSkills(), recorder, new AgentPromptRenderer(prompts()), memory, broadcaster);
 		model.reply("You are Lan");
 
 		executor.runRoot("conv-1", "what is my name?");
@@ -254,8 +254,8 @@ class AgentExecutorTest {
 		com.panic.core.agent.memory.ConversationStore memory =
 				org.mockito.Mockito.mock(com.panic.core.agent.memory.ConversationStore.class);
 		AgentRegistry registry = registry(List.of(coordinator()));
-		AgentExecutor executor = new AgentExecutor(testBuilder(model), registry, noSkills(), recorder,
-				new AgentPromptRenderer(prompts()), memory, broadcaster, "test-key");
+		AgentExecutor executor = new AgentExecutor(LlmProviderChatFactory.fixed(testBuilder(model)), registry,
+				noSkills(), recorder, new AgentPromptRenderer(prompts()), memory, broadcaster);
 		PipelineRecorder.RequestTrace trace = new PipelineRecorder.RequestTrace();
 		recorder.startResponse(trace);
 		try {
@@ -278,8 +278,8 @@ class AgentExecutorTest {
 				org.mockito.Mockito.mock(com.panic.core.agent.memory.ConversationStore.class);
 		// No system prompt declared → the run fails before the model, after the message guard.
 		AgentRegistry registry = registry(List.of(AgentDefinition.builder("coordinator").build()));
-		AgentExecutor executor = new AgentExecutor(testBuilder(model), registry, noSkills(), recorder,
-				new AgentPromptRenderer(prompts()), memory, broadcaster, "test-key");
+		AgentExecutor executor = new AgentExecutor(LlmProviderChatFactory.fixed(testBuilder(model)), registry,
+				noSkills(), recorder, new AgentPromptRenderer(prompts()), memory, broadcaster);
 		PipelineRecorder.RequestTrace trace = new PipelineRecorder.RequestTrace();
 		recorder.startResponse(trace);
 		try {
@@ -304,8 +304,8 @@ class AgentExecutorTest {
 		com.panic.core.agent.memory.ConversationStore memory =
 				org.mockito.Mockito.mock(com.panic.core.agent.memory.ConversationStore.class);
 		AgentRegistry registry = registry(List.of(coordinator()));
-		AgentExecutor executor = new AgentExecutor(testBuilder(model), registry, noSkills(), recorder,
-				new AgentPromptRenderer(prompts()), memory, broadcaster, "test-key");
+		AgentExecutor executor = new AgentExecutor(LlmProviderChatFactory.fixed(testBuilder(model)), registry,
+				noSkills(), recorder, new AgentPromptRenderer(prompts()), memory, broadcaster);
 
 		assertThatThrownBy(() -> executor.runRoot("conv-1", " "))
 				.isInstanceOf(BookingException.class)
@@ -320,8 +320,8 @@ class AgentExecutorTest {
 				org.mockito.Mockito.mock(com.panic.core.agent.memory.ConversationStore.class);
 		AgentRegistry registry = registry(List.of(coordinator("search"),
 				searchAgent(LocalToolSource.of("t", tools))));
-		AgentExecutor executor = new AgentExecutor(testBuilder(model), registry, noSkills(), recorder,
-				new AgentPromptRenderer(prompts()), memory, broadcaster, "test-key");
+		AgentExecutor executor = new AgentExecutor(LlmProviderChatFactory.fixed(testBuilder(model)), registry,
+				noSkills(), recorder, new AgentPromptRenderer(prompts()), memory, broadcaster);
 		model.callTool("call_search", "{\"query\":\"room for 5\"}").reply("found").reply("done");
 
 		executor.runRoot("conv-1", "find a room");
@@ -346,14 +346,29 @@ class AgentExecutorTest {
 	}
 
 	@Test
-	void missingApiKeyFailsWithClearMessage() {
+	void missingProviderConnectionFailsWithClearMessage() {
 		AgentRegistry registry = registry(List.of(coordinator()));
-		AgentExecutor executor = new AgentExecutor(ChatClient.builder(model), registry, noSkills(), recorder,
-				new AgentPromptRenderer(prompts()), null, broadcaster, "");
+		AgentExecutor executor = new AgentExecutor(disconnected(), registry, noSkills(), recorder,
+				new AgentPromptRenderer(prompts()), null, broadcaster);
 
 		assertThatThrownBy(() -> executor.runRoot("x"))
 				.isInstanceOf(BookingException.class)
-				.hasMessageContaining("OPENROUTER_API_KEY");
+				.hasMessageContaining("No LLM provider connected");
+	}
+
+	/** No provider row is active: the run guard, not the model call, reports the gap. */
+	static LlmProviderChatFactory disconnected() {
+		return new LlmProviderChatFactory() {
+			@Override
+			public boolean connected() {
+				return false;
+			}
+
+			@Override
+			public ChatClient.Builder chatClientBuilder() {
+				throw new BookingException("No LLM provider connected: connect one in the Settings panel");
+			}
+		};
 	}
 
 	@Test
@@ -378,8 +393,8 @@ class AgentExecutorTest {
 			}
 		};
 		AgentRegistry registry = registry(List.of(coordinator()));
-		AgentExecutor executor = new AgentExecutor(ChatClient.builder(streamingModel), registry, noSkills(), recorder,
-				new AgentPromptRenderer(prompts()), null, recordingBroadcaster, "test-key");
+		AgentExecutor executor = new AgentExecutor(LlmProviderChatFactory.fixed(ChatClient.builder(streamingModel)),
+				registry, noSkills(), recorder, new AgentPromptRenderer(prompts()), null, recordingBroadcaster);
 		recorder.startResponse(new PipelineRecorder.RequestTrace());
 
 		var result = executor.runRoot("hello");

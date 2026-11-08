@@ -1,5 +1,6 @@
 package com.panic.core.agent.runtime;
 
+import com.panic.core.agent.chat.provider.LlmProviderChatFactory;
 import com.panic.core.agent.memory.ChatTurn;
 import com.panic.core.agent.memory.ConversationStore;
 import com.panic.core.agent.spi.AgentContext;
@@ -24,7 +25,6 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.model.tool.DefaultToolCallingChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -34,32 +34,35 @@ import org.springframework.util.StringUtils;
  * Agents are stateless: everything (trace, parent event, depth, chain) travels through {@link AgentContext}.
  * Tools the LLM sees are always prefixed {@code <agentId>__}; each enabled sub-agent is mounted
  * as exactly one {@code call_<subId>} tool.
+ * <p>
+ * The model, its API key and its settings come from the provider the workspace connected in
+ * the Settings panel ({@link LlmProviderChatFactory}); every run resolves the active
+ * connection anew, so a Settings change applies from the next request on while a
+ * streaming run keeps the client it started with.
  */
 @Component
 public class AgentExecutor {
 
 	private static final Logger log = LoggerFactory.getLogger(AgentExecutor.class);
 
-	private final ChatClient.Builder chatClientBuilder;
+	private final LlmProviderChatFactory chatFactory;
 	private final AgentRegistry registry;
 	private final SkillRepository skills;
 	private final PipelineRecorder recorder;
 	private final AgentPromptRenderer renderer;
 	private final ConversationStore memory;
 	private final PipelineBroadcaster broadcaster;
-	private final boolean aiEnabled;
 
-	public AgentExecutor(ChatClient.Builder chatClientBuilder, AgentRegistry registry, SkillRepository skills,
+	public AgentExecutor(LlmProviderChatFactory chatFactory, AgentRegistry registry, SkillRepository skills,
 			PipelineRecorder recorder, AgentPromptRenderer renderer, ConversationStore memory,
-			PipelineBroadcaster broadcaster, @Value("${spring.ai.openai.api-key:}") String apiKey) {
-		this.chatClientBuilder = chatClientBuilder;
+			PipelineBroadcaster broadcaster) {
+		this.chatFactory = chatFactory;
 		this.registry = registry;
 		this.skills = skills;
 		this.recorder = recorder;
 		this.renderer = renderer;
 		this.memory = memory;
 		this.broadcaster = broadcaster;
-		this.aiEnabled = AgentApiKey.isConfigured(apiKey);
 	}
 
 	/** Root run without conversation memory (used by tests and any stateless caller). */
@@ -108,8 +111,8 @@ public class AgentExecutor {
 	 */
 	public AgentResult run(AgentDefinition agent, AgentContext context) {
 		guard(agent, context);
-		if (!aiEnabled) {
-			throw new BookingException("Agent AI is not enabled: please set OPENROUTER_API_KEY");
+		if (!chatFactory.connected()) {
+			throw new BookingException("No LLM provider connected: connect one in the Settings panel");
 		}
 		PipelineRecorder.RequestTrace trace = recorder.currentTrace();
 		List<AgentDefinition> callable = new ArrayList<>(registry.visibleSubAgents(agent.id()));
@@ -162,7 +165,7 @@ public class AgentExecutor {
 					.toList();
 			// Options must be ToolCallingChatOptions for ChatClient to merge tool callbacks
 			// into the prompt for the ChatModel (independent of the app's auto-config).
-			ChatClient chat = chatClientBuilder.clone()
+			ChatClient chat = chatFactory.chatClientBuilder()
 					.defaultOptions(DefaultToolCallingChatOptions.builder().build())
 					.build();
 			ChatClient.ChatClientRequestSpec prompt = chat.prompt();

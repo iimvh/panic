@@ -17,7 +17,8 @@ import org.junit.jupiter.api.Test;
 class VietnameseDigestWriterTest {
 
 	private final VietnameseDigestWriter writer = new VietnameseDigestWriter(
-			org.mockito.Mockito.mock(org.springframework.ai.chat.client.ChatClient.Builder.class), "key");
+			com.panic.core.agent.chat.provider.LlmProviderChatFactory.fixed(
+					org.mockito.Mockito.mock(org.springframework.ai.chat.client.ChatClient.Builder.class)));
 
 	private final List<NewsItem> candidates = List.of(
 			item("AI Việt Nam", "https://vnexpress.example/1", "technology", "VnExpress"),

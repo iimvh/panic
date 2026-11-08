@@ -9,13 +9,12 @@ import com.panic.agents.digest.feed.FeedReader;
 import com.panic.agents.digest.feed.FeedSourceRepository;
 import com.panic.agents.digest.feed.FeedSourceSeed;
 import com.panic.agents.digest.feed.NewsItemRepository;
+import com.panic.core.agent.chat.provider.LlmProviderChatFactory;
 import com.panic.agents.digest.digest.DigestRepository;
 import com.panic.agents.digest.feed.RomeFeedReader;
 import java.net.http.HttpClient;
 import java.time.Clock;
 import java.time.Duration;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -54,9 +53,8 @@ public class DigestModuleConfig {
 	}
 
 	@Bean
-	public DigestSummarizer digestSummarizer(ChatClient.Builder chatClientBuilder,
-			@Value("${spring.ai.openai.api-key:}") String apiKey) {
-		return new VietnameseDigestWriter(chatClientBuilder, apiKey);
+	public DigestSummarizer digestSummarizer(LlmProviderChatFactory chatFactory) {
+		return new VietnameseDigestWriter(chatFactory);
 	}
 
 	@Bean

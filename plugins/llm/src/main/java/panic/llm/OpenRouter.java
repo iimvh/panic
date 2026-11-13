@@ -26,7 +26,8 @@ public final class OpenRouter extends OpenAiCompatProvider {
       public Disposable apply(Context ctx, ProviderConfig cfg) {
         ctx.hook(Providers.STATUS, q -> new Providers.Status(ID, cfg.hasKey()));
         if (!cfg.hasKey()) return null;
-        OpenAiCompatClient client = new OpenAiCompatClient(ID, cfg.baseUrlOr(BASE_URL), cfg.apiKey());
+        OpenAiCompatClient client = new OpenAiCompatClient(ID, cfg.baseUrlOr(BASE_URL), cfg.apiKey(),
+            cfg.retryPolicy());
         ctx.provide(Providers.key(ID), new OpenRouter(client, ctx.signal()));
         return null;
       }

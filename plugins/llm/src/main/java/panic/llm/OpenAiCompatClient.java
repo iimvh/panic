@@ -17,57 +17,85 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
  * A ChatModel speaking the OpenAI chat-completions protocol ({@code POST {baseUrl}/chat/completions}),
  * which OpenRouter, Mistral and most other providers implement. Blocking, cancellable through the Signal.
+ *
+ * Transient failures (unreachable, 408, 429, 5xx) are retried by the {@link RetryPolicy}, honouring
+ * {@code Retry-After}; the waits end as soon as the Signal is cancelled. A stream is retried only until the
+ * provider has accepted it: a stream that breaks after deltas were handed out is never replayed.
  */
 public final class OpenAiCompatClient implements ChatModel {
 
   private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(15);
   private static final Duration REQUEST_TIMEOUT = Duration.ofMinutes(5);
+  private static final Set<Integer> RETRYABLE = Set.of(0, 408, 429, 500, 502, 503, 504);
 
   private final HttpClient http;
   private final String baseUrl;
   private final String apiKey;
   private final String providerName;
+  private final RetryPolicy retry;
 
   public OpenAiCompatClient(String providerName, String baseUrl, String apiKey) {
-    this(HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build(), providerName, baseUrl, apiKey);
+    this(providerName, baseUrl, apiKey, RetryPolicy.DEFAULT);
   }
 
-  public OpenAiCompatClient(HttpClient http, String providerName, String baseUrl, String apiKey) {
+  public OpenAiCompatClient(String providerName, String baseUrl, String apiKey, RetryPolicy retry) {
+    this(HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build(), providerName, baseUrl, apiKey, retry);
+  }
+
+  public OpenAiCompatClient(HttpClient http, String providerName, String baseUrl, String apiKey,
+      RetryPolicy retry) {
     this.http = Objects.requireNonNull(http, "http");
     this.providerName = Objects.requireNonNull(providerName, "providerName");
     this.baseUrl = stripSlash(Objects.requireNonNull(baseUrl, "baseUrl"));
     this.apiKey = Objects.requireNonNull(apiKey, "apiKey").strip();
+    this.retry = Objects.requireNonNull(retry, "retry");
   }
 
   // ---------------- chat ----------------
 
   @Override
   public Completion complete(ChatRequest request, Signal signal) {
-    HttpResponse<InputStream> response = send(post("/chat/completions", body(request, false)), signal);
-    JsonNode json = readJson(response, signal);
+    JsonNode json = readJson(sendChecked(post("/chat/completions", body(request, false)), signal), signal);
     JsonNode choice = json.path("choices").path(0);
+    JsonNode message = choice.path("message");
+    List<ToolCall> calls = new ArrayList<>();
+    int i = 0;
+    for (JsonNode call : message.path("tool_calls")) {
+      JsonNode fn = call.path("function");
+      calls.add(new ToolCall(call.path("id").asText("call_" + i), fn.path("name").asText(""),
+          arguments(fn.path("arguments"))));
+      i++;
+    }
     return new Completion(
-        Content.text(choice.path("message").path("content")),
+        Content.text(message.path("content")),
         json.path("model").asText(request.model()),
         textOrNull(choice.path("finish_reason")),
-        usage(json.path("usage")));
+        usage(json.path("usage")),
+        calls);
   }
 
   @Override
   public Completion stream(ChatRequest request, Signal signal, Consumer<String> onDelta) {
     Objects.requireNonNull(onDelta, "onDelta");
-    HttpResponse<InputStream> response = send(post("/chat/completions", body(request, true)), signal);
-    if (response.statusCode() / 100 != 2) throw error(response.statusCode(), readText(response, signal));
+    HttpResponse<InputStream> response = sendChecked(post("/chat/completions", body(request, true)), signal);
 
+    ToolCallParts calls = new ToolCallParts();
     StringBuilder text = new StringBuilder();
     String[] model = {request.model()};
     String[] finish = {null};
@@ -87,6 +115,7 @@ public final class OpenAiCompatClient implements ChatModel {
           text.append(piece);
           onDelta.accept(piece);
         }
+        calls.add(choice.path("delta").path("tool_calls"));
         String reason = textOrNull(choice.path("finish_reason"));
         if (reason != null) finish[0] = reason;
       });
@@ -97,7 +126,7 @@ public final class OpenAiCompatClient implements ChatModel {
       abort.dispose();
     }
     signal.throwIfCancelled();
-    return new Completion(text.toString(), model[0], finish[0], usage[0]);
+    return new Completion(text.toString(), model[0], finish[0], usage[0], calls.build());
   }
 
   // ---------------- plain REST ----------------
@@ -105,7 +134,7 @@ public final class OpenAiCompatClient implements ChatModel {
   /** GET {baseUrl}{path} with the bearer key, as JSON. Throws LlmException on non-2xx. */
   public JsonNode get(String path, Signal signal) {
     HttpRequest request = request(path).GET().build();
-    return readJson(send(request, signal), signal);
+    return readJson(sendChecked(request, signal), signal);
   }
 
   public String baseUrl() {
@@ -122,10 +151,38 @@ public final class OpenAiCompatClient implements ChatModel {
     body.put("model", request.model());
     ArrayNode messages = body.putArray("messages");
     for (Message m : request.messages()) {
-      messages.addObject().put("role", m.role().wire()).put("content", m.content());
+      ObjectNode out = messages.addObject().put("role", m.role().wire());
+      if (m.hasToolCalls() && m.content().isEmpty()) {
+        out.putNull("content");
+      } else {
+        out.put("content", m.content());
+      }
+      if (m.hasToolCalls()) {
+        ArrayNode calls = out.putArray("tool_calls");
+        for (ToolCall c : m.toolCalls()) {
+          ObjectNode call = calls.addObject().put("id", c.id()).put("type", "function");
+          call.putObject("function").put("name", c.name()).put("arguments", c.arguments());
+        }
+      }
+      if (m.toolCallId() != null) out.put("tool_call_id", m.toolCallId());
     }
     if (request.temperature() != null) body.put("temperature", request.temperature());
     if (request.maxTokens() != null) body.put("max_tokens", request.maxTokens());
+    if (!request.tools().isEmpty()) {
+      ArrayNode tools = body.putArray("tools");
+      for (ToolSpec t : request.tools()) {
+        ObjectNode fn = tools.addObject().put("type", "function").putObject("function");
+        fn.put("name", t.name()).put("description", t.description()).set("parameters", t.parameters());
+      }
+    }
+    ToolChoice choice = request.toolChoice();
+    if (choice != null) {
+      if (choice.name() == null) {
+        body.put("tool_choice", choice.mode());
+      } else {
+        body.putObject("tool_choice").put("type", "function").putObject("function").put("name", choice.name());
+      }
+    }
     if (stream) body.put("stream", true);
     return body;
   }
@@ -143,6 +200,60 @@ public final class OpenAiCompatClient implements ChatModel {
         .header("Accept", "application/json, text/event-stream");
     if (!apiKey.isEmpty()) b.header("Authorization", "Bearer " + apiKey);
     return b;
+  }
+
+  /**
+   * Sends {@code request} until it gets a 2xx response, retrying transient failures by {@link #retry}.
+   * Throws LlmException for a final failure and CancelledException when the signal is cancelled.
+   */
+  private HttpResponse<InputStream> sendChecked(HttpRequest request, Signal signal) {
+    for (int attempt = 0; ; attempt++) {
+      HttpResponse<InputStream> response;
+      try {
+        response = send(request, signal);
+      } catch (LlmException e) {
+        if (attempt >= retry.maxRetries()) throw e;
+        pause(retry.delay(attempt), signal);
+        continue;
+      }
+      int status = response.statusCode();
+      if (status / 100 == 2) return response;
+      String body = readText(response, signal);
+      if (!RETRYABLE.contains(status) || attempt >= retry.maxRetries()) throw error(status, body);
+      Duration wait = retry.delay(attempt);
+      Duration asked = retryAfter(response);
+      if (asked != null && asked.compareTo(wait) > 0) wait = retry.cap(asked);
+      pause(wait, signal);
+    }
+  }
+
+  /** Waits {@code delay}, returning early (with CancelledException) when the signal is cancelled. */
+  private static void pause(Duration delay, Signal signal) {
+    signal.throwIfCancelled();
+    if (delay.isZero()) return;
+    CountDownLatch woken = new CountDownLatch(1);
+    Disposable wake = signal.onCancel(woken::countDown);
+    try {
+      woken.await(delay.toMillis(), TimeUnit.MILLISECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw cancelled(e);
+    } finally {
+      wake.dispose();
+    }
+    signal.throwIfCancelled();
+  }
+
+  /** The {@code Retry-After} header in seconds; null when absent or an HTTP date (not worth parsing). */
+  private static Duration retryAfter(HttpResponse<?> response) {
+    String value = response.headers().firstValue("Retry-After").orElse(null);
+    if (value == null) return null;
+    try {
+      long seconds = Long.parseLong(value.strip());
+      return seconds < 0 ? null : Duration.ofSeconds(seconds);
+    } catch (NumberFormatException e) {
+      return null;
+    }
   }
 
   /** Sends asynchronously so that cancelling the signal (or interrupting the thread) aborts the exchange. */
@@ -170,7 +281,6 @@ public final class OpenAiCompatClient implements ChatModel {
 
   private JsonNode readJson(HttpResponse<InputStream> response, Signal signal) {
     String text = readText(response, signal);
-    if (response.statusCode() / 100 != 2) throw error(response.statusCode(), text);
     JsonNode json = Json.parseOrNull(text);
     if (json == null) throw new LlmException(response.statusCode(), providerName + " answered non-JSON");
     return json;
@@ -196,6 +306,64 @@ public final class OpenAiCompatClient implements ChatModel {
     if (detail == null || detail.isBlank()) detail = "(no detail)";
     if (detail.length() > 500) detail = detail.substring(0, 500) + "...";
     return new LlmException(status, providerName + " answered " + status + ": " + detail);
+  }
+
+  /** Tool arguments are a JSON string by spec, but some providers send the object itself. */
+  private static String arguments(JsonNode args) {
+    if (args == null || args.isNull() || args.isMissingNode()) return "{}";
+    return args.isTextual() ? args.asText() : args.toString();
+  }
+
+  /**
+   * Rebuilds tool calls from stream deltas. OpenAI sends the id and name once, then the arguments in
+   * pieces, keyed by {@code index}; Mistral sends whole calls without an index. A delta without index is
+   * matched by id, or continues the last call when it has no id either.
+   */
+  private static final class ToolCallParts {
+
+    private final List<String[]> parts = new ArrayList<>(); // {id, name, arguments}
+    private final Map<Integer, String[]> byIndex = new HashMap<>();
+
+    void add(JsonNode deltas) {
+      for (JsonNode d : deltas) {
+        String id = textOrNull(d.path("id"));
+        String[] part = find(d.path("index"), id);
+        if (id != null && !id.isEmpty()) part[0] = id;
+        JsonNode fn = d.path("function");
+        String name = textOrNull(fn.path("name"));
+        if (name != null && !name.isEmpty()) part[1] = name;
+        JsonNode args = fn.path("arguments");
+        if (!args.isMissingNode() && !args.isNull()) part[2] += args.isTextual() ? args.asText() : args.toString();
+      }
+    }
+
+    private String[] find(JsonNode index, String id) {
+      if (index.canConvertToInt()) {
+        return byIndex.computeIfAbsent(index.asInt(), k -> create());
+      }
+      if (id != null) {
+        for (String[] p : parts) {
+          if (id.equals(p[0])) return p;
+        }
+        return create();
+      }
+      return parts.isEmpty() ? create() : parts.get(parts.size() - 1);
+    }
+
+    private String[] create() {
+      String[] p = {null, "", ""};
+      parts.add(p);
+      return p;
+    }
+
+    List<ToolCall> build() {
+      List<ToolCall> out = new ArrayList<>();
+      for (int i = 0; i < parts.size(); i++) {
+        String[] p = parts.get(i);
+        out.add(new ToolCall(p[0] == null ? "call_" + i : p[0], p[1], p[2]));
+      }
+      return out;
+    }
   }
 
   private static Usage usage(JsonNode u) {

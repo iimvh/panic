@@ -31,6 +31,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import panic.chat.Chat;
 import panic.chat.ChatConfig;
 import panic.chat.ChatPlugin;
 import panic.chat.Conversations;
@@ -122,6 +123,7 @@ class WebPluginTest {
   private ConfigHandle<Boolean> connected;
   private ConfigHandle<LlmConfig> llm;
   private ConfigHandle<WebConfig> web;
+  private ConfigHandle<ChatConfig> chat;
   private volatile String base;
 
   @BeforeEach
@@ -134,7 +136,7 @@ class WebPluginTest {
     }, true);
     llm = root.plugin("llm", new LlmPlugin(), new LlmConfig("fake", "m1", null, null));
     root.plugin("conversations", Conversations.inMemory());
-    root.plugin("chat", new ChatPlugin(), new ChatConfig(null, 0));
+    chat = root.plugin("chat", new ChatPlugin(), new ChatConfig(null, 0));
     root.plugin("settings", ctx -> {
       Commands.command(ctx, "provider [id]", "", c -> llm.update(llm.config().withProvider(c.arg("id"))));
       Commands.command(ctx, "model [id]", "", c -> llm.update(llm.config().withModel(c.arg("id"))));
@@ -209,6 +211,24 @@ class WebPluginTest {
 
     connected.update(false);
     assertEquals("unavailable", events(send("POST", "/api/chat", "{\"session\":\"s1\",\"text\":\"hi\"}").body()).get(0).name());
+  }
+
+  @Test
+  void reviewVerdictsAreStreamedBetweenTheAttempts() throws Exception {
+    chat.update(new ChatConfig(null, 0, true, 0, 0, 0, 0, 0, null, null, 1));
+    root.plugin("reviewer", ctx -> {
+      ctx.hook(Chat.REVIEW, r -> new Chat.Verdict(r.attempt() > 1, r.attempt() > 1 ? "fine" : "no tests", null));
+      return null;
+    });
+    List<Event> ev = events(send("POST", "/api/chat", "{\"session\":\"r\",\"text\":\"hi\"}").body());
+    assertEquals(List.of("delta", "delta", "review", "delta", "delta", "review", "done"),
+        ev.stream().map(Event::name).toList());
+    JsonNode rejected = ev.get(2).data();
+    assertFalse(rejected.path("pass").asBoolean());
+    assertEquals("no tests", rejected.path("reason").asText());
+    assertEquals(1, rejected.path("attempt").asInt());
+    assertTrue(ev.get(5).data().path("pass").asBoolean());
+    assertEquals("fine", ev.get(6).data().path("review").asText());
   }
 
   /** Offers {@code echo} with risk write, so every call of it asks the browser. */

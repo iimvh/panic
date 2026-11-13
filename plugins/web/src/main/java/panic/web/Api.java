@@ -169,7 +169,9 @@ final class Api {
     try {
       Optional<Chat.Reply> reply = Chat.ask(ctx,
           new Chat.Ask(session, text, both, d -> sse.send("delta", Json.object().put("text", d)),
-              step -> sse.send("tool", step(step))));
+              step -> sse.send("tool", step(step)),
+              r -> sse.send("review", Json.object().put("attempt", r.attempt()).put("pass", r.verdict().pass())
+                  .put("reason", r.verdict().reason()))));
       if (reply.isEmpty()) {
         sse.send("unavailable", Json.object().put("message", "no LLM connected"));
         return;

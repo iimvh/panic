@@ -116,6 +116,7 @@ every pull request. A change is not done until it passes.
 | `plugins/llm` | `openrouter`, `mistral`, `llm`, `settings` | [README](plugins/llm/README.md) |
 | `plugins/chat` | `conversations`, `chat` | [README](plugins/chat/README.md) |
 | `plugins/tools` | `tools`, `permissions`, `files`, `clock` | [README](plugins/tools/README.md) |
+| `plugins/todo` | `todo` | [README](plugins/todo/README.md) |
 | `plugins/cli` | `cli` | [README](plugins/cli/README.md) |
 | `plugins/web` | `web` | [README](plugins/web/README.md) |
 | `app` | none (bootstraps) | `Panic`, `PluginHost`, `ConfigLoader`, `ConfigWatch`, `Main` |

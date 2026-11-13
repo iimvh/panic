@@ -84,6 +84,7 @@ export OPENROUTER_API_KEY=sk-or-...   # and/or MISTRAL_API_KEY
 | `chat.systemPrompt` | System message sent with every request. |
 | `chat.maxHistory` | Number of past messages sent with each request. `0` sends them all. |
 | `conversations.dir`, `conversations.persist` | Where chat history is saved (default `.panic/conversations`, one JSON lines file per conversation), so it survives a restart. `persist: false` keeps it in memory only. |
+| `todo.dir`, `todo.maxItems` | Where the agent's task lists are saved (default `.panic/todo`) and how many tasks one list may hold. |
 | `web.enabled`, `web.host`, `web.port` | Start the web UI with the REPL, and where it listens. `--web` and `--serve` turn it on regardless. |
 | `settings`, `conversations`, `cli`, ... | Any plugin can be turned off with `false`, for example `"settings": false` removes the `/provider` and `/model` commands. |
 
@@ -137,6 +138,7 @@ Plain text runs `ask`. In the REPL, commands start with `/`. On the command line
 | `provider [id]`, `model [id]` | `settings` | always |
 | `reset` | `conversations` | always |
 | `tools`, `tool <name> [args...]` | `tools` | always. `tools` shows each tool's risk and permission. `args` is a JSON object, e.g. `tool read_file {"path":"README.md"}` |
+| `todo` | `todo` | always. Shows this session's task list |
 | `help [command]`, `exit` | `cli` | always (`exit` in the REPL only) |
 
 `/help` lists only the commands that are available at that moment. One-shot mode exits with code `0` on success, `1` on failure and `2` for an unknown command or bad arguments. Ctrl+C shuts down cleanly in both modes.
@@ -194,6 +196,7 @@ Solid lines show ownership in the tree. Dotted lines show the services and hooks
 | `chat` | Requires `llm` and `conversations`. Answers the `chat.ask` hook with an agent loop: it offers the registered tools, runs the calls and feeds the results back until the model answers (limits in its config). Emits `chat.step` and `chat.turn`, and declares `ask`. |
 | `settings` | Declares `provider` and `model`, which change the `llm` config at runtime through the `Configs` service. |
 | `tools`, `permissions`, `files`, `clock` | `tools` declares the `tools` and `tool` commands. `permissions` answers the `tool.policy` hook (allow / ask / deny per risk and per tool); calls it asks about go to front-ends through `tool.approve`. `files` (`read_file`, `list_dir`, `write_file`, confined to `files.root`) and `clock` (`time`) register tools through the `tool.list` / `tool.run` hooks. |
+| `todo` | A task list per conversation, saved under `todo.dir`. Registers `todo_read` and `todo_write` and adds the list to the system prompt (`chat.context`), so the agent keeps track of multi-step work across turns and restarts. |
 | `config-watch` | Watches `panic.json` and updates only the configs that changed. Runs in interactive mode only. |
 | `web` | The web front-end. It serves the UI and an HTTP + SSE API built only on hooks and commands. |
 | `cli` | The terminal front-end. It runs whatever commands are declared right now, and requires `App`, so it starts once the rest of the tree is installed. |
@@ -288,6 +291,8 @@ A module may declare several plugins. For example `:llm` declares `openrouter`, 
 ├── plugins/
 │   ├── llm/          panic.llm      openrouter, mistral, llm, settings; OpenAiCompatClient (SSE, cancellable)
 │   ├── chat/         panic.chat     conversations, chat; Chat (hook ASK, event TURN)
+│   ├── tools/        panic.tools    tools, permissions, files, clock; Tools (hooks LIST, RUN, POLICY, APPROVE)
+│   ├── todo/         panic.todo     todo: todo_read, todo_write and the Tasks section
 │   ├── cli/          panic.cli      cli: REPL and the one-shot runner
 │   └── web/          panic.web      web: HTTP + SSE API, static files; builds and packs ui/
 ├── ui/                              SvelteKit SPA: lib/api.ts, lib/chat.svelte.ts, lib/markdown.ts, components/

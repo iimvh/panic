@@ -18,10 +18,11 @@
     "compact": true
   },
   "conversations": { "dir": ".panic/conversations", "persist": true },
+  "todo": { "dir": ".panic/todo", "maxItems": 50 },
   "files": { "root": ".", "maxBytes": 65536, "maxWriteBytes": 1048576 },
   "permissions": {
     "risks": { "read": "allow", "write": "ask", "exec": "ask", "network": "ask" },
-    "tools": {},
+    "tools": { "todo_write": "allow" },
     "askTimeoutSeconds": 120
   },
   "web": { "enabled": false, "host": "127.0.0.1", "port": 8080 }

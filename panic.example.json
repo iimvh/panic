@@ -20,6 +20,7 @@
   },
   "conversations": { "dir": ".panic/conversations", "persist": true },
   "todo": { "dir": ".panic/todo", "maxItems": 50 },
+  "tracing": { "dir": ".panic/traces", "keepDays": 30, "maxTraces": 500 },
   "checks": {
     "dir": ".",
     "checks": { "test": { "command": ["./gradlew", "check", "-PskipUi"], "timeoutSeconds": 600 } }

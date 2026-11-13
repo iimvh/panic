@@ -84,6 +84,7 @@ export OPENROUTER_API_KEY=sk-or-...   # and/or MISTRAL_API_KEY
 | `chat.systemPrompt` | System message sent with every request. |
 | `chat.maxHistory` | Number of past messages sent with each request. `0` sends them all. |
 | `conversations.dir`, `conversations.persist` | Where chat history is saved (default `.panic/conversations`, one JSON lines file per conversation), so it survives a restart. `persist: false` keeps it in memory only. |
+| `tracing.dir`, `tracing.keepDays`, `tracing.maxTraces` | Where the trace of every turn is saved (default `.panic/traces`, one JSON lines file per conversation), how many days to keep it (default 30, `0` = forever) and how many traces to keep per conversation (default 500). `"tracing": false` keeps none. |
 | `todo.dir`, `todo.maxItems` | Where the agent's task lists are saved (default `.panic/todo`) and how many tasks one list may hold. |
 | `checks.checks`, `checks.dir` | Commands the agent may run to verify its work (`check` tool), by name, e.g. `"test": {"command": ["./gradlew", "test"]}`. Asked before each run unless `permissions.tools.check` is `allow`. |
 | `chat.maxReviews` | How many times an answer rejected by the reviewer goes back to the model (default 1, `0` = no review). Answers are reviewed only when the conversation has acceptance criteria. |
@@ -142,6 +143,7 @@ Plain text runs `ask`. In the REPL, commands start with `/`. On the command line
 | `tools`, `tool <name> [args...]` | `tools` | always. `tools` shows each tool's risk and permission. `args` is a JSON object, e.g. `tool read_file {"path":"README.md"}` |
 | `todo` | `todo` | always. Shows this session's task list and acceptance criteria |
 | `checks` | `checks` | always. Lists the configured checks |
+| `traces [count]`, `trace <id>`, `stats` | `tracing` | always. This session's latest traces, one trace as a tree of timed spans (an id prefix is enough), and latency, tokens and tool use over the session |
 | `help [command]`, `exit` | `cli` | always (`exit` in the REPL only) |
 
 `/help` lists only the commands that are available at that moment. One-shot mode exits with code `0` on success, `1` on failure and `2` for an unknown command or bad arguments. Ctrl+C shuts down cleanly in both modes.
@@ -201,6 +203,7 @@ Solid lines show ownership in the tree. Dotted lines show the services and hooks
 | `tools`, `permissions`, `files`, `clock` | `tools` declares the `tools` and `tool` commands. `permissions` answers the `tool.policy` hook (allow / ask / deny per risk and per tool); calls it asks about go to front-ends through `tool.approve`. `files` (`read_file`, `list_dir`, `write_file`, confined to `files.root`) and `clock` (`time`) register tools through the `tool.list` / `tool.run` hooks. |
 | `todo` | A plan per conversation (tasks and acceptance criteria), saved under `todo.dir`. Registers `todo_read` and `todo_write`, adds the plan to the system prompt (`chat.context`) and answers `todo.plan`, so the agent keeps track of multi-step work across turns and restarts. |
 | `checks`, `review` | `checks` registers the `check` tool, which runs commands configured in its section (tests, build) and returns the result. `review` answers `chat.review`: when the conversation has acceptance criteria, a separate model call judges the final answer against them, and a rejection goes back to the agent. |
+| `tracing` | Keeps the trace of every turn (the turn, each model call, tool run, review and compaction, timed, with tokens) from the `trace.span` event, saved under `tracing.dir`. Answers `trace.get` / `trace.list`, which the web UI uses to show an answer's waterfall, and declares `traces`, `trace` and `stats`. |
 | `config-watch` | Watches `panic.json` and updates only the configs that changed. Runs in interactive mode only. |
 | `web` | The web front-end. It serves the UI and an HTTP + SSE API built only on hooks and commands. |
 | `cli` | The terminal front-end. It runs whatever commands are declared right now, and requires `App`, so it starts once the rest of the tree is installed. |
@@ -282,6 +285,7 @@ The plugin's config is now the `"memory": { "limit": 50 }` section of `panic.jso
 | z (`context.Context`) | `provide` / `requires` services, `hook` / `bail`, `on` / `emit` events, `spawn` tasks, child plugins |
 | `panic.command.Commands` | Declare commands that live as long as the plugin |
 | `panic.plugin.Configs` | Read or change another plugin's config at runtime |
+| `panic.trace.Trace` | Emit timed spans (`Trace.open`), read traces back (`Trace.GET`, `Trace.LIST`) |
 | `panic.plugin.App` | The terminal and `exit()`. It is provided last, so requiring it means "start once the whole tree is installed" |
 | `:llm`, `:chat` | `Llm.KEY`, `Providers.key(id)`, `Chat.ASK`, `Chat.TURN`, `Conversations.KEY` |
 
@@ -292,12 +296,14 @@ A module may declare several plugins. For example `:llm` declares `openrouter`, 
 ```text
 ├── sdk/              panic.command  Commands, Command (spec parsing, argument binding), Session, Out
 │                     panic.plugin   PluginSpec, PluginSet, Configs, App
+│                     panic.trace    Trace (event SPAN, hooks GET, LIST), Span, OpenSpan
 ├── plugins/
 │   ├── llm/          panic.llm      openrouter, mistral, llm, settings; OpenAiCompatClient (SSE, cancellable)
 │   ├── chat/         panic.chat     conversations, chat; Chat (hook ASK, event TURN)
 │   ├── tools/        panic.tools    tools, permissions, files, clock; Tools (hooks LIST, RUN, POLICY, APPROVE)
 │   ├── todo/         panic.todo     todo: todo_read, todo_write and the Tasks section
 │   ├── verify/       panic.verify   checks (check tool), review (answers chat.review)
+│   ├── trace/        panic.trace.store  tracing: keeps spans, traces/trace/stats commands
 │   ├── cli/          panic.cli      cli: REPL and the one-shot runner
 │   └── web/          panic.web      web: HTTP + SSE API, static files; builds and packs ui/
 ├── ui/                              SvelteKit SPA: lib/api.ts, lib/chat.svelte.ts, lib/markdown.ts, components/

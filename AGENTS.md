@@ -16,6 +16,7 @@ integration is a plugin. Plugins never call each other directly; they meet throu
 | **Command** | Something a user can run from the CLI or the web UI. | `Commands.command(ctx, "name <arg> [opt] [rest...]", "description", call -> ...)` |
 | **Config** | Anything a user may tune. One immutable record per plugin, read from the `panic.json` section named after the plugin. | `PluginSpec.of(name, ConfigType.class, DEFAULT, Factory::new)` |
 | **Task** | Background or blocking work. | `ctx.spawn(name, signal -> ...)` |
+| **Span** | Work worth timing (a model call, a tool run). Emitted when it ends, stored by `tracing` if installed. | `Trace.open(ctx, traceId, parentId, name)` → `attr(...)`, `end()` / `fail(e)` |
 
 Everything a plugin creates goes through its `Context`, so z disposes it when the plugin stops: in reverse
 order, exactly once, after any call still running.
@@ -112,12 +113,13 @@ every pull request. A change is not done until it passes.
 
 | Module | Plugins | Contract |
 | --- | --- | --- |
-| `sdk` | none | [`panic.command`](sdk/src/main/java/panic/command), [`panic.plugin`](sdk/src/main/java/panic/plugin) |
+| `sdk` | none | [`panic.command`](sdk/src/main/java/panic/command), [`panic.plugin`](sdk/src/main/java/panic/plugin), [`panic.trace`](sdk/src/main/java/panic/trace) |
 | `plugins/llm` | `openrouter`, `mistral`, `llm`, `settings` | [README](plugins/llm/README.md) |
 | `plugins/chat` | `conversations`, `chat` | [README](plugins/chat/README.md) |
 | `plugins/tools` | `tools`, `permissions`, `files`, `clock` | [README](plugins/tools/README.md) |
 | `plugins/todo` | `todo` | [README](plugins/todo/README.md) |
 | `plugins/verify` | `checks`, `review` | [README](plugins/verify/README.md) |
+| `plugins/trace` | `tracing` | [README](plugins/trace/README.md) |
 | `plugins/cli` | `cli` | [README](plugins/cli/README.md) |
 | `plugins/web` | `web` | [README](plugins/web/README.md) |
 | `app` | none (bootstraps) | `Panic`, `PluginHost`, `ConfigLoader`, `ConfigWatch`, `Main` |

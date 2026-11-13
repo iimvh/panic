@@ -70,6 +70,7 @@ class CliTest {
   private static ObjectNode overrides(boolean repl) {
     ObjectNode o = Json.object();
     o.putObject("cli").put("repl", repl);
+    o.putObject("conversations").put("persist", false); // no history left behind between runs
     return o;
   }
 

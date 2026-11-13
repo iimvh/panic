@@ -31,6 +31,9 @@ panic.json
 Thumbs.db
 desktop.ini
 
+# ---- Panic data (saved conversations, task lists) ----
+.panic/
+
 # ---- Logs ----
 logs/
 *.log

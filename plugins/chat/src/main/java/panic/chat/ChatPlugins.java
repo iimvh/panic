@@ -10,7 +10,8 @@ public final class ChatPlugins implements PluginSet {
   @Override
   public List<PluginSpec<?>> plugins() {
     return List.of(
-        PluginSpec.of("conversations", Conversations::inMemory),
+        PluginSpec.of("conversations", ConversationsConfig.class, ConversationsConfig.DEFAULT,
+            () -> new ConversationsPlugin(System.err::println)),
         PluginSpec.of("chat", ChatConfig.class, ChatConfig.DEFAULT, ChatPlugin::new));
   }
 }

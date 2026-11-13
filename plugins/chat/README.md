@@ -6,11 +6,28 @@ Conversation history and the chat bot, an agent loop that calls tools.
 
 | Name | Config | Requires | Provides / registers |
 | --- | --- | --- | --- |
-| `conversations` | none | none | service `Conversations.KEY` (in memory); command `reset` |
+| `conversations` | `ConversationsConfig { dir = ".panic/conversations", persist = true }` | none | service `Conversations.KEY` (on disk, or in memory with `persist: false`); command `reset` |
 | `chat` | `ChatConfig { systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats, contextTokens, compact }` | `Llm.KEY`, `Conversations.KEY` | hook `Chat.ASK`; events `Chat.TURN`, `Chat.STEP`; command `ask`. Collects hook `Chat.CONTEXT` |
 
 `conversations` does not depend on the LLM, so history survives a provider or model switch (which restarts
 `chat`).
+
+## Storage
+
+Each conversation is a JSON lines file in `dir` (resolved against the app's working directory), named after the
+conversation id (`repl.jsonl`), or `~` + the id in base64url when the id is not a short `[A-Za-z0-9_-]` name. A
+first `{"summary": ...}` line holds the compaction summary; every other line is a message
+(`{"role", "content", "toolCalls"?, "toolCallId"?}`).
+
+- **Loaded on first use.** A conversation is read the first time it is asked for after a start.
+- **Written through.** An exchange is appended in one write, under the conversation's lock, so concurrent
+  appends never interleave and a crash leaves at most a torn last line. A compaction rewrites the file through
+  a temporary file and an atomic rename. `reset` deletes the file.
+- **Damage is skipped, not fatal.** A line that is not a valid message is skipped with a warning, and so is a
+  turn whose tool calls lack their results (a provider would reject it). The file is then rewritten clean.
+- **Failures are warnings.** If the directory or a file cannot be written, the conversation goes on in memory
+  and a warning is printed.
+- **One process per directory.** Two apps sharing `dir` would interleave their writes.
 
 ## The agent loop
 

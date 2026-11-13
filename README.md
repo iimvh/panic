@@ -83,6 +83,7 @@ export OPENROUTER_API_KEY=sk-or-...   # and/or MISTRAL_API_KEY
 | `llm.temperature`, `llm.maxTokens` | Default options. Leave them out to use the provider's defaults. |
 | `chat.systemPrompt` | System message sent with every request. |
 | `chat.maxHistory` | Number of past messages sent with each request. `0` sends them all. |
+| `conversations.dir`, `conversations.persist` | Where chat history is saved (default `.panic/conversations`, one JSON lines file per conversation), so it survives a restart. `persist: false` keeps it in memory only. |
 | `web.enabled`, `web.host`, `web.port` | Start the web UI with the REPL, and where it listens. `--web` and `--serve` turn it on regardless. |
 | `settings`, `conversations`, `cli`, ... | Any plugin can be turned off with `false`, for example `"settings": false` removes the `/provider` and `/model` commands. |
 
@@ -189,7 +190,7 @@ Solid lines show ownership in the tree. Dotted lines show the services and hooks
 | --- | --- |
 | `openrouter`, `mistral` | Provide `llm.provider.<id>` while they have a key. |
 | `llm` | Installs `active:<provider>`, which requires that provider and provides `llm` with the chosen model and options. |
-| `conversations` | Keeps chat history in memory. It does not depend on the LLM, so history survives a switch. |
+| `conversations` | Keeps chat history, saved on disk under `conversations.dir`, so it survives a restart. It does not depend on the LLM, so history also survives a provider or model switch. |
 | `chat` | Requires `llm` and `conversations`. Answers the `chat.ask` hook with an agent loop: it offers the registered tools, runs the calls and feeds the results back until the model answers (limits in its config). Emits `chat.step` and `chat.turn`, and declares `ask`. |
 | `settings` | Declares `provider` and `model`, which change the `llm` config at runtime through the `Configs` service. |
 | `tools`, `permissions`, `files`, `clock` | `tools` declares the `tools` and `tool` commands. `permissions` answers the `tool.policy` hook (allow / ask / deny per risk and per tool); calls it asks about go to front-ends through `tool.approve`. `files` (`read_file`, `list_dir`, `write_file`, confined to `files.root`) and `clock` (`time`) register tools through the `tool.list` / `tool.run` hooks. |

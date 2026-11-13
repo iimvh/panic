@@ -44,6 +44,13 @@ class PluginHostTest {
     return new ConfigLoader(n -> null).parse(text);
   }
 
+  /** Keeps the discovered conversations store off the disk. */
+  private static ObjectNode memoryOnly() {
+    ObjectNode o = Json.object();
+    o.putObject("conversations").put("persist", false);
+    return o;
+  }
+
   private Panic start(List<PluginSpec<?>> specs, String file, ObjectNode overrides) throws Exception {
     panic = Panic.start(specs, json(file), overrides, new Panic.Process(InputStream.nullInputStream(), t -> { }, () -> { }),
         (s, e) -> { }, warnings::add);
@@ -89,7 +96,7 @@ class PluginHostTest {
   @Test
   void runtimeChangesSurviveEditsOfOtherSections() throws Exception {
     Panic p = start(Panic.discover(), "{\"llm\": {\"provider\": \"openrouter\", \"model\": \"from-file\"}, \"cli\": {\"repl\": false}}",
-        Json.object());
+        memoryOnly());
     Configs configs = configsOf(p);
     configs.update("llm", configs.get("llm", LlmConfig.class).withModel("runtime"));
     p.apply(json("{\"llm\": {\"provider\": \"openrouter\", \"model\": \"from-file\"}, \"cli\": {\"repl\": false},"

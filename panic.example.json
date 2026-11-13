@@ -17,6 +17,7 @@
     "contextTokens": 32000,
     "compact": true
   },
+  "conversations": { "dir": ".panic/conversations", "persist": true },
   "files": { "root": ".", "maxBytes": 65536, "maxWriteBytes": 1048576 },
   "permissions": {
     "risks": { "read": "allow", "write": "ask", "exec": "ask", "network": "ask" },

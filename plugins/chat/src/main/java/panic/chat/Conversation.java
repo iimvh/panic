@@ -26,12 +26,13 @@ public final class Conversation {
   }
 
   /**
-   * The last {@code max} messages, never starting with an assistant message (a reply without its question
-   * confuses models). {@code max <= 0} means everything.
+   * The last {@code max} messages, always starting with a user message: a reply without its question confuses
+   * models, and a tool result without the call it answers is rejected by providers. {@code max <= 0} means
+   * everything.
    */
   public synchronized List<Message> recent(int max) {
     int from = max <= 0 ? 0 : Math.max(0, messages.size() - max);
-    while (from < messages.size() && messages.get(from).role() == Role.ASSISTANT) from++;
+    while (from < messages.size() && messages.get(from).role() != Role.USER) from++;
     return List.copyOf(messages.subList(from, messages.size()));
   }
 

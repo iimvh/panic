@@ -5,4 +5,5 @@ plugins {
 
 dependencies {
     api(project(":llm"))
+    api(project(":tools"))
 }

@@ -1,85 +1,47 @@
-# Build output
-target/
-**/target/
+# ---- Gradle / Java ----
+.gradle/
 build/
+.kotlin/
 out/
 *.class
-*.jar
-!.mvn/wrapper/maven-wrapper.jar
+hs_err_pid*
+replay_pid*
+local.properties
+# gradle/wrapper/gradle-wrapper.jar and gradlew(.bat) MUST be committed.
 
-# Node / frontend
-node_modules/
-dist/
-.vite/
-*.local
-
-# Environment & secrets
+# ---- Local config (holds API keys) ----
+panic.json
 .env
 .env.*
 !.env.example
 *.pem
 *.key
 
-# IDE / editor
+# ---- IDE / editor ----
 .idea/
 *.iml
-*.ipr
-*.iws
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
 *.swp
 *~
 
-# OS
+# ---- OS ----
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# Local H2 database (file-based; conversation memory + meeting data)
-data/
-*.mv.db
-*.trace.db
-
-# Logs
+# ---- Logs ----
 logs/
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
 
-# Python
-venv/
-.venv/
-__pycache__/
-*.py[cod]
-
-# AI tooling: local caches, plans and session state
+# ---- AI tooling: local caches, plans and session state ----
 .agents/
-skills-lock.json
 .cache/
 PLAN.md
 TODO.md
 SCRATCH*.md
 AGENTS.md
-.kilo/*
-!.kilo/command/
-!.kilo/agent/
-!.kilo/command/.gitkeep
-!.kilo/agent/.gitkeep
-
-# Local machine-specific config (contains absolute paths)
+.claude/
 .mcp.json
-opencode.jsonc
-dev.ps1
-kilo.json
-agents/
-.scratch/
-UI-TEMPLATE.png
-ui-wireframe.md
-.opencode/
-figma-plugin/
-web/minimal.md
-wireguard/
-screenshots/
+.code-review-graph/

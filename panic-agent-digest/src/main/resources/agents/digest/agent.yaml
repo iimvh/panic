@@ -1,6 +1,0 @@
-id: digest
-description: Digest — summarizes and presents daily tech news from web-search results, replying in the user's language.
-prompt: system.md
-skills: []
-subAgents: []
-hubTools: [web-search]

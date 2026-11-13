@@ -1,0 +1,16 @@
+{
+  "providers": {
+    "openrouter": { "apiKey": "${OPENROUTER_API_KEY}" },
+    "mistral": { "apiKey": "${MISTRAL_API_KEY}" }
+  },
+  "llm": {
+    "provider": "openrouter",
+    "model": "meta-llama/llama-3.3-70b-instruct:free",
+    "temperature": 0.2,
+    "maxTokens": 4096
+  },
+  "chat": {
+    "systemPrompt": "You are Panic, a concise and helpful assistant.",
+    "maxHistory": 40
+  }
+}

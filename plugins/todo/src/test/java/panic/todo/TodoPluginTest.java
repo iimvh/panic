@@ -74,6 +74,16 @@ class TodoPluginTest {
   }
 
   @Test
+  void aDeletedConversationTakesItsPlanWithIt() {
+    call("a", "todo_write", TWO);
+    call("b", "todo_write", TWO);
+    root.emit(panic.chat.Conversations.DELETED, new panic.chat.Conversations.Deleted("a"));
+    assertFalse(Files.exists(dir.resolve("a.json")));
+    assertEquals(ToolResult.ok("no tasks"), call("a", "todo_read", "{}"));
+    assertTrue(Files.exists(dir.resolve("b.json")), "other conversations keep theirs");
+  }
+
+  @Test
   void listsSurviveARestart() {
     call("a", "todo_write", TWO);
     root.dispose();

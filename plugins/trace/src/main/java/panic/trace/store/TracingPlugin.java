@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Consumer;
+import panic.chat.Conversations;
 import panic.command.Commands;
 import panic.trace.Span;
 import panic.trace.Trace;
@@ -81,6 +82,12 @@ public final class TracingPlugin implements ConfigPlugin<TracingConfig> {
       }
       store.add(done);
       if (dir != null) pending.add(done);
+    });
+
+    // a deleted conversation takes its traces with it, those still waiting to be written included
+    ctx.on(Conversations.DELETED, d -> {
+      pending.removeIf(t -> t.conversationId().equals(d.id()));
+      store.delete(d.id());
     });
 
     ctx.hook(Trace.GET, q -> store.find(q.conversationId(), q.traceId())

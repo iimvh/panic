@@ -160,6 +160,23 @@ class TracingPluginTest {
   }
 
   @Test
+  void aDeletedConversationTakesItsTracesWithIt() throws Exception {
+    ConfigHandle<TracingConfig> h = tracing();
+    long now = TraceStore.nowMicros();
+    turn("c", "t1", now, "gone soon");
+    turn("keep", "t2", now, "stays");
+    awaitLines(file("c"), 2);
+    root.emit(panic.chat.Conversations.DELETED, new panic.chat.Conversations.Deleted("c"));
+    assertFalse(Files.exists(file("c")));
+    assertTrue(root.bail(Trace.LIST, new Trace.ListQuery("c", 0)).orElseThrow().roots().isEmpty());
+
+    turn("c", "t3", now + 1, "a new chat with the same id");
+    h.dispose();
+    assertEquals(2, Files.readAllLines(file("c")).size(), "only the new trace");
+    assertEquals(2, Files.readAllLines(file("keep")).size());
+  }
+
+  @Test
   void tracesRecordedBeforeTheFileIsReadAreMergedWithIt() throws Exception {
     ConfigHandle<TracingConfig> h = tracing();
     long now = TraceStore.nowMicros();

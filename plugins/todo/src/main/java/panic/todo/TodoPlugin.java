@@ -21,6 +21,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import panic.chat.Chat;
+import panic.chat.Conversations;
 import panic.command.Commands;
 import panic.llm.Json;
 import panic.llm.ToolSpec;
@@ -63,6 +64,8 @@ public final class TodoPlugin implements ConfigPlugin<TodoConfig> {
       Todo.Plan plan = store.read(q.conversationId());
       return plan.isEmpty() ? null : plan;
     });
+    // a deleted conversation takes its plan with it
+    ctx.on(Conversations.DELETED, d -> store.delete(d.id()));
     Commands.command(ctx, "todo", "show this session's task list and acceptance criteria", call -> {
       Todo.Plan plan = store.read(call.session().id());
       call.out().println(plan.isEmpty() ? "no tasks" : render(plan));
@@ -135,6 +138,19 @@ public final class TodoPlugin implements ConfigPlugin<TodoConfig> {
           return Todo.Plan.EMPTY;
         }
       }
+    }
+
+    /** Deletes the plan of {@code id}, if any (a failure is a warning). */
+    void delete(String id) {
+      Path file = dir.resolve(fileName(id));
+      synchronized (lock(id)) {
+        try {
+          Files.deleteIfExists(file);
+        } catch (IOException e) {
+          warn.accept("[todo] cannot delete " + file + ": " + e);
+        }
+      }
+      locks.remove(id);
     }
 
     /**

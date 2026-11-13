@@ -62,6 +62,23 @@ final class TraceStore {
     }
   }
 
+  /** Forgets every trace of {@code conversationId}, in memory and on disk (a failure is a warning). */
+  void delete(String conversationId) {
+    synchronized (this) {
+      all.remove(conversationId);
+    }
+    if (dir == null) return;
+    Path file = dir.resolve(TraceFile.fileName(conversationId));
+    io.lock();
+    try {
+      java.nio.file.Files.deleteIfExists(file);
+    } catch (java.io.IOException e) {
+      warn.accept("[tracing] cannot delete " + file + ": " + e);
+    } finally {
+      io.unlock();
+    }
+  }
+
   /** The trace whose id is {@code id} or, failing that, starts with it when only one does. */
   Optional<Recorded> find(String conversationId, String id) {
     List<Recorded> matches = matches(conversationId, id);

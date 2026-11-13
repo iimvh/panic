@@ -39,6 +39,8 @@ Turn it off with `"tracing": false` to keep no traces. Nothing else changes: cha
   - it drops traces past `keepDays` or beyond `maxTraces`
   - it skips damaged lines and spans whose trace has no root, with a warning
   - it rewrites a file that changed, and deletes one left empty
+- A deleted conversation (`Conversations.DELETED`, from `plugins/chat`) loses its traces: the file, what is in
+  memory, and what was still waiting to be written.
 - One process per directory, as for conversations.
 
 ## Public keys

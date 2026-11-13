@@ -39,6 +39,7 @@ empty list with a warning; the next write replaces it.
 | --- | --- | --- |
 | `Tools.register` | `plugins/tools` | Registers the two tools; they go away with the plugin |
 | `Chat.contribute` | `plugins/chat` | Adds the section `Tasks` (order 50) with the current plan; nothing when it is empty |
+| `Conversations.DELETED` | `plugins/chat` | Deletes the plan of a deleted conversation |
 
 It requires no service, and chat does not require it: without `todo` the agent simply has no task list.
 

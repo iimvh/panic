@@ -88,6 +88,7 @@ export OPENROUTER_API_KEY=sk-or-...   # and/or MISTRAL_API_KEY
 | `todo.dir`, `todo.maxItems` | Where the agent's task lists are saved (default `.panic/todo`) and how many tasks one list may hold. |
 | `checks.checks`, `checks.dir` | Commands the agent may run to verify its work (`check` tool), by name, e.g. `"test": {"command": ["./gradlew", "test"]}`. Asked before each run unless `permissions.tools.check` is `allow`. |
 | `chat.maxReviews` | How many times an answer rejected by the reviewer goes back to the model (default 1, `0` = no review). Answers are reviewed only when the conversation has acceptance criteria. |
+| `agents.profiles`, `agents.general` | Sub-agents the bot can hand a task to (`agent` tool), by name: a description, the tools it may use and its limits, e.g. `"explore": {"description": "...", "tools": ["read_file", "list_dir"]}`. `general` (default on) is a sub-agent with every tool whose instructions the bot writes. |
 | `chat.parallelTools` | How many tool calls of one model reply run at once (default 1, one after the other). Sub-agents asked together run in parallel this way. |
 | `web.enabled`, `web.host`, `web.port` | Start the web UI with the REPL, and where it listens. `--web` and `--serve` turn it on regardless. |
 | `settings`, `conversations`, `cli`, ... | Any plugin can be turned off with `false`, for example `"settings": false` removes the `/provider` and `/model` commands. |
@@ -144,6 +145,7 @@ Plain text runs `ask`. In the REPL, commands start with `/`. On the command line
 | `tools`, `tool <name> [args...]` | `tools` | always. `tools` shows each tool's risk and permission. `args` is a JSON object, e.g. `tool read_file {"path":"README.md"}` |
 | `todo` | `todo` | always. Shows this session's task list and acceptance criteria |
 | `checks` | `checks` | always. Lists the configured checks |
+| `agents` | `agents` | always. Lists the sub-agents the bot can start |
 | `traces [count]`, `trace <id>`, `stats` | `tracing` | always. This session's latest traces, one trace as a tree of timed spans (an id prefix is enough), and latency, tokens and tool use over the session |
 | `help [command]`, `exit` | `cli` | always (`exit` in the REPL only) |
 
@@ -204,6 +206,7 @@ Solid lines show ownership in the tree. Dotted lines show the services and hooks
 | `tools`, `permissions`, `files`, `clock` | `tools` declares the `tools` and `tool` commands. `permissions` answers the `tool.policy` hook (allow / ask / deny per risk and per tool); calls it asks about go to front-ends through `tool.approve`. `files` (`read_file`, `list_dir`, `write_file`, confined to `files.root`) and `clock` (`time`) register tools through the `tool.list` / `tool.run` hooks. |
 | `todo` | A plan per conversation (tasks and acceptance criteria), saved under `todo.dir`. Registers `todo_read` and `todo_write`, adds the plan to the system prompt (`chat.context`) and answers `todo.plan`, so the agent keeps track of multi-step work across turns and restarts. |
 | `checks`, `review` | `checks` registers the `check` tool, which runs commands configured in its section (tests, build) and returns the result. `review` answers `chat.review`: when the conversation has acceptance criteria, a separate model call judges the final answer against them, and a rejection goes back to the agent. |
+| `agents` | Registers the `agent` tool: it runs a sub-agent as a delegated `chat.ask` (its own prompt, tools, limits and saved conversation) and returns its answer. Sub-agents' tool calls are approved in the user's conversation and their steps stream under the call. |
 | `tracing` | Keeps the trace of every turn (the turn, each model call, tool run, review and compaction, timed, with tokens) from the `trace.span` event, saved under `tracing.dir`. Answers `trace.get` / `trace.list`, which the web UI uses to show an answer's waterfall, and declares `traces`, `trace` and `stats`. |
 | `config-watch` | Watches `panic.json` and updates only the configs that changed. Runs in interactive mode only. |
 | `web` | The web front-end. It serves the UI and an HTTP + SSE API built only on hooks and commands. |
@@ -304,6 +307,7 @@ A module may declare several plugins. For example `:llm` declares `openrouter`, 
 │   ├── tools/        panic.tools    tools, permissions, files, clock; Tools (hooks LIST, RUN, POLICY, APPROVE)
 │   ├── todo/         panic.todo     todo: todo_read, todo_write and the Tasks section
 │   ├── verify/       panic.verify   checks (check tool), review (answers chat.review)
+│   ├── agents/       panic.agents   agents (agent tool: sub-agents as delegated chat asks)
 │   ├── trace/        panic.trace.store  tracing: keeps spans, traces/trace/stats commands
 │   ├── cli/          panic.cli      cli: REPL and the one-shot runner
 │   └── web/          panic.web      web: HTTP + SSE API, static files; builds and packs ui/

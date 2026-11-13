@@ -27,6 +27,19 @@
     "checks": { "test": { "command": ["./gradlew", "check", "-PskipUi"], "timeoutSeconds": 600 } }
   },
   "review": { "maxTokens": 512 },
+  "agents": {
+    "profiles": {
+      "explore": {
+        "description": "Finds and reads code, then reports what it found with paths. Cannot change files.",
+        "tools": ["read_file", "list_dir"],
+        "maxSteps": 12
+      }
+    },
+    "general": true,
+    "maxDepth": 1,
+    "maxParallel": 4,
+    "timeoutSeconds": 600
+  },
   "files": { "root": ".", "maxBytes": 65536, "maxWriteBytes": 1048576 },
   "permissions": {
     "risks": { "read": "allow", "write": "ask", "exec": "ask", "network": "ask" },

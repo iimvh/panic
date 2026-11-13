@@ -120,6 +120,7 @@ every pull request. A change is not done until it passes.
 | `plugins/todo` | `todo` | [README](plugins/todo/README.md) |
 | `plugins/verify` | `checks`, `review` | [README](plugins/verify/README.md) |
 | `plugins/trace` | `tracing` | [README](plugins/trace/README.md) |
+| `plugins/agents` | `agents` | [README](plugins/agents/README.md) |
 | `plugins/cli` | `cli` | [README](plugins/cli/README.md) |
 | `plugins/web` | `web` | [README](plugins/web/README.md) |
 | `app` | none (bootstraps) | `Panic`, `PluginHost`, `ConfigLoader`, `ConfigWatch`, `Main` |

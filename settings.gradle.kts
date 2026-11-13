@@ -10,7 +10,15 @@ includeBuild("z/java") {
     name = "z"
 }
 
-// llm  : provider SPI, OpenAI-compatible client, OpenRouter / Mistral plugins, active-model selector.
-// chat : conversations store and the chat plugin (history + streaming replies).
-// app  : config file, hot reload, terminal REPL bot.
-include("llm", "chat", "app")
+// sdk : what plugin authors use: commands (panic.command) and plugin declaration (panic.plugin).
+// app : finds every plugin on the classpath, reads panic.json, hot reload, main.
+include("sdk", "app")
+
+// plugins/<name> : one module per plugin family, picked up automatically (project ":<name>").
+// A new plugin family = a new folder with a build.gradle.kts; nothing to register here.
+file("plugins").listFiles { f -> f.isDirectory && f.resolve("build.gradle.kts").isFile }
+    ?.sortedBy { it.name }
+    ?.forEach { dir ->
+        include(dir.name)
+        project(":${dir.name}").projectDir = dir
+    }

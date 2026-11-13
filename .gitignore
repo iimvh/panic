@@ -45,3 +45,8 @@ AGENTS.md
 .claude/
 .mcp.json
 .code-review-graph/
+
+# ---- UI (SvelteKit) ----
+ui/node_modules/
+ui/build/
+ui/.svelte-kit/

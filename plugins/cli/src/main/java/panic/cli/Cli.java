@@ -1,0 +1,157 @@
+package panic.cli;
+
+import context.ConfigPlugin;
+import context.Context;
+import context.ServiceKey;
+import core.CancelledException;
+import core.Disposable;
+import core.Signal;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import panic.command.Command;
+import panic.command.Commands;
+import panic.command.Out;
+import panic.command.Session;
+import panic.command.UsageException;
+import panic.plugin.App;
+
+/**
+ * The terminal front-end. It owns no feature: it only runs commands that other plugins declare (see
+ * {@link Commands}), so it shows exactly what is running right now. Plain text runs {@code ask}.
+ *
+ * Two ways to use it:
+ *  - as a plugin with {@code repl=true}: reads lines from the app's terminal until {@code exit} or end of
+ *    input, then asks the app to exit;
+ *  - {@link #once}: runs one command from argv, e.g. {@code panic models free} (with {@code repl=false}).
+ *
+ * Commands it declares itself: {@code help [command]}, and {@code exit} in the REPL.
+ */
+public final class Cli implements ConfigPlugin<CliConfig> {
+
+  public static final String PREFIX = "/";
+  static final String ASK = "ask";
+  static final String SESSION = "repl";
+
+  @Override
+  public List<ServiceKey<?>> requires() {
+    return List.of(App.KEY);
+  }
+
+  @Override
+  public Disposable apply(Context ctx, CliConfig cfg) {
+    if (!cfg.repl()) {
+      help(ctx, "");
+      return null;
+    }
+    App app = ctx.get(App.KEY);
+    Stdin in = Stdin.of(app.in());
+    Out out = app.out();
+    help(ctx, PREFIX);
+    AtomicBoolean stop = new AtomicBoolean();
+    Commands.command(ctx, "exit", "quit", call -> stop.set(true));
+    ctx.spawn("repl", signal -> {
+      Session session = new Session(SESSION, out, signal);
+      out.println("panic — type a message, or " + PREFIX + "help");
+      Commands.run(ctx, "status", "", session);
+      try {
+        while (!signal.isCancelled() && !stop.get()) {
+          out.print("\n> ");
+          String line = in.readLine();
+          if (line == null) break;
+          line = line.strip();
+          if (!line.isEmpty()) dispatch(ctx, line, session, signal);
+        }
+      } catch (InterruptedException stopped) {
+        return null;
+      }
+      if (!signal.isCancelled()) app.exit();
+      return null;
+    });
+    return null;
+  }
+
+  /**
+   * Runs one command, e.g. argv {@code [models, free]}. Returns the process exit code: 0 done, 1 failed,
+   * 2 unknown command or bad arguments.
+   */
+  public static int once(Context ctx, List<String> argv, Out out, Out err, Signal signal) {
+    if (argv.isEmpty()) throw new IllegalArgumentException("no command");
+    Session session = new Session("cli", out, signal);
+    String name = argv.get(0);
+    try {
+      if (Commands.run(ctx, name, argv.subList(1, argv.size()), session)) return 0;
+      err.println(unknown(name, ""));
+      return 2;
+    } catch (UsageException e) {
+      err.println("usage: " + e.usage() + "  (" + e.getMessage() + ")");
+      return 2;
+    } catch (CancelledException e) {
+      err.println("[cancelled]");
+      return 1;
+    } catch (RuntimeException e) {
+      err.println("[error] " + message(e));
+      return 1;
+    }
+  }
+
+  private static void dispatch(Context ctx, String line, Session session, Signal signal) {
+    String name;
+    String argLine;
+    if (line.startsWith(PREFIX)) {
+      String rest = line.substring(PREFIX.length());
+      int space = indexOfWhitespace(rest);
+      name = space < 0 ? rest : rest.substring(0, space);
+      argLine = space < 0 ? "" : rest.substring(space + 1);
+    } else {
+      name = ASK;
+      argLine = line;
+    }
+    Out out = session.out();
+    try {
+      if (!Commands.run(ctx, name, argLine, session)) out.println(unknown(name, PREFIX));
+    } catch (UsageException e) {
+      out.println("usage: " + PREFIX + e.usage() + "  (" + e.getMessage() + ")");
+    } catch (CancelledException e) {
+      if (!signal.isCancelled()) out.println("\n[cancelled]");
+    } catch (RuntimeException e) {
+      out.println("\n[error] " + message(e));
+    }
+  }
+
+  private static void help(Context ctx, String prefix) {
+    Commands.command(ctx, "help [command]", "list the commands available now", call -> {
+      String which = call.arg("command");
+      Out out = call.out();
+      if (which != null) {
+        Optional<Command> c = Commands.find(ctx, which.startsWith(PREFIX) ? which.substring(PREFIX.length()) : which);
+        out.println(c.map(cmd -> prefix + cmd.usage() + "\n  " + cmd.description()).orElse(unknown(which, prefix)));
+        return;
+      }
+      List<Command> all = Commands.list(ctx);
+      int width = all.stream().mapToInt(c -> c.usage().length()).max().orElse(0) + prefix.length();
+      for (Command c : all) {
+        out.println(String.format("  %-" + width + "s  %s", prefix + c.usage(), c.description()));
+      }
+      if (!prefix.isEmpty()) out.println("  (plain text: " + ASK + ")");
+    });
+  }
+
+  private static String unknown(String name, String prefix) {
+    if (name.equals(ASK)) {
+      return "[no LLM connected] nothing can answer yet: check " + prefix + "status";
+    }
+    return "unknown command " + prefix + name + ": " + prefix + "help lists the commands available now";
+  }
+
+  private static String message(RuntimeException e) {
+    return e.getMessage() == null ? e.toString() : e.getMessage();
+  }
+
+  private static int indexOfWhitespace(String s) {
+    for (int i = 0; i < s.length(); i++) {
+      if (Character.isWhitespace(s.charAt(i))) return i;
+    }
+    return -1;
+  }
+}

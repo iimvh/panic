@@ -7,26 +7,25 @@ import com.fasterxml.jackson.databind.node.TextNode;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.function.UnaryOperator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import panic.chat.ChatConfig;
 import panic.llm.Json;
-import panic.llm.LlmConfig;
-import panic.llm.Mistral;
-import panic.llm.OpenRouter;
-import panic.llm.ProviderConfig;
 
 /**
- * Reads panic.json. Every string value may reference environment variables as {@code ${NAME}} (unset = empty),
- * so keys stay out of the file. Without a file, the config is built from the environment alone.
+ * Reads panic.json: one section per plugin, by plugin name. Every string may reference environment
+ * variables as {@code ${NAME}} (unset = empty), so keys stay out of the file. Without a file, the config is
+ * built from the environment alone.
+ *
+ * The older layout {@code "providers": {"openrouter": {...}}} is still read: its entries become top-level
+ * sections.
  */
 public final class ConfigLoader {
 
   private static final Pattern VAR = Pattern.compile("\\$\\{([A-Za-z_][A-Za-z0-9_]*)}");
+  private static final String[] PROVIDERS = {"openrouter", "mistral"};
 
   private final UnaryOperator<String> env;
 
@@ -38,30 +37,39 @@ public final class ConfigLoader {
     return new ConfigLoader(System::getenv);
   }
 
-  public PanicConfig load(Path file) throws IOException {
+  public ObjectNode load(Path file) throws IOException {
     if (!Files.exists(file)) return fromEnvironment();
     return parse(Files.readString(file));
   }
 
-  public PanicConfig parse(String json) throws IOException {
+  public ObjectNode parse(String json) throws IOException {
     JsonNode tree = Json.MAPPER.readTree(json);
-    if (tree == null || !tree.isObject()) throw new IOException("config must be a JSON object");
-    return Json.MAPPER.treeToValue(interpolate(tree), PanicConfig.class);
+    if (!(tree instanceof ObjectNode obj)) throw new IOException("config must be a JSON object");
+    interpolate(obj);
+    if (obj.remove("providers") instanceof ObjectNode legacy) {
+      legacy.properties().forEach(p -> {
+        if (!obj.has(p.getKey())) obj.set(p.getKey(), p.getValue());
+      });
+    }
+    return obj;
   }
 
   /** OPENROUTER_API_KEY / MISTRAL_API_KEY; the first one set becomes the active provider, PANIC_MODEL its model. */
-  public PanicConfig fromEnvironment() {
-    Map<String, ProviderConfig> providers = new HashMap<>();
+  public ObjectNode fromEnvironment() {
+    ObjectNode tree = Json.object();
     String active = null;
-    for (String id : new String[] {OpenRouter.ID, Mistral.ID}) {
+    for (String id : PROVIDERS) {
       String key = env.apply(id.toUpperCase() + "_API_KEY");
       if (key != null && !key.isBlank()) {
-        providers.put(id, new ProviderConfig(key, null));
+        tree.putObject(id).put("apiKey", key);
         if (active == null) active = id;
       }
     }
-    return new PanicConfig(providers, new LlmConfig(active, env.apply("PANIC_MODEL"), null, null),
-        ChatConfig.DEFAULT);
+    ObjectNode llm = tree.putObject("llm");
+    if (active != null) llm.put("provider", active);
+    String model = env.apply("PANIC_MODEL");
+    if (model != null && !model.isBlank()) llm.put("model", model);
+    return tree;
   }
 
   private JsonNode interpolate(JsonNode node) {

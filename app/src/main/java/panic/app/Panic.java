@@ -1,56 +1,67 @@
 package panic.app;
 
-import context.ConfigHandle;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import context.Context;
 import context.ErrorHandler;
 import context.Root;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import panic.chat.ChatConfig;
-import panic.chat.ChatPlugin;
-import panic.chat.Conversations;
-import panic.llm.LlmConfig;
-import panic.llm.LlmPlugin;
-import panic.llm.Mistral;
-import panic.llm.OpenRouter;
-import panic.llm.ProviderConfig;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.ServiceLoader;
+import java.util.function.Consumer;
+import panic.command.Out;
+import panic.plugin.App;
+import panic.plugin.Configs;
+import panic.plugin.PluginSet;
+import panic.plugin.PluginSpec;
 
 /**
- * The plugin tree of the app, and the handles that change it at runtime:
+ * The plugin tree. It names no plugin: every {@link PluginSet} on the classpath is found with ServiceLoader,
+ * and each of its plugins is installed under its name with the panic.json section of that name.
  *
- * <pre>
- * panic
- *  ├─ openrouter     (config)  provides llm.provider.openrouter while it has a key
- *  ├─ mistral        (config)  provides llm.provider.mistral while it has a key
- *  ├─ llm            (config)  └─ active:&lt;provider&gt;  requires that provider, provides llm
- *  ├─ conversations            provides conversations
- *  └─ chat           (config)  requires llm + conversations, answers chat.ask
- * </pre>
- *
- * Front-ends (REPL, config watcher) are installed on {@link #root()} by the caller.
+ * The root provides two services to the plugins: {@link Configs}, and {@link App} (terminal, exit). App
+ * is provided after every plugin is installed, so a plugin that requires it (a front-end such as the REPL)
+ * starts only when the rest of the tree is there, whatever the install order.
  */
 public final class Panic {
 
   private final Root root;
-  private final Map<String, ConfigHandle<ProviderConfig>> providers = new LinkedHashMap<>();
-  private final ConfigHandle<LlmConfig> llm;
-  private final ConfigHandle<ChatConfig> chat;
-  private PanicConfig applied;
+  private final PluginHost host;
 
-  private Panic(Root root, PanicConfig cfg) {
+  private Panic(Root root, PluginHost host) {
     this.root = root;
-    this.applied = cfg;
-    providers.put(OpenRouter.ID, root.plugin(OpenRouter.ID, OpenRouter.plugin(), cfg.provider(OpenRouter.ID)));
-    providers.put(Mistral.ID, root.plugin(Mistral.ID, Mistral.plugin(), cfg.provider(Mistral.ID)));
-    llm = root.plugin("llm", new LlmPlugin(), cfg.llm());
-    root.plugin("conversations", Conversations.inMemory());
-    chat = root.plugin("chat", new ChatPlugin(), cfg.chat());
+    this.host = host;
   }
 
-  public static Panic start(PanicConfig cfg, ErrorHandler errors) {
+  /** Every plugin of every PluginSet on the classpath, in classpath order. */
+  public static List<PluginSpec<?>> discover() {
+    List<PluginSpec<?>> specs = new ArrayList<>();
+    for (PluginSet set : ServiceLoader.load(PluginSet.class)) specs.addAll(set.plugins());
+    return specs;
+  }
+
+  /** The process side of the tree: where the CLI reads and writes, and what "exit" does. */
+  public record Process(InputStream in, Out out, Runnable onExit) implements App {
+    @Override
+    public void exit() {
+      onExit.run();
+    }
+  }
+
+  /**
+   * Builds the tree from {@code file} (a loaded panic.json) with {@code overrides} merged over it.
+   * Throws (and leaves nothing running) when a plugin fails to start.
+   */
+  public static Panic start(List<PluginSpec<?>> specs, ObjectNode file, ObjectNode overrides, App app,
+      ErrorHandler errors, Consumer<String> warn) {
     Root root = Context.root("panic", errors);
     try {
-      return new Panic(root, cfg);
+      PluginHost host = new PluginHost(root, specs, overrides, warn);
+      root.provide(Configs.KEY, host);
+      host.start(file);
+      // Last: front-ends require App, so they start once every other plugin is installed.
+      root.provide(App.KEY, app);
+      return new Panic(root, host);
     } catch (RuntimeException | Error e) {
       root.dispose();
       throw e;
@@ -61,31 +72,14 @@ public final class Panic {
     return root;
   }
 
-  public java.util.Set<String> providerIds() {
-    return providers.keySet();
+  /** The installed plugin names, in install order. */
+  public List<String> plugins() {
+    return host.names();
   }
 
-  public LlmConfig llm() {
-    return llm.config();
-  }
-
-  public void llm(LlmConfig next) {
-    llm.update(next);
-  }
-
-  /**
-   * Applies a freshly loaded config file. Only sections that changed in the FILE since the last apply are
-   * pushed, so a runtime change (e.g. /model in the REPL) survives an unrelated edit of the file.
-   */
-  public synchronized void apply(PanicConfig next) {
-    PanicConfig previous = applied;
-    applied = next;
-    for (Map.Entry<String, ConfigHandle<ProviderConfig>> e : providers.entrySet()) {
-      ProviderConfig cfg = next.provider(e.getKey());
-      if (!cfg.equals(previous.provider(e.getKey()))) e.getValue().update(cfg);
-    }
-    if (!next.llm().equals(previous.llm())) llm.update(next.llm());
-    if (!next.chat().equals(previous.chat())) chat.update(next.chat());
+  /** Applies a reloaded panic.json: only plugins whose section changed are reconfigured. */
+  public void apply(ObjectNode file) {
+    host.apply(file);
   }
 
   public void dispose() {

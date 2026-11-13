@@ -54,6 +54,7 @@ import panic.llm.Usage;
 import panic.tools.Risk;
 import panic.tools.Tool;
 import panic.tools.ToolContext;
+import panic.tools.ToolProgress;
 import panic.tools.ToolResult;
 import panic.tools.Tools;
 import panic.trace.Span;
@@ -392,6 +393,76 @@ class WebPluginTest {
     assertEquals("{\"text\":\"ping\"}", q.path("arguments").asText());
     assertEquals("ok", ev.get(2).data().path("status").asText());
     assertEquals("pong", ev.get(2).data().path("content").asText());
+  }
+
+  /**
+   * Offers {@code echo} standing for a sub-agent: it writes text, then makes a {@code write} call (risk write)
+   * in its own conversation, asked in the user's, and reports both as progress.
+   */
+  private void subAgentEcho() {
+    root.plugin("echo", ctx -> {
+      Tools.register(ctx, new Tool() {
+        @Override
+        public ToolSpec spec() {
+          return new ToolSpec("write", "", null);
+        }
+
+        @Override
+        public Risk risk() {
+          return Risk.WRITE;
+        }
+
+        @Override
+        public ToolResult call(JsonNode args, ToolContext tc) {
+          return ToolResult.ok("written");
+        }
+      });
+      Tools.register(ctx, new Tool() {
+        @Override
+        public ToolSpec spec() {
+          return new ToolSpec("echo", "", null);
+        }
+
+        @Override
+        public Risk risk() {
+          return Risk.READ;
+        }
+
+        @Override
+        public ToolResult call(JsonNode args, ToolContext tc) {
+          ToolCall inner = new ToolCall("w1", "write", "{}");
+          tc.progress().accept(ToolProgress.text("explore", "looking"));
+          tc.progress().accept(ToolProgress.step("explore", inner, null));
+          ToolResult r = Tools.call(ctx, inner, new ToolContext(tc.conversationId() + "~explore-1", tc.signal(), null,
+              tc.origin(), "explore", null, null, null));
+          tc.progress().accept(ToolProgress.step("explore", inner, r));
+          return ToolResult.ok("pong");
+        }
+      });
+      return null;
+    });
+  }
+
+  @Test
+  void aSubAgentsWorkIsStreamedUnderItsCall() throws Exception {
+    fake.useTool = true;
+    subAgentEcho();
+    List<Event> ev = chatAndApprove(true);
+    assertEquals(List.of("tool", "agent_delta", "tool", "approve", "tool", "tool", "delta", "delta", "done"),
+        ev.stream().map(Event::name).toList());
+    assertFalse(ev.get(0).data().has("parent"));
+    assertEquals("{\"parent\":\"t1\",\"agent\":\"explore\",\"text\":\"looking\"}", ev.get(1).data().toString());
+    JsonNode running = ev.get(2).data();
+    assertEquals("w1", running.path("id").asText());
+    assertEquals("t1", running.path("parent").asText());
+    assertEquals("explore", running.path("agent").asText());
+    JsonNode q = ev.get(3).data();
+    assertEquals("w1", q.path("callId").asText());
+    assertEquals("explore", q.path("agent").asText());
+    assertEquals("ok", ev.get(4).data().path("status").asText());
+    assertEquals("t1", ev.get(4).data().path("parent").asText());
+    assertEquals("t1", ev.get(5).data().path("id").asText());
+    assertEquals("pong", ev.get(5).data().path("content").asText());
   }
 
   @Test

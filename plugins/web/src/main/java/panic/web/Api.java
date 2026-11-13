@@ -291,7 +291,10 @@ final class Api {
               step -> run.publish("tool", step(step)),
               r -> run.publish("review", Json.object().put("attempt", r.attempt()).put("pass", r.verdict().pass())
                   .put("reason", r.verdict().reason())),
-              d -> run.publish("tool_delta", toolDelta(d)), traceId));
+              d -> run.publish("tool_delta", toolDelta(d)), traceId,
+              d -> run.publish("agent_delta", Json.object().put("parent", d.parentCallId()).put("agent", d.agent())
+                  .put("text", d.text())),
+              null));
       if (reply.isEmpty()) {
         run.publish("unavailable", Json.object().put("message", "no LLM connected"));
         return;
@@ -352,9 +355,11 @@ final class Api {
     Http.json(ex, 200, Json.object().put("ok", true));
   }
 
+  /** A tool step; a sub-agent's carries {@code parent} (the call that runs it) and {@code agent}. */
   private static ObjectNode step(Chat.Step step) {
     ObjectNode o = Json.object().put("id", step.call().id()).put("name", step.call().name())
         .put("arguments", step.call().arguments());
+    if (step.nested()) o.put("parent", step.parentCallId()).put("agent", step.agent());
     if (!step.done()) return o.put("status", "running");
     return o.put("status", step.result().isError() ? "error" : "ok").put("content", cut(step.result().content()));
   }
@@ -407,7 +412,7 @@ final class Api {
 
   /**
    * Answers {@link Tools#APPROVE} for a session with an answer or a command running here: sends SSE
-   * {@code approve {id, callId, name, arguments, risk}} and waits for {@code POST /api/approve}. For an answer
+   * {@code approve {id, callId, name, arguments, risk, agent?}} ({@code agent} for a sub-agent's call) and waits for {@code POST /api/approve}. For an answer
    * the question is logged with its events, so a page that reloads gets it again; for a command a browser that
    * leaves denies. A cancelled call is thrown. Other sessions get no answer (null).
    */
@@ -423,6 +428,7 @@ final class Api {
     try {
       ObjectNode question = Json.object().put("id", id).put("callId", a.call().id()).put("name", a.call().name())
           .put("arguments", a.call().arguments()).put("risk", a.risk().wire());
+      if (a.agent() != null) question.put("agent", a.agent());
       if (run != null) run.publish("approve", question); else sse.send("approve", question);
       return answer.get();
     } catch (CancellationException e) {

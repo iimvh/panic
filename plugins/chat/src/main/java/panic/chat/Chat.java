@@ -3,10 +3,12 @@ package panic.chat;
 import context.Context;
 import context.EventKey;
 import context.HookKey;
+import core.Disposable;
 import core.Signal;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import panic.command.Hooks;
 import panic.llm.ToolCall;
 import panic.llm.Usage;
@@ -70,10 +72,35 @@ public final class Chat {
   public record Turn(String conversationId, String question, Reply reply) {
   }
 
+  /** The question put to {@link #CONTEXT} contributors, once per ask. */
+  public record ContextQuery(String conversationId) {
+    public ContextQuery {
+      Objects.requireNonNull(conversationId, "conversationId");
+    }
+  }
+
+  /**
+   * A part of the system prompt: sent as {@code ## name} then {@code text}. Sections are ordered by
+   * {@code order}, then by name, so the prompt is stable from one request to the next.
+   */
+  public record Section(String name, int order, String text) {
+    public Section {
+      Objects.requireNonNull(name, "name");
+      Objects.requireNonNull(text, "text");
+    }
+  }
+
   public static final HookKey<Ask, Reply> ASK = HookKey.of("chat.ask", Ask.class, Reply.class);
   public static final EventKey<Turn> TURN = EventKey.of("chat.turn", Turn.class);
   /** Emitted when a tool call of the bot starts and when it finishes (logging, auditing...). */
   public static final EventKey<Step> STEP = EventKey.of("chat.step", Step.class);
+
+  /**
+   * Collected once per ask: every answer becomes a section of the system prompt (environment, tool hints,
+   * memory...). Register with {@link #contribute}, so the section goes away with the plugin that adds it.
+   */
+  public static final HookKey<ContextQuery, Section> CONTEXT = HookKey.of("chat.context", ContextQuery.class,
+      Section.class);
 
   private Chat() {
   }
@@ -84,5 +111,24 @@ public final class Chat {
    */
   public static Optional<Reply> ask(Context ctx, Ask ask) {
     return Hooks.bail(ctx, ASK, ask);
+  }
+
+  /**
+   * Adds a section to the system prompt of every ask while {@code ctx} lives. {@code text} may return null or
+   * blank to add nothing for that conversation; if it throws, the section is left out of that ask and the ask
+   * goes on. Disposing the result (or ctx) removes it.
+   */
+  public static Disposable contribute(Context ctx, String name, int order, Function<ContextQuery, String> text) {
+    Objects.requireNonNull(name, "name");
+    Objects.requireNonNull(text, "text");
+    return ctx.hook(CONTEXT, q -> {
+      String t;
+      try {
+        t = text.apply(q);
+      } catch (RuntimeException e) {
+        return null; // one broken contributor must not break the ask
+      }
+      return t == null || t.isBlank() ? null : new Section(name, order, t);
+    });
   }
 }

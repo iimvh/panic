@@ -6,11 +6,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import context.ConfigPlugin;
 import context.Context;
+import context.EmitException;
 import context.ServiceKey;
 import context.Task;
 import core.CancelledException;
 import core.Disposable;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -21,6 +23,7 @@ import panic.llm.ChatRequest;
 import panic.llm.Completion;
 import panic.llm.Json;
 import panic.llm.Llm;
+import panic.llm.LlmException;
 import panic.llm.Message;
 import panic.llm.ToolCall;
 import panic.llm.ToolSpec;
@@ -34,6 +37,12 @@ import panic.tools.Tools;
  * right now ({@code Tools.specs}). When the model asks for tools it runs them, feeds the results back (errors
  * included, so the model can recover) and calls the model again, until it answers or a limit of
  * {@link ChatConfig} stops it. History is kept in {@link Conversations}, the whole turn appended at once.
+ *
+ * Each request is kept under {@link ChatConfig#contextTokens}: the system prompt (with the sections other
+ * plugins add through {@link Chat#CONTEXT}) and the current turn are always sent, the newest earlier turns that
+ * fit come after the prompt. When turns no longer fit, they are summarised by the model once into the
+ * conversation's summary (see {@link Conversation#compact}), down to half the budget so that this does not
+ * happen on every ask.
  *
  * Runs only while both services exist; tools are optional and found through hooks, so none are required. A
  * reply in flight when the plugin is disposed (LLM switched, config changed, app stopping) is cancelled, its
@@ -56,12 +65,13 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
   public Disposable apply(Context ctx, ChatConfig cfg) {
     Llm llm = ctx.get(Llm.KEY);
     Conversations conversations = ctx.get(Conversations.KEY);
-    ctx.hook(Chat.ASK, ask -> new Turn(ctx, cfg, llm, conversations, ask).run());
+    Tokens tokens = new Tokens();
+    ctx.hook(Chat.ASK, ask -> new Turn(ctx, cfg, llm, conversations, tokens, ask).run());
     Commands.command(ctx, "ask <text...>", "ask the bot (plain text does the same)", call -> {
       Printer printer = new Printer(call.out());
       Chat.Ask ask = new Chat.Ask(call.session().id(), call.arg("text"), call.signal(), printer::text,
           printer::step);
-      Chat.Reply r = new Turn(ctx, cfg, llm, conversations, ask).run();
+      Chat.Reply r = new Turn(ctx, cfg, llm, conversations, tokens, ask).run();
       printer.endLine();
       StringBuilder meta = new StringBuilder("[").append(r.model());
       if (r.usage().totalTokens() > 0) meta.append(" · ").append(r.usage().totalTokens()).append(" tokens");
@@ -76,6 +86,19 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     return null;
   }
 
+  /** Tells the model how to summarise the turns that no longer fit. */
+  static final String SUMMARY_PROMPT = "You keep the memory of a conversation between a user and an assistant "
+      + "that uses tools. Write a summary of the conversation below for the assistant to continue from. Keep "
+      + "the user's goals and requests, decisions made, facts learned (names, paths, values, results of tool "
+      + "calls) and what is still open. Leave out greetings and anything not needed later. Do not invent "
+      + "anything. Answer with the summary only.";
+
+  /** Heading of the summary in the system prompt. */
+  static final String SUMMARY_HEADING = "Summary of the earlier conversation";
+
+  /** Characters of one message shown to the summariser; tool output beyond this is rarely worth keeping. */
+  private static final int SUMMARY_MESSAGE_CHARS = 2_000;
+
   /** One question, from the user's message to the bot's answer. */
   private static final class Turn {
 
@@ -83,21 +106,26 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private final ChatConfig cfg;
     private final Llm llm;
     private final Conversations conversations;
+    private final Tokens tokens;
     private final Chat.Ask ask;
     private final CancelToken signal;
 
-    private final List<Message> sent = new ArrayList<>();
+    /** System prompt and contributed sections, without the summary. Fixed for the whole turn. */
+    private String prompt;
+    private String summary;
+    private List<Message> history = List.of();
     private final List<Message> added = new ArrayList<>();
     private Usage usage = Usage.NONE;
     private int toolCalls;
     private String lastCall;
     private int repeats;
 
-    Turn(Context ctx, ChatConfig cfg, Llm llm, Conversations conversations, Chat.Ask ask) {
+    Turn(Context ctx, ChatConfig cfg, Llm llm, Conversations conversations, Tokens tokens, Chat.Ask ask) {
       this.ctx = ctx;
       this.cfg = cfg;
       this.llm = llm;
       this.conversations = conversations;
+      this.tokens = tokens;
       this.ask = ask;
       this.signal = new CancelToken();
     }
@@ -116,18 +144,22 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
 
     private Chat.Reply loop() {
       Conversation conversation = conversations.get(ask.conversationId());
-      if (cfg.systemPrompt() != null && !cfg.systemPrompt().isBlank()) sent.add(Message.system(cfg.systemPrompt()));
-      sent.addAll(conversation.recent(cfg.maxHistory()));
+      prompt = prompt();
+      Conversation.Snapshot snapshot = conversation.snapshot();
+      summary = snapshot.summary();
+      history = snapshot.messages();
       add(Message.user(ask.text()));
+      if (cfg.limitsContext() && cfg.compact()) compact(conversation);
 
       Completion last;
       String stop = Chat.DONE;
       int steps = 0;
       while (true) {
         steps++;
-        last = llm.stream(request(), signal, ask.onDelta());
-        usage = new Usage(usage.promptTokens() + last.usage().promptTokens(),
-            usage.completionTokens() + last.usage().completionTokens());
+        ChatRequest request = request();
+        last = llm.stream(request, signal, ask.onDelta());
+        tokens.observe(Tokens.raw(request), last.usage().promptTokens());
+        count(last.usage());
         add(last.message());
         if (!last.hasToolCalls()) break;
 
@@ -155,11 +187,133 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       return reply;
     }
 
+    /**
+     * The request for the next model call: system message, the earlier turns that fit, then the whole current
+     * turn. Built again for every call, as the turn grows and tools come and go.
+     */
     private ChatRequest request() {
-      ChatRequest request = ChatRequest.of(sent);
-      if (!cfg.tools()) return request;
-      List<ToolSpec> specs = Tools.specs(ctx);
+      List<ToolSpec> specs = cfg.tools() ? Tools.specs(ctx) : List.of();
+      Message system = system();
+      List<Message> messages = new ArrayList<>();
+      if (system != null) messages.add(system);
+      messages.addAll(fit(system, specs, 1, cfg.maxHistory()).kept());
+      messages.addAll(added);
+      ChatRequest request = ChatRequest.of(messages);
       return specs.isEmpty() ? request : request.withTools(specs, null);
+    }
+
+    /**
+     * The earlier turns that fit {@code share} of what the budget leaves after the system message, the tools
+     * and the current turn (which are always sent, even over budget), and at most {@code maxMessages} (0 = any).
+     */
+    private ContextWindow.Fit fit(Message system, List<ToolSpec> specs, double share, int maxMessages) {
+      int budget = Integer.MAX_VALUE;
+      if (cfg.limitsContext()) {
+        long fixed = (system == null ? 0 : tokens.estimate(system)) + (long) tokens.estimateTools(specs)
+            + tokens.estimate(added);
+        budget = (int) Math.max(0, (cfg.contextTokens() - fixed) * share);
+      }
+      return ContextWindow.fit(history, maxMessages, budget, tokens::estimate);
+    }
+
+    /**
+     * When earlier turns no longer fit the token budget, summarises the ones that do not fit half the budget, with the
+     * previous summary, into a new summary kept with the conversation. Halving leaves room to grow, so the next
+     * asks do not each pay for a summary. If the model fails, the turns are only left out of this request; a
+     * cancelled ask is thrown. {@code maxHistory} plays no part here: it only caps what is sent.
+     */
+    private void compact(Conversation conversation) {
+      List<ToolSpec> specs = cfg.tools() ? Tools.specs(ctx) : List.of();
+      if (fit(system(), specs, 1, 0).dropped().isEmpty()) return;
+      ContextWindow.Fit target = fit(system(), specs, 0.5, 0);
+      String next = summarize(target.dropped());
+      if (next != null && conversation.compact(target.dropped(), next)) {
+        summary = next;
+        history = target.kept();
+      }
+    }
+
+    private String summarize(List<Message> turns) {
+      int maxTokens = Math.max(256, Math.min(2_048, cfg.contextTokens() / 8));
+      ChatRequest request = new ChatRequest(
+          List.of(Message.system(SUMMARY_PROMPT), Message.user(transcript(turns))), null, null, maxTokens);
+      try {
+        Completion c = llm.complete(request, signal);
+        count(c.usage());
+        String text = c.text().strip();
+        return text.isEmpty() ? null : text;
+      } catch (LlmException e) {
+        signal.throwIfCancelled();
+        return null;
+      }
+    }
+
+    /**
+     * The turns to summarise as plain text, after the previous summary. Kept under about half the context
+     * budget: long messages are cut, and when that is not enough the oldest part goes.
+     */
+    private String transcript(List<Message> turns) {
+      StringBuilder out = new StringBuilder();
+      if (summary != null) out.append("Summary so far:\n").append(summary).append("\n\n");
+      out.append("Conversation to add:\n");
+      for (Message m : turns) {
+        String content = clip(m.content());
+        switch (m.role()) {
+          case USER -> out.append("user: ").append(content).append('\n');
+          case ASSISTANT -> {
+            if (!content.isBlank()) out.append("assistant: ").append(content).append('\n');
+            for (ToolCall call : m.toolCalls()) {
+              out.append("assistant called ").append(call.name()).append(' ').append(clip(call.arguments()))
+                  .append('\n');
+            }
+          }
+          case TOOL -> out.append("tool result: ").append(content).append('\n');
+          default -> out.append(m.role().wire()).append(": ").append(content).append('\n');
+        }
+      }
+      long max = Math.max(8_000L, cfg.contextTokens() * 2L);
+      if (out.length() > max) {
+        int cut = (int) (out.length() - max);
+        return "[" + cut + " older chars left out]\n" + out.substring(cut);
+      }
+      return out.toString();
+    }
+
+    private static String clip(String text) {
+      if (text.length() <= SUMMARY_MESSAGE_CHARS) return text;
+      return text.substring(0, SUMMARY_MESSAGE_CHARS) + " … [" + (text.length() - SUMMARY_MESSAGE_CHARS)
+          + " chars cut]";
+    }
+
+    /** The configured prompt followed by the sections contributed through {@link Chat#CONTEXT}. */
+    private String prompt() {
+      List<String> parts = new ArrayList<>();
+      if (cfg.systemPrompt() != null && !cfg.systemPrompt().isBlank()) parts.add(cfg.systemPrompt().strip());
+      List<Chat.Section> sections;
+      try {
+        sections = new ArrayList<>(ctx.collect(Chat.CONTEXT, new Chat.ContextQuery(ask.conversationId())));
+      } catch (EmitException e) {
+        sections = new ArrayList<>(); // a contributor that did not go through Chat.contribute failed
+      }
+      sections.sort(Comparator.comparingInt(Chat.Section::order).thenComparing(Chat.Section::name));
+      for (Chat.Section s : sections) {
+        if (!s.text().isBlank()) parts.add("## " + s.name() + "\n" + s.text().strip());
+      }
+      return String.join("\n\n", parts);
+    }
+
+    /** The system message: prompt, sections and summary; null when all are empty. */
+    private Message system() {
+      String text = prompt;
+      if (summary != null) {
+        String part = "## " + SUMMARY_HEADING + "\n" + summary;
+        text = text.isEmpty() ? part : text + "\n\n" + part;
+      }
+      return text.isEmpty() ? null : Message.system(text);
+    }
+
+    private void count(Usage u) {
+      usage = new Usage(usage.promptTokens() + u.promptTokens(), usage.completionTokens() + u.completionTokens());
     }
 
     /** Runs one tool call and records its result. Returns {@link Chat#LOOP} when the model is going round in circles. */
@@ -231,7 +385,6 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     }
 
     private void add(Message m) {
-      sent.add(m);
       added.add(m);
     }
 

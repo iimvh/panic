@@ -143,7 +143,7 @@ class AgentLoopTest {
   }
 
   private static ChatConfig cfg(int maxSteps, int maxTokens, int timeoutSeconds, int maxOutput, int maxRepeats) {
-    return new ChatConfig(null, 0, true, maxSteps, maxTokens, timeoutSeconds, maxOutput, maxRepeats);
+    return new ChatConfig(null, 0, true, maxSteps, maxTokens, timeoutSeconds, maxOutput, maxRepeats, null, null);
   }
 
   private Chat.Reply ask(String text) {
@@ -203,7 +203,7 @@ class AgentLoopTest {
   @Test
   void toolsCanBeTurnedOff() {
     tools(ECHO);
-    chat(new ChatConfig(null, 0, false, 0, 0, 0, 0, 0));
+    chat(new ChatConfig(null, 0, false, 0, 0, 0, 0, 0, null, null));
     llm.then(r -> answer("plain"));
     ask("hi");
     assertTrue(llm.requests.get(0).tools().isEmpty());

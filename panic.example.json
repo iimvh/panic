@@ -13,7 +13,9 @@
     "tools": true,
     "maxSteps": 8,
     "maxTokens": 0,
-    "toolTimeoutSeconds": 60
+    "toolTimeoutSeconds": 60,
+    "contextTokens": 32000,
+    "compact": true
   },
   "files": { "root": ".", "maxBytes": 65536, "maxWriteBytes": 1048576 },
   "permissions": {

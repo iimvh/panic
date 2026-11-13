@@ -7,7 +7,7 @@ Conversation history and the chat bot, an agent loop that calls tools.
 | Name | Config | Requires | Provides / registers |
 | --- | --- | --- | --- |
 | `conversations` | none | none | service `Conversations.KEY` (in memory); command `reset` |
-| `chat` | `ChatConfig { systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats }` | `Llm.KEY`, `Conversations.KEY` | hook `Chat.ASK`; events `Chat.TURN`, `Chat.STEP`; command `ask` |
+| `chat` | `ChatConfig { systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats, contextTokens, compact }` | `Llm.KEY`, `Conversations.KEY` | hook `Chat.ASK`; events `Chat.TURN`, `Chat.STEP`; command `ask`. Collects hook `Chat.CONTEXT` |
 
 `conversations` does not depend on the LLM, so history survives a provider or model switch (which restarts
 `chat`).
@@ -35,6 +35,34 @@ error result, so the saved history stays valid. The whole turn (user, assistant 
 answer) is appended at once. A cancelled turn is not saved. `tools: false` turns tools off for models that do
 not support them.
 
+## The context window
+
+Every request stays under `contextTokens` estimated tokens (default 32000; `0` turns the limit off and only
+`maxHistory` applies). Set it below the model's context length, leaving room for the answer (`llm.maxTokens`).
+
+- **Estimate.** About four characters per token plus 4 per message, tool definitions included. The estimate is
+  scaled by a ratio learned from the prompt tokens the provider reports (kept between 0.5 and 3, learned again
+  when chat restarts, for example after a model switch).
+- **What is always sent.** The system message (prompt, contributed sections, summary) and the whole current
+  turn, even when they alone exceed the budget. The earlier turns that still fit come in between, newest
+  first. History is cut by whole turns (a user message and everything up to the next one), so a tool call is
+  never sent without its results and history always starts with a user message. `maxHistory` still caps the
+  number of messages sent.
+- **Compaction** (`compact`, default true). When earlier turns no longer fit, the model summarises them, with
+  the previous summary, in one extra call before the turn. The summary is kept with the conversation
+  (`Conversation.summary()`) and sent in the system message under `## Summary of the earlier conversation`;
+  the summarised messages are removed from the history. It compacts down to half the budget, so the next asks
+  do not each pay for a summary. Its tokens count in the turn's `usage` (and `maxTokens`). If the summary call
+  fails, the old turns are only left out of the request; a cancelled ask is cancelled as usual and changes
+  nothing. `maxHistory` alone never triggers a summary.
+
+## Context sections
+
+Other plugins add sections to the system prompt with `Chat.contribute(ctx, name, order, query -> text)`. `chat`
+collects them once per ask, sorts them by `order` then `name`, and sends them after `systemPrompt` as
+`## name` + text. A section returning null or blank is left out for that ask, one that throws is skipped, and
+all of a plugin's sections disappear when it is disposed. Chat does not require the contributors.
+
 ## Public keys
 
 | Key | Type | Meaning |
@@ -43,6 +71,7 @@ not support them.
 | `Chat.ASK` | hook `Ask(conversationId, text, signal, onDelta, onStep?) → Reply(text, model, finishReason, usage, stop, steps, toolCalls)` | Ask the bot. Use `Chat.ask(ctx, ask)`: it is empty when no LLM is connected and rethrows the handler's own exception. `onStep` hears every tool call when it starts (`result == null`) and when it ends |
 | `Chat.TURN` | event `Turn(conversationId, question, reply)` | Emitted after every completed exchange (logging, memory, cost tracking...) |
 | `Chat.STEP` | event `Step(conversationId, call, result)` | Emitted when a tool call starts and when it ends (auditing...) |
+| `Chat.CONTEXT` | hook `ContextQuery(conversationId) → Section(name, order, text)`, collected | Sections of the system prompt (environment, tool hints, memory...). Register with `Chat.contribute` |
 
 ## Commands
 

@@ -8,8 +8,8 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import panic.llm.CancelToken;
-import panic.llm.Json;
+import panic.util.CancelToken;
+import panic.util.Json;
 
 /**
  * A server-sent-events response. A failed write means the browser went away (closed, or pressed Stop):

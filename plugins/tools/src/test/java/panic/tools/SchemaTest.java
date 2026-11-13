@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import panic.llm.Json;
+import panic.util.Json;
 
 class SchemaTest {
 

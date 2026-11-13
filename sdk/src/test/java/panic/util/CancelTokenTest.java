@@ -1,4 +1,4 @@
-package panic.llm;
+package panic.util;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;

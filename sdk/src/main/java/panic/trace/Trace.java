@@ -27,6 +27,26 @@ public final class Trace {
   /** Root attribute: the conversation a turn belongs to. */
   public static final String CONVERSATION = "conversationId";
 
+  /** Root attribute: {@link #questionHash} of the question a turn answered. */
+  public static final String QUESTION_HASH = "questionHash";
+
+  /** Root attribute: whether the turn's trace was kept by a tracer ({@code true}) or only emitted. */
+  public static final String SAVED = "saved";
+
+  /**
+   * A short, stable digest of a question, kept on the root span of each turn's trace ({@link #QUESTION_HASH}), so
+   * a front-end can find the trace of a stored question without the trace keeping (or matching on) its text.
+   */
+  public static String questionHash(String question) {
+    try {
+      byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+          .digest(question.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      return java.util.HexFormat.of().formatHex(digest, 0, 8);
+    } catch (java.security.NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 is always available", e);
+    }
+  }
+
   /** One trace of a conversation; {@code traceId} may be a unique prefix. */
   public record Query(String conversationId, String traceId) {
     public Query {

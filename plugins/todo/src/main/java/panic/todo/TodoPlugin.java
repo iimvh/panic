@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
 import panic.chat.Chat;
 import panic.chat.Conversations;
 import panic.command.Commands;
-import panic.llm.Json;
+import panic.util.Json;
 import panic.llm.ToolSpec;
 import panic.tools.Risk;
 import panic.tools.Tool;

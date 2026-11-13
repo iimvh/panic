@@ -19,8 +19,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import panic.cli.Cli;
+import panic.command.Commands;
 import panic.command.Out;
-import panic.llm.Json;
+import panic.util.Json;
 
 /** The whole app against a fake OpenAI-compatible server standing in for OpenRouter. */
 class CliTest {
@@ -62,7 +63,7 @@ class CliTest {
   /** panic.json with the fake server as OpenRouter. */
   private ObjectNode config(String key, String model, String systemPrompt) throws Exception {
     String chat = systemPrompt == null ? "" : ", \"chat\": {\"systemPrompt\": \"" + systemPrompt + "\"}";
-    return new ConfigLoader(n -> null).parse("""
+    return new ConfigLoader(n -> null, List.of()).parse("""
         {"openrouter": {"apiKey": "%s", "baseUrl": "%s"},
          "llm": {"provider": "openrouter", "model": "%s"}%s}""".formatted(key, url(), model, chat));
   }
@@ -142,12 +143,12 @@ class CliTest {
     try {
       StringBuilder out = new StringBuilder();
       StringBuilder err = new StringBuilder();
-      assertEquals(0, Cli.once(panic.root(), List.of("ask", "hello world"), out::append, err::append, panic.root().signal()));
+      assertEquals(0, Commands.once(panic.root(), List.of("ask", "hello world"), out::append, err::append, panic.root().signal()));
       assertTrue(out.toString().startsWith("Hi from model-a"), out.toString());
       assertEquals("hello world", Json.parseOrNull(bodies.get(0)).path("messages").path(1).path("content").asText());
-      assertEquals(2, Cli.once(panic.root(), List.of("nope"), out::append, err::append, panic.root().signal()));
+      assertEquals(2, Commands.once(panic.root(), List.of("nope"), out::append, err::append, panic.root().signal()));
       assertTrue(err.toString().contains("unknown command nope"), err.toString());
-      assertEquals(0, Cli.once(panic.root(), List.of("help"), out::append, err::append, panic.root().signal()));
+      assertEquals(0, Commands.once(panic.root(), List.of("help"), out::append, err::append, panic.root().signal()));
       assertTrue(out.toString().contains("  help [command]"), out.toString());
     } finally {
       panic.dispose();

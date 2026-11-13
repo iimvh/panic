@@ -11,7 +11,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.TextStyle;
 import java.time.temporal.ChronoUnit;
 import java.util.Locale;
-import panic.llm.Json;
+import panic.util.Json;
 import panic.llm.ToolSpec;
 
 /** Tool {@code time}: the current date and time, since models do not know it. Requires nothing. */

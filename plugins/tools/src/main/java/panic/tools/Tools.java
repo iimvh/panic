@@ -16,8 +16,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import panic.command.Hooks;
-import panic.llm.CancelToken;
-import panic.llm.Json;
+import panic.util.CancelToken;
+import panic.util.Json;
 import panic.llm.ToolCall;
 import panic.llm.ToolSpec;
 

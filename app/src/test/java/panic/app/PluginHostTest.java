@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import panic.llm.Json;
+import panic.util.Json;
 import panic.llm.LlmConfig;
 import panic.plugin.Configs;
 import panic.plugin.PluginSpec;
@@ -41,7 +41,7 @@ class PluginHostTest {
   }
 
   private static ObjectNode json(String text) throws Exception {
-    return new ConfigLoader(n -> null).parse(text);
+    return new ConfigLoader(n -> null, List.of()).parse(text);
   }
 
   /** Keeps the discovered conversations store off the disk. */

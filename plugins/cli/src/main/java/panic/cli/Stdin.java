@@ -16,6 +16,10 @@ import java.util.concurrent.TimeUnit;
 /**
  * Reading System.in cannot be interrupted, so a task blocked on it would hold up disposal forever. One
  * daemon thread, outside the tree, reads lines into a queue; tasks wait on the queue, which is interruptible.
+ *
+ * The one reader per stream is process-wide ({@code SHARED}) on purpose: the plugin restarts when its config
+ * changes, and a second reader of {@code System.in} would steal lines. {@code ConventionsTest} lists this file
+ * as the allowed exception to "no static state" (rules 2 and 3).
  */
 public final class Stdin {
 

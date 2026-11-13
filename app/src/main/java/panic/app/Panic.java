@@ -36,8 +36,15 @@ public final class Panic {
   /** Every plugin of every PluginSet on the classpath, in classpath order. */
   public static List<PluginSpec<?>> discover() {
     List<PluginSpec<?>> specs = new ArrayList<>();
-    for (PluginSet set : ServiceLoader.load(PluginSet.class)) specs.addAll(set.plugins());
+    for (PluginSet set : discoverSets()) specs.addAll(set.plugins());
     return specs;
+  }
+
+  /** Every PluginSet on the classpath, in classpath order. */
+  public static List<PluginSet> discoverSets() {
+    List<PluginSet> sets = new ArrayList<>();
+    for (PluginSet set : ServiceLoader.load(PluginSet.class)) sets.add(set);
+    return sets;
   }
 
   /** The process side of the tree: where the CLI reads and writes, and what "exit" does. */

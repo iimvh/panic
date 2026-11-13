@@ -18,7 +18,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import panic.llm.CancelToken;
+import panic.util.CancelToken;
 import panic.llm.Completion;
 import panic.llm.Llm;
 import panic.llm.Usage;
@@ -87,13 +87,13 @@ class TracingTest {
     assertTrue(spans.stream().allMatch(s -> s.traceId().equals("trace-1")));
     assertEquals("c", turn.stringAttr(Trace.CONVERSATION));
     assertEquals("say hi", turn.stringAttr("question"));
-    assertEquals(Chat.questionHash("say hi"), turn.stringAttr("questionHash"));
+    assertEquals(Trace.questionHash("say hi"), turn.stringAttr(Trace.QUESTION_HASH));
     assertEquals(Chat.DONE, turn.stringAttr("stop"));
     assertEquals(2, turn.longAttr("steps", -1));
     assertEquals(1, turn.longAttr("toolCalls", -1));
     assertEquals(20, turn.longAttr("promptTokens", -1));
     assertEquals(10, turn.longAttr("completionTokens", -1));
-    assertEquals(true, turn.attrs().get("saved"));
+    assertEquals(true, turn.attrs().get(Trace.SAVED));
 
     List<Span> llms = named("llm");
     assertEquals(2, llms.size());
@@ -193,7 +193,7 @@ class TracingTest {
 
     Span turn = root();
     assertEquals(Span.Status.CANCELLED, turn.status());
-    assertEquals(false, turn.attrs().get("saved"));
+    assertEquals(false, turn.attrs().get(Trace.SAVED));
     assertEquals(Span.Status.CANCELLED, named("llm").get(0).status());
   }
 

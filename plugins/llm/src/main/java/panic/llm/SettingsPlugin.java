@@ -22,7 +22,7 @@ public final class SettingsPlugin implements Plugin {
   @Override
   public Disposable apply(Context ctx) {
     Configs configs = ctx.get(Configs.KEY);
-    Commands.command(ctx, "provider [id]", "show or switch the provider", call -> {
+    Commands.command(ctx, Llm.PROVIDER_COMMAND + " [id]", "show or switch the provider", call -> {
       List<String> ids = ctx.collect(Providers.STATUS, Providers.Query.ALL).stream()
           .map(Providers.Status::id).sorted().toList();
       LlmConfig cfg = configs.get("llm", LlmConfig.class);
@@ -33,17 +33,17 @@ public final class SettingsPlugin implements Plugin {
         call.out().println("unknown provider '" + id + "', one of " + ids);
       } else {
         configs.update("llm", cfg.withProvider(id));
-        Commands.run(ctx, "status", "", call.session());
+        Commands.run(ctx, Commands.STATUS, "", call.session());
       }
     });
-    Commands.command(ctx, "model [id]", "show or switch the model", call -> {
+    Commands.command(ctx, Llm.MODEL_COMMAND + " [id]", "show or switch the model", call -> {
       LlmConfig cfg = configs.get("llm", LlmConfig.class);
       String id = call.arg("id");
       if (id == null) {
         call.out().println("model: " + cfg.model());
       } else {
         configs.update("llm", cfg.withModel(id));
-        Commands.run(ctx, "status", "", call.session());
+        Commands.run(ctx, Commands.STATUS, "", call.session());
       }
     });
     return null;

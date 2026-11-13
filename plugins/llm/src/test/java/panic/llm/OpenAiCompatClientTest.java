@@ -1,5 +1,7 @@
 package panic.llm;
 
+import panic.util.CancelToken;
+import panic.util.Json;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;

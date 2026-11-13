@@ -26,7 +26,7 @@ public final class LlmPlugin implements ConfigPlugin<LlmConfig> {
   @Override
   public Disposable apply(Context ctx, LlmConfig cfg) {
     ctx.hook(Llm.CONFIG, q -> cfg);
-    Commands.command(ctx, "status", "show the provider and model in use", call -> {
+    Commands.command(ctx, Commands.STATUS, "show the provider and model in use", call -> {
       String state = ctx.isProvided(Llm.KEY) ? "connected" : "not connected";
       call.out().println("provider: " + orNone(cfg.provider()) + "   model: " + orNone(cfg.model())
           + "   (" + state + ")");

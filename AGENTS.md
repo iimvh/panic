@@ -47,6 +47,8 @@ order, exactly once, after any call still running.
    a front-end module (`cli`, `web`).
 9. **Document the contract.** Every `plugins/<module>/README.md` lists its plugins, config, the keys it
    provides and consumes, and its commands. Update it in the same change as the code.
+   The same goes for `AGENTS.md` and `CLAUDE.md`: if a change makes a sentence there false (a command, a
+   path, a rule, a key name), fix that sentence in the same commit. Correct them, do not pad them.
 10. **No new libraries without a reason** that you write down in the change. The Java side uses only z and
     Jackson. The UI uses only SvelteKit.
 
@@ -113,7 +115,7 @@ every pull request. A change is not done until it passes.
 
 | Module | Plugins | Contract |
 | --- | --- | --- |
-| `sdk` | none | [`panic.command`](sdk/src/main/java/panic/command), [`panic.plugin`](sdk/src/main/java/panic/plugin), [`panic.trace`](sdk/src/main/java/panic/trace) |
+| `sdk` | none | [`panic.command`](sdk/src/main/java/panic/command), [`panic.plugin`](sdk/src/main/java/panic/plugin), [`panic.trace`](sdk/src/main/java/panic/trace), [`panic.util`](sdk/src/main/java/panic/util) (`Json`, `CancelToken`) |
 | `plugins/llm` | `openrouter`, `mistral`, `llm`, `settings` | [README](plugins/llm/README.md) |
 | `plugins/chat` | `conversations`, `chat` | [README](plugins/chat/README.md) |
 | `plugins/tools` | `tools`, `permissions`, `files`, `clock` | [README](plugins/tools/README.md) |

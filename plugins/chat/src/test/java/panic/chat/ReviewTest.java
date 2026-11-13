@@ -18,7 +18,7 @@ import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import panic.llm.CancelToken;
+import panic.util.CancelToken;
 import panic.llm.Llm;
 import panic.llm.Message;
 import panic.llm.Role;

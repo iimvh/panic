@@ -11,7 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
-import panic.llm.Json;
+import panic.util.Json;
 import panic.plugin.Configs;
 import panic.plugin.NoConfig;
 import panic.plugin.PluginSpec;

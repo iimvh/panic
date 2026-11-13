@@ -20,8 +20,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import panic.command.Commands;
 import panic.command.Session;
-import panic.llm.CancelToken;
-import panic.llm.Json;
+import panic.util.CancelToken;
+import panic.util.Json;
 import panic.llm.ToolCall;
 import panic.llm.ToolSpec;
 

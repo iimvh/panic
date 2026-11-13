@@ -2,7 +2,9 @@ package panic.command;
 
 import context.Context;
 import context.HookKey;
+import core.CancelledException;
 import core.Disposable;
+import core.Signal;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
@@ -23,6 +25,12 @@ import java.util.Optional;
  * command whose plugin is not running is simply absent.
  */
 public final class Commands {
+
+  /**
+   * The command a plugin declares to show its state ("which provider and model are in use"). Front-ends run it
+   * when they start, if somebody declares it.
+   */
+  public static final String STATUS = "status";
 
   /** A request to run the command {@code name}. */
   public record Invocation(String name, String argLine, Session session) {
@@ -63,6 +71,31 @@ public final class Commands {
    */
   public static boolean run(Context ctx, String name, String argLine, Session session) {
     return Hooks.bail(ctx, RUN, new Invocation(name, argLine == null ? "" : argLine, session)).isPresent();
+  }
+
+  /**
+   * Runs one command from argv, e.g. {@code [models, free]}, for a front-end that runs a single command and
+   * exits. Returns the process exit code: 0 done, 1 failed or cancelled, 2 unknown command or bad arguments.
+   * What the command prints goes to {@code out}; problems go to {@code err}.
+   */
+  public static int once(Context ctx, List<String> argv, Out out, Out err, Signal signal) {
+    if (argv.isEmpty()) throw new IllegalArgumentException("no command");
+    Session session = new Session("cli", out, signal);
+    String name = argv.get(0);
+    try {
+      if (run(ctx, name, argv.subList(1, argv.size()), session)) return 0;
+      err.println("unknown command " + name + ": help lists the commands available now");
+      return 2;
+    } catch (UsageException e) {
+      err.println("usage: " + e.usage() + "  (" + e.getMessage() + ")");
+      return 2;
+    } catch (CancelledException e) {
+      err.println("[cancelled]");
+      return 1;
+    } catch (RuntimeException e) {
+      err.println("[error] " + (e.getMessage() == null ? e.toString() : e.getMessage()));
+      return 1;
+    }
   }
 
   /** Runs a command from already split arguments (argv). */

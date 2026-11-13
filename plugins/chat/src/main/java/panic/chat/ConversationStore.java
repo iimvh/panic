@@ -86,6 +86,13 @@ final class ConversationStore implements Conversations {
     return any;
   }
 
+  /** Answers {@link Conversations#LIST}, {@link Conversations#HISTORY} and {@link Conversations#REMOVE} for front-ends. */
+  void hooks(Context ctx) {
+    ctx.hook(LIST, q -> new Listing(list()));
+    ctx.hook(HISTORY, q -> new History(get(q.id()).recent(0)));
+    ctx.hook(REMOVE, q -> new Removal(delete(q.id())));
+  }
+
   /** {@code list} and {@code forget}, and {@code reset} for the session's own conversation. */
   void commands(Context ctx) {
     Commands.command(ctx, "reset", "forget this session's conversation", call -> {

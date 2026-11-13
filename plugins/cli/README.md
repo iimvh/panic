@@ -21,5 +21,5 @@ after the other, in arrival order. Each wait, for its turn and for the answer, h
 (the caller gave up, or `askTimeoutSeconds` passed). Calls from other sessions are not answered here, and one-shot
 mode answers nothing, so its calls that need approval are denied.
 
-`Cli.once(ctx, argv, out, err, signal)` runs a single command for `panic <command> [args]` and returns
-the process exit code: `0` ok, `1` failed, `2` unknown command or bad arguments.
+`Commands.once(ctx, argv, out, err, signal)` (in `sdk`, so the app does not depend on this module) runs a single
+command for `panic <command> [args]` and returns the process exit code: `0` ok, `1` failed, `2` unknown command or bad arguments.

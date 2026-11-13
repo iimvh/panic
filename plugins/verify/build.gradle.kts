@@ -4,6 +4,8 @@ plugins {
 }
 
 dependencies {
-    // :todo for Todo.PLAN (the acceptance criteria); it brings :chat (Chat.REVIEW), :tools and :llm.
-    api(project(":todo"))
+    api(project(":todo")) // Todo.PLAN: the acceptance criteria
+    api(project(":chat")) // Chat.REVIEW
+    api(project(":tools")) // the check tool registers through Tools hooks
+    api(project(":llm")) // Llm.KEY for the reviewer's model call
 }

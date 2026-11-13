@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 import panic.command.Commands;
 import panic.command.Out;
 import panic.command.Session;
-import panic.llm.CancelToken;
+import panic.util.CancelToken;
 import panic.llm.ToolSpec;
 import panic.plugin.App;
 import panic.tools.Risk;

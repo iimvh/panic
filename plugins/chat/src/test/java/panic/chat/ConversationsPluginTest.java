@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import panic.command.Commands;
 import panic.command.Session;
-import panic.llm.CancelToken;
+import panic.util.CancelToken;
 import panic.llm.Llm;
 import panic.llm.Message;
 import panic.llm.ToolCall;

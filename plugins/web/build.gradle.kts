@@ -4,7 +4,9 @@ plugins {
 }
 
 dependencies {
-    api(project(":chat"))
+    api(project(":chat")) // Chat.ASK, Conversations hooks
+    api(project(":tools")) // Tools.APPROVE
+    api(project(":llm")) // Llm.KEY, providers and message types
 }
 
 // The UI (../ui, SvelteKit) is built with npm and packed into the jar under panic/web/ui.

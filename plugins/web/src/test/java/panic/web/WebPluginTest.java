@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import context.ConfigHandle;
 import context.Context;
+import context.PluginHandle;
 import context.Root;
 import core.Signal;
 import java.io.BufferedReader;
@@ -39,7 +40,7 @@ import panic.command.Commands;
 import panic.llm.ChatModel;
 import panic.llm.ChatRequest;
 import panic.llm.Completion;
-import panic.llm.Json;
+import panic.util.Json;
 import panic.llm.KeyCheck;
 import panic.llm.LlmConfig;
 import panic.llm.LlmPlugin;
@@ -139,6 +140,7 @@ class WebPluginTest {
   private final Fake fake = new Fake();
   private final HttpClient http = HttpClient.newHttpClient();
   private Root root;
+  private PluginHandle conversations;
   private ConfigHandle<Boolean> connected;
   private ConfigHandle<LlmConfig> llm;
   private ConfigHandle<WebConfig> web;
@@ -154,7 +156,7 @@ class WebPluginTest {
       return null;
     }, true);
     llm = root.plugin("llm", new LlmPlugin(), new LlmConfig("fake", "m1", null, null));
-    root.plugin("conversations", Conversations.inMemory());
+    conversations = root.plugin("conversations", Conversations.inMemory());
     chat = root.plugin("chat", new ChatPlugin(), new ChatConfig(null, 0));
     root.plugin("settings", ctx -> {
       Commands.command(ctx, "provider [id]", "", c -> llm.update(llm.config().withProvider(c.arg("id"))));
@@ -274,7 +276,7 @@ class WebPluginTest {
     assertEquals("turn", turn.path("name").asText());
     assertEquals("ok", turn.path("status").asText());
     assertTrue(turn.path("parentId").isNull());
-    assertEquals(Chat.questionHash("hi"), turn.path("attrs").path("questionHash").asText());
+    assertEquals(Trace.questionHash("hi"), turn.path("attrs").path(Trace.QUESTION_HASH).asText());
     assertEquals("llm", t.path("spans").path(1).path("name").asText());
     assertEquals(turn.path("id").asText(), t.path("spans").path(1).path("parentId").asText());
     assertEquals(3, t.path("spans").path(1).path("attrs").path("completionTokens").asInt());
@@ -638,6 +640,16 @@ class WebPluginTest {
     assertEquals(404, send("DELETE", "/api/conversations?session=one", "").statusCode());
     assertEquals(400, send("DELETE", "/api/conversations?session=..", "").statusCode());
     assertEquals(405, send("PUT", "/api/conversations", "{}").statusCode());
+  }
+
+  @Test
+  void webKeepsRunningWhenConversationsStopAndAnswersUnavailable() throws Exception {
+    String before = base;
+    conversations.dispose();
+    assertEquals(before, base, "the server was not restarted");
+    assertEquals(503, get("/api/conversations").statusCode());
+    assertEquals(503, get("/api/history?session=s1").statusCode());
+    assertEquals(503, send("DELETE", "/api/conversations?session=s1", "").statusCode());
   }
 
   @Test

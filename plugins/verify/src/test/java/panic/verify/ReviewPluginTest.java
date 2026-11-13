@@ -24,7 +24,7 @@ import panic.chat.Chat;
 import panic.chat.ChatConfig;
 import panic.chat.ChatPlugin;
 import panic.chat.Conversations;
-import panic.llm.CancelToken;
+import panic.util.CancelToken;
 import panic.llm.ChatRequest;
 import panic.llm.Completion;
 import panic.llm.Llm;

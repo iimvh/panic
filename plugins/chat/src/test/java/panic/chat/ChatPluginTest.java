@@ -22,7 +22,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import panic.command.Commands;
 import panic.command.Session;
-import panic.llm.CancelToken;
+import panic.util.CancelToken;
 import panic.llm.ChatRequest;
 import panic.llm.Completion;
 import panic.llm.Llm;

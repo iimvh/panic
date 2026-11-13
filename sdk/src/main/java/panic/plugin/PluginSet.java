@@ -17,4 +17,15 @@ import java.util.List;
 public interface PluginSet {
 
   List<PluginSpec<?>> plugins();
+
+  /**
+   * The panic.json sections this module derives from environment variables ({@code section -> field -> value}),
+   * used only when there is no panic.json at all. {@code env} is the app's lookup (null when unset): the app is
+   * the one place that reads the environment (rule 4), a plugin set only says which variables mean what. Order
+   * matters: when several entries compete (for example, which provider is active) the earliest wins.
+   */
+  default java.util.Map<String, java.util.Map<String, String>> environment(
+      java.util.function.UnaryOperator<String> env) {
+    return java.util.Map.of();
+  }
 }

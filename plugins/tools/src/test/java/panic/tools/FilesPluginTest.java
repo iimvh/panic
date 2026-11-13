@@ -14,7 +14,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import panic.llm.CancelToken;
+import panic.util.CancelToken;
 import panic.llm.ToolCall;
 
 class FilesPluginTest {
@@ -85,10 +85,15 @@ class FilesPluginTest {
     assertRefused(call("list_dir", "{\"path\":\"a.txt\"}"), "not a directory");
   }
 
+  /** A path as a JSON string (backslashes of Windows paths escaped). */
+  private static String quoted(Path path) {
+    return panic.util.Json.MAPPER.valueToTree(path.toString()).toString();
+  }
+
   @Test
   void staysInsideTheWorkspace() throws IOException {
     assertRefused(call("read_file", "{\"path\":\"../secret.txt\"}"), "outside the workspace");
-    assertRefused(call("read_file", "{\"path\":\"" + dir.resolve("secret.txt") + "\"}"), "outside the workspace");
+    assertRefused(call("read_file", "{\"path\":" + quoted(dir.resolve("secret.txt")) + "}"), "outside the workspace");
     assertRefused(call("list_dir", "{\"path\":\"..\"}"), "outside the workspace");
 
     Files.createSymbolicLink(workspace.resolve("link.txt"), dir.resolve("secret.txt"));
@@ -129,7 +134,7 @@ class FilesPluginTest {
   @Test
   void writesStayInsideTheWorkspace() throws IOException {
     assertRefused(call("write_file", "{\"path\":\"../evil.txt\",\"content\":\"x\"}"), "outside the workspace");
-    assertRefused(call("write_file", "{\"path\":\"" + dir.resolve("evil.txt") + "\",\"content\":\"x\"}"),
+    assertRefused(call("write_file", "{\"path\":" + quoted(dir.resolve("evil.txt")) + ",\"content\":\"x\"}"),
         "outside the workspace");
     assertRefused(call("write_file", "{\"path\":\".\",\"content\":\"x\"}"), "outside the workspace");
 

@@ -6,9 +6,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
-import panic.cli.Cli;
+import panic.command.Commands;
 import panic.command.Out;
-import panic.llm.Json;
+import panic.util.Json;
 
 /**
  * <pre>
@@ -81,7 +81,7 @@ public final class Main {
     Runtime.getRuntime().addShutdownHook(new Thread(panic::dispose, "shutdown"));
 
     if (once) {
-      int code = Cli.once(panic.root(), command, out, Out.of(System.err), panic.root().signal());
+      int code = Commands.once(panic.root(), command, out, Out.of(System.err), panic.root().signal());
       panic.dispose();
       System.exit(code);
     }

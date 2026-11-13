@@ -21,10 +21,10 @@ import java.util.concurrent.atomic.AtomicReference;
 import panic.command.Commands;
 import panic.command.Hooks;
 import panic.command.Out;
-import panic.llm.CancelToken;
+import panic.util.CancelToken;
 import panic.llm.ChatRequest;
 import panic.llm.Completion;
-import panic.llm.Json;
+import panic.util.Json;
 import panic.llm.Llm;
 import panic.llm.LlmException;
 import panic.llm.Message;
@@ -165,7 +165,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       span = Trace.open(ctx, ask.traceId(), delegate == null ? null : delegate.parentSpanId(), "turn")
           .attr(Trace.CONVERSATION, ask.conversationId())
           .attr("question", cut(ask.text()))
-          .attr("questionHash", Chat.questionHash(ask.text()));
+          .attr(Trace.QUESTION_HASH, Trace.questionHash(ask.text()));
       if (delegate != null) span.attr("agent", delegate.agent()).attr("origin", delegate.origin());
       try {
         Chat.Reply reply = loop();
@@ -288,7 +288,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private void summarise() {
       span.attr("model", model).attr("stop", stop).attr("steps", steps).attr("toolCalls", toolCalls)
           .attr("promptTokens", usage.promptTokens()).attr("completionTokens", usage.completionTokens())
-          .attr("saved", saved);
+          .attr(Trace.SAVED, saved);
     }
 
     /** Ends {@code s} as failed; anything thrown once the turn was cancelled counts as the cancellation. */

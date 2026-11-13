@@ -19,7 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
-import panic.llm.Json;
+import panic.util.Json;
 import panic.llm.ToolSpec;
 
 /**

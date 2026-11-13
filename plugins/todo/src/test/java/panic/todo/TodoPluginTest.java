@@ -19,7 +19,7 @@ import org.junit.jupiter.api.io.TempDir;
 import panic.chat.Chat;
 import panic.command.Commands;
 import panic.command.Session;
-import panic.llm.CancelToken;
+import panic.util.CancelToken;
 import panic.llm.ToolCall;
 import panic.llm.ToolSpec;
 import panic.tools.PermissionsConfig;

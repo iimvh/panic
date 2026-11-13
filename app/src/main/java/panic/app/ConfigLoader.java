@@ -7,12 +7,15 @@ import com.fasterxml.jackson.databind.node.TextNode;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collection;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.function.UnaryOperator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import panic.llm.Json;
+import panic.plugin.PluginSet;
+import panic.util.Json;
 
 /**
  * Reads panic.json: one section per plugin, by plugin name. Every string may reference environment
@@ -25,16 +28,19 @@ import panic.llm.Json;
 public final class ConfigLoader {
 
   private static final Pattern VAR = Pattern.compile("\\$\\{([A-Za-z_][A-Za-z0-9_]*)}");
-  private static final String[] PROVIDERS = {"openrouter", "mistral"};
 
   private final UnaryOperator<String> env;
+  private final Collection<? extends PluginSet> sets;
 
-  public ConfigLoader(UnaryOperator<String> env) {
+  /** {@code sets}: the plugin modules asked what the environment means when there is no file. */
+  public ConfigLoader(UnaryOperator<String> env, Collection<? extends PluginSet> sets) {
     this.env = env;
+    this.sets = List.copyOf(sets);
   }
 
+  /** A loader that reads the real environment, for the plugin modules found on the classpath. */
   public static ConfigLoader system() {
-    return new ConfigLoader(System::getenv);
+    return new ConfigLoader(System::getenv, Panic.discoverSets());
   }
 
   public ObjectNode load(Path file) throws IOException {
@@ -54,21 +60,20 @@ public final class ConfigLoader {
     return obj;
   }
 
-  /** OPENROUTER_API_KEY / MISTRAL_API_KEY; the first one set becomes the active provider, PANIC_MODEL its model. */
+  /**
+   * The config when there is no file: each plugin module says which environment variables fill which sections
+   * ({@link PluginSet#environment}); the loader only reads them through its lookup and merges the answers.
+   */
   public ObjectNode fromEnvironment() {
     ObjectNode tree = Json.object();
-    String active = null;
-    for (String id : PROVIDERS) {
-      String key = env.apply(id.toUpperCase() + "_API_KEY");
-      if (key != null && !key.isBlank()) {
-        tree.putObject(id).put("apiKey", key);
-        if (active == null) active = id;
-      }
+    for (PluginSet set : sets) {
+      set.environment(env).forEach((section, fields) -> {
+        ObjectNode node = tree.has(section) ? (ObjectNode) tree.get(section) : tree.putObject(section);
+        fields.forEach((k, v) -> {
+          if (!node.has(k)) node.put(k, v);
+        });
+      });
     }
-    ObjectNode llm = tree.putObject("llm");
-    if (active != null) llm.put("provider", active);
-    String model = env.apply("PANIC_MODEL");
-    if (model != null && !model.isBlank()) llm.put("model", model);
     return tree;
   }
 

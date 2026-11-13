@@ -32,6 +32,7 @@ public final class ConversationsPlugin implements ConfigPlugin<ConversationsConf
     ConversationStore store = new ConversationStore(ctx, dir, warn);
     ctx.provide(Conversations.KEY, store);
     store.commands(ctx);
+    store.hooks(ctx);
     return null;
   }
 

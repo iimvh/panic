@@ -11,6 +11,12 @@ LLM providers and the model the app chats with.
 | `llm` | `LlmConfig { provider, model, temperature?, maxTokens? }` | none (its child `active:<provider>` requires that provider) | service `Llm.KEY`; hooks `Llm.CURRENT`, `Llm.CONFIG`; commands `status`, `models`, `check` |
 | `settings` | none | `Configs.KEY` | commands `provider`, `model` (they update the `llm` config) |
 
+## Environment without `panic.json`
+
+`LlmPlugins.environment` (`PluginSet.environment`) tells the app which variables fill which sections when there is
+no file: `OPENROUTER_API_KEY` / `MISTRAL_API_KEY` set `<provider>.apiKey`, the first provider with a key becomes
+`llm.provider`, and `PANIC_MODEL` is `llm.model`. The app only supplies the lookup, so it knows no provider name.
+
 ## Public keys
 
 | Key | Type | Meaning |

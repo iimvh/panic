@@ -63,7 +63,7 @@ public final class Cli implements ConfigPlugin<CliConfig> {
     ctx.spawn("repl", signal -> {
       Session session = new Session(SESSION, out, signal);
       out.println("panic — type a message, or " + PREFIX + "help");
-      Commands.run(ctx, "status", "", session);
+      Commands.run(ctx, Commands.STATUS, "", session);
       try {
         while (!signal.isCancelled() && !stop.get()) {
           out.print("\n> ");
@@ -79,30 +79,6 @@ public final class Cli implements ConfigPlugin<CliConfig> {
       return null;
     });
     return null;
-  }
-
-  /**
-   * Runs one command, e.g. argv {@code [models, free]}. Returns the process exit code: 0 done, 1 failed,
-   * 2 unknown command or bad arguments.
-   */
-  public static int once(Context ctx, List<String> argv, Out out, Out err, Signal signal) {
-    if (argv.isEmpty()) throw new IllegalArgumentException("no command");
-    Session session = new Session("cli", out, signal);
-    String name = argv.get(0);
-    try {
-      if (Commands.run(ctx, name, argv.subList(1, argv.size()), session)) return 0;
-      err.println(unknown(name, ""));
-      return 2;
-    } catch (UsageException e) {
-      err.println("usage: " + e.usage() + "  (" + e.getMessage() + ")");
-      return 2;
-    } catch (CancelledException e) {
-      err.println("[cancelled]");
-      return 1;
-    } catch (RuntimeException e) {
-      err.println("[error] " + message(e));
-      return 1;
-    }
   }
 
   /**

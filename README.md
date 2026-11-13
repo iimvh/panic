@@ -96,7 +96,7 @@ export OPENROUTER_API_KEY=sk-or-...   # and/or MISTRAL_API_KEY
 The older layout with a `"providers": { ... }` group is still accepted.
 
 > [!TIP]
-> Without `panic.json`, Panic reads `OPENROUTER_API_KEY`, `MISTRAL_API_KEY` and `PANIC_MODEL` from the environment.
+> Without `panic.json`, Panic reads `OPENROUTER_API_KEY`, `MISTRAL_API_KEY` and `PANIC_MODEL` from the environment. The `app` only passes the environment in; each plugin module says what it means (`PluginSet.environment`, here in `:llm`).
 
 ### Run
 
@@ -287,7 +287,7 @@ The plugin's config is now the `"memory": { "limit": 50 }` section of `panic.jso
 | From | What |
 | --- | --- |
 | z (`context.Context`) | `provide` / `requires` services, `hook` / `bail`, `on` / `emit` events, `spawn` tasks, child plugins |
-| `panic.command.Commands` | Declare commands that live as long as the plugin |
+| `panic.command.Commands` | Declare commands that live as long as the plugin; `Commands.once` runs one from argv |
 | `panic.plugin.Configs` | Read or change another plugin's config at runtime |
 | `panic.trace.Trace` | Emit timed spans (`Trace.open`), read traces back (`Trace.GET`, `Trace.LIST`) |
 | `panic.plugin.App` | The terminal and `exit()`. It is provided last, so requiring it means "start once the whole tree is installed" |
@@ -301,6 +301,7 @@ A module may declare several plugins. For example `:llm` declares `openrouter`, 
 ├── sdk/              panic.command  Commands, Command (spec parsing, argument binding), Session, Out
 │                     panic.plugin   PluginSpec, PluginSet, Configs, App
 │                     panic.trace    Trace (event SPAN, hooks GET, LIST), Span, OpenSpan
+│                     panic.util     Json (the one ObjectMapper), CancelToken
 ├── plugins/
 │   ├── llm/          panic.llm      openrouter, mistral, llm, settings; OpenAiCompatClient (SSE, cancellable)
 │   ├── chat/         panic.chat     conversations, chat; Chat (hook ASK, event TURN)

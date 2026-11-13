@@ -4,17 +4,14 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import context.ConfigPlugin;
 import context.Context;
-import context.ServiceKey;
 import context.Task;
 import core.Disposable;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.time.Duration;
-import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
-import panic.chat.Conversations;
 import panic.tools.Tools;
 
 /**
@@ -42,11 +39,6 @@ public final class WebPlugin implements ConfigPlugin<WebConfig> {
   WebPlugin(Consumer<String> log, Duration heartbeat) {
     this.log = log;
     this.heartbeat = heartbeat;
-  }
-
-  @Override
-  public List<ServiceKey<?>> requires() {
-    return List.of(Conversations.KEY);
   }
 
   @Override

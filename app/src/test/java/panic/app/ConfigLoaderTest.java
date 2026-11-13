@@ -1,5 +1,6 @@
 package panic.app;
 
+import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -10,7 +11,7 @@ import org.junit.jupiter.api.Test;
 
 class ConfigLoaderTest {
 
-  private final ConfigLoader loader = new ConfigLoader(Map.of("OR_KEY", "sk-or", "MODEL", "x/y:free")::get);
+  private final ConfigLoader loader = new ConfigLoader(Map.of("OR_KEY", "sk-or", "MODEL", "x/y:free")::get, List.of());
 
   @Test
   void interpolatesEnvironmentInStrings() throws Exception {
@@ -35,7 +36,7 @@ class ConfigLoaderTest {
 
   @Test
   void environmentOnlyPicksFirstProviderWithKey() {
-    ObjectNode cfg = new ConfigLoader(Map.of("MISTRAL_API_KEY", "m", "PANIC_MODEL", "mistral-small-latest")::get)
+    ObjectNode cfg = new ConfigLoader(Map.of("MISTRAL_API_KEY", "m", "PANIC_MODEL", "mistral-small-latest")::get, Panic.discoverSets())
         .fromEnvironment();
     assertEquals("mistral", cfg.at("/llm/provider").asText());
     assertEquals("mistral-small-latest", cfg.at("/llm/model").asText());

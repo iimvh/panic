@@ -11,6 +11,10 @@ public interface Llm extends ChatModel {
 
   ServiceKey<Llm> KEY = ServiceKey.of("llm", Llm.class);
 
+  /** Commands of the {@code settings} plugin that switch the provider or the model of {@code llm} (see its README). */
+  String PROVIDER_COMMAND = "provider";
+  String MODEL_COMMAND = "model";
+
   /**
    * Answers with the current Llm, for callers that only want to look at it (list models, check the key)
    * without having their lifetime tied to it. Use {@link #KEY} with requires() to actually depend on it.

@@ -212,20 +212,6 @@ public final class Chat {
     }
   }
 
-  /**
-   * A short, stable digest of a question, kept on the root span of each turn's trace ({@code questionHash}), so
-   * a front-end can find the trace of a stored question without the trace keeping (or matching on) its text.
-   */
-  public static String questionHash(String question) {
-    try {
-      byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
-          .digest(question.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-      return java.util.HexFormat.of().formatHex(digest, 0, 8);
-    } catch (java.security.NoSuchAlgorithmException e) {
-      throw new IllegalStateException("SHA-256 is always available", e);
-    }
-  }
-
   /** The question put to {@link #CONTEXT} contributors, once per ask. */
   public record ContextQuery(String conversationId) {
     public ContextQuery {

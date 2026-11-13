@@ -11,7 +11,7 @@ import panic.chat.Chat;
 import panic.command.Hooks;
 import panic.llm.ChatRequest;
 import panic.llm.Completion;
-import panic.llm.Json;
+import panic.util.Json;
 import panic.llm.Llm;
 import panic.llm.LlmException;
 import panic.llm.Message;

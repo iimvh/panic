@@ -26,10 +26,11 @@ import panic.chat.Chat;
 import panic.chat.Conversations;
 import panic.command.Command;
 import panic.command.Commands;
+import panic.command.Hooks;
 import panic.command.Session;
 import panic.command.UsageException;
-import panic.llm.CancelToken;
-import panic.llm.Json;
+import panic.util.CancelToken;
+import panic.util.Json;
 import panic.llm.Llm;
 import panic.llm.LlmConfig;
 import panic.llm.LlmException;
@@ -165,8 +166,13 @@ final class Api {
    * updatedAt}]}. Sub-agents' conversations are not listed (see {@link Conversations#list}).
    */
   private void conversations(HttpExchange ex) throws IOException {
+    Optional<Conversations.Listing> listing = Hooks.bail(ctx, Conversations.LIST, new Conversations.ListQuery());
+    if (listing.isEmpty()) {
+      Http.error(ex, 503, "conversations are not available");
+      return;
+    }
     ArrayNode out = Json.MAPPER.createArrayNode();
-    for (Conversations.Info i : ctx.get(Conversations.KEY).list()) {
+    for (Conversations.Info i : listing.get().conversations()) {
       if (!SESSION.matcher(i.id()).matches()) continue;
       out.addObject().put("id", i.id()).put("title", i.title()).put("updatedAt", i.updatedAt());
     }
@@ -183,7 +189,12 @@ final class Api {
       Http.error(ex, 409, "an answer is running in this conversation; stop it first");
       return;
     }
-    if (!ctx.get(Conversations.KEY).delete(session)) {
+    Optional<Conversations.Removal> removal = Hooks.bail(ctx, Conversations.REMOVE, new Conversations.RemoveQuery(session));
+    if (removal.isEmpty()) {
+      Http.error(ex, 503, "conversations are not available");
+      return;
+    }
+    if (!removal.get().deleted()) {
       Http.error(ex, 404, "no such conversation");
       return;
     }
@@ -196,9 +207,14 @@ final class Api {
    */
   private void history(HttpExchange ex) throws IOException {
     String session = session(Http.query(ex).get("session"));
+    Optional<Conversations.History> history = Hooks.bail(ctx, Conversations.HISTORY, new Conversations.HistoryQuery(session));
+    if (history.isEmpty()) {
+      Http.error(ex, 503, "conversations are not available");
+      return;
+    }
     ArrayNode out = Json.MAPPER.createArrayNode();
     List<ObjectNode> questions = new java.util.ArrayList<>();
-    for (Message m : ctx.get(Conversations.KEY).get(session).recent(0)) {
+    for (Message m : history.get().messages()) {
       switch (m.role()) {
         case USER -> {
           if (m.content().startsWith(Chat.REVIEW_FEEDBACK_PREFIX)) {
@@ -243,12 +259,12 @@ final class Api {
     } catch (RuntimeException e) {
       return; // a broken tracer never breaks the history
     }
-    List<Span> saved = roots.stream().filter(r -> Boolean.TRUE.equals(r.attrs().get("saved"))).toList();
+    List<Span> saved = roots.stream().filter(r -> Boolean.TRUE.equals(r.attrs().get(Trace.SAVED))).toList();
     int next = 0;
     for (int i = questions.size() - 1; i >= 0 && next < saved.size(); i--) {
-      String hash = Chat.questionHash(questions.get(i).path("content").asText());
+      String hash = Trace.questionHash(questions.get(i).path("content").asText());
       for (int j = next; j < saved.size(); j++) {
-        if (hash.equals(saved.get(j).stringAttr("questionHash"))) {
+        if (hash.equals(saved.get(j).stringAttr(Trace.QUESTION_HASH))) {
           questions.get(i).put("traceId", saved.get(j).traceId());
           next = j + 1;
           break;
@@ -501,12 +517,12 @@ final class Api {
       String id = body.get("provider").asText().strip();
       boolean known = ctx.collect(Providers.STATUS, Providers.Query.ALL).stream().anyMatch(p -> p.id().equals(id));
       if (!known) throw new Http.BadRequest("unknown provider '" + id + "'");
-      if (!Commands.run(ctx, "provider", id, quiet)) throw new Http.BadRequest("switching provider is not available");
+      if (!Commands.run(ctx, Llm.PROVIDER_COMMAND, id, quiet)) throw new Http.BadRequest("switching provider is not available");
     }
     if (body.hasNonNull("model")) {
       String model = body.get("model").asText().strip();
       if (model.isEmpty() || indexOfWhitespace(model) >= 0) throw new Http.BadRequest("bad model id");
-      if (!Commands.run(ctx, "model", model, quiet)) throw new Http.BadRequest("switching model is not available");
+      if (!Commands.run(ctx, Llm.MODEL_COMMAND, model, quiet)) throw new Http.BadRequest("switching model is not available");
     }
     Http.json(ex, 200, state());
   }

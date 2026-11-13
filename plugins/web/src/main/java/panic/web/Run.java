@@ -7,7 +7,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
-import panic.llm.CancelToken;
+import panic.util.CancelToken;
 
 /**
  * One answer in flight for a session, independent of the browser connections watching it. Every event is

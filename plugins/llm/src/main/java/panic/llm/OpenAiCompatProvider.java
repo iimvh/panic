@@ -1,5 +1,6 @@
 package panic.llm;
 
+import panic.util.CancelToken;
 import com.fasterxml.jackson.databind.JsonNode;
 import core.CancelledException;
 import core.Signal;

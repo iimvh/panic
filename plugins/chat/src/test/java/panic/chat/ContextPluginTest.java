@@ -24,7 +24,7 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import panic.llm.CancelToken;
+import panic.util.CancelToken;
 import panic.llm.ChatRequest;
 import panic.llm.Completion;
 import panic.llm.Llm;

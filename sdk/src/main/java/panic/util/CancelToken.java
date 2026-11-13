@@ -1,4 +1,4 @@
-package panic.llm;
+package panic.util;
 
 import core.CancelledException;
 import core.Disposable;

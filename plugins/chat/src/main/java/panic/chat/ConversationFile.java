@@ -20,7 +20,7 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
-import panic.llm.Json;
+import panic.util.Json;
 import panic.llm.Message;
 import panic.llm.Role;
 import panic.llm.ToolCall;

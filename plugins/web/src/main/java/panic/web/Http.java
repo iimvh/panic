@@ -7,7 +7,7 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
-import panic.llm.Json;
+import panic.util.Json;
 
 /** Small helpers over HttpExchange. */
 final class Http {

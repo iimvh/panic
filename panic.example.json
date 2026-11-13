@@ -1,5 +1,5 @@
 {
-  "openrouter": { "apiKey": "${OPENROUTER_API_KEY}" },
+  "openrouter": { "apiKey": "${OPENROUTER_API_KEY}", "maxRetries": 2 },
   "mistral": { "apiKey": "${MISTRAL_API_KEY}" },
   "llm": {
     "provider": "openrouter",
@@ -9,7 +9,17 @@
   },
   "chat": {
     "systemPrompt": "You are Panic, a concise and helpful assistant.",
-    "maxHistory": 40
+    "maxHistory": 40,
+    "tools": true,
+    "maxSteps": 8,
+    "maxTokens": 0,
+    "toolTimeoutSeconds": 60
+  },
+  "files": { "root": ".", "maxBytes": 65536, "maxWriteBytes": 1048576 },
+  "permissions": {
+    "risks": { "read": "allow", "write": "ask", "exec": "ask", "network": "ask" },
+    "tools": {},
+    "askTimeoutSeconds": 120
   },
   "web": { "enabled": false, "host": "127.0.0.1", "port": 8080 }
 }

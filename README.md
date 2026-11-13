@@ -135,9 +135,15 @@ Plain text runs `ask`. In the REPL, commands start with `/`. On the command line
 | `status` | `llm` | always |
 | `provider [id]`, `model [id]` | `settings` | always |
 | `reset` | `conversations` | always |
+| `tools`, `tool <name> [args...]` | `tools` | always. `tools` shows each tool's risk and permission. `args` is a JSON object, e.g. `tool read_file {"path":"README.md"}` |
 | `help [command]`, `exit` | `cli` | always (`exit` in the REPL only) |
 
 `/help` lists only the commands that are available at that moment. One-shot mode exits with code `0` on success, `1` on failure and `2` for an unknown command or bad arguments. Ctrl+C shuts down cleanly in both modes.
+
+Tools that change things ask first. Reading is allowed, but a call such as `write_file` (risk `write`) waits
+for your answer: the REPL prints `[approve] write_file (write) {...}` and runs it only if you type `y`, and the
+web UI shows Allow/Deny buttons. With no answer (one-shot mode, nobody watching, `askTimeoutSeconds` passed)
+the call is denied and the model is told so. Tune the rules per risk or per tool in the `permissions` section.
 
 Edit `panic.json` while Panic is running and the change is applied as soon as you save. Only the plugins whose section changed are restarted. A model picked with `/model` stays selected when you edit other sections of the file.
 
@@ -184,8 +190,9 @@ Solid lines show ownership in the tree. Dotted lines show the services and hooks
 | `openrouter`, `mistral` | Provide `llm.provider.<id>` while they have a key. |
 | `llm` | Installs `active:<provider>`, which requires that provider and provides `llm` with the chosen model and options. |
 | `conversations` | Keeps chat history in memory. It does not depend on the LLM, so history survives a switch. |
-| `chat` | Requires `llm` and `conversations`. Answers the `chat.ask` hook, emits `chat.turn` after each exchange and declares `ask`. |
+| `chat` | Requires `llm` and `conversations`. Answers the `chat.ask` hook with an agent loop: it offers the registered tools, runs the calls and feeds the results back until the model answers (limits in its config). Emits `chat.step` and `chat.turn`, and declares `ask`. |
 | `settings` | Declares `provider` and `model`, which change the `llm` config at runtime through the `Configs` service. |
+| `tools`, `permissions`, `files`, `clock` | `tools` declares the `tools` and `tool` commands. `permissions` answers the `tool.policy` hook (allow / ask / deny per risk and per tool); calls it asks about go to front-ends through `tool.approve`. `files` (`read_file`, `list_dir`, `write_file`, confined to `files.root`) and `clock` (`time`) register tools through the `tool.list` / `tool.run` hooks. |
 | `config-watch` | Watches `panic.json` and updates only the configs that changed. Runs in interactive mode only. |
 | `web` | The web front-end. It serves the UI and an HTTP + SSE API built only on hooks and commands. |
 | `cli` | The terminal front-end. It runs whatever commands are declared right now, and requires `App`, so it starts once the rest of the tree is installed. |

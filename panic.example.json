@@ -20,6 +20,11 @@
   },
   "conversations": { "dir": ".panic/conversations", "persist": true },
   "todo": { "dir": ".panic/todo", "maxItems": 50 },
+  "checks": {
+    "dir": ".",
+    "checks": { "test": { "command": ["./gradlew", "check", "-PskipUi"], "timeoutSeconds": 600 } }
+  },
+  "review": { "maxTokens": 512 },
   "files": { "root": ".", "maxBytes": 65536, "maxWriteBytes": 1048576 },
   "permissions": {
     "risks": { "read": "allow", "write": "ask", "exec": "ask", "network": "ask" },

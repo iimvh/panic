@@ -22,10 +22,12 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,13 +45,23 @@ import panic.llm.LlmPlugin;
 import panic.llm.ModelInfo;
 import panic.llm.Provider;
 import panic.llm.Providers;
+import panic.llm.Role;
+import panic.llm.ToolCall;
+import panic.llm.ToolSpec;
 import panic.llm.Usage;
+import panic.tools.Risk;
+import panic.tools.Tool;
+import panic.tools.ToolContext;
+import panic.tools.ToolResult;
+import panic.tools.Tools;
 
 class WebPluginTest {
 
   /** Streams "Hel" "lo <model>"; with {@code block}, waits after the first delta until cancelled. */
   static final class Fake implements Provider, ChatModel {
     volatile CountDownLatch block;
+    /** When set, a question is first answered with a call to the {@code echo} tool. */
+    volatile boolean useTool;
     final CountDownLatch cancelled = new CountDownLatch(1);
 
     @Override
@@ -79,6 +91,10 @@ class WebPluginTest {
 
     @Override
     public Completion stream(ChatRequest r, Signal s, Consumer<String> onDelta) {
+      if (useTool && r.messages().get(r.messages().size() - 1).role() == Role.USER) {
+        return new Completion("", r.model(), "tool_calls", new Usage(1, 1),
+            List.of(new ToolCall("t1", "echo", "{\"text\":\"ping\"}")));
+      }
       onDelta.accept("Hel");
       CountDownLatch b = block;
       if (b != null) {
@@ -193,6 +209,122 @@ class WebPluginTest {
 
     connected.update(false);
     assertEquals("unavailable", events(send("POST", "/api/chat", "{\"session\":\"s1\",\"text\":\"hi\"}").body()).get(0).name());
+  }
+
+  /** Offers {@code echo} with risk write, so every call of it asks the browser. */
+  private void writingEcho() {
+    root.plugin("echo", ctx -> {
+      Tools.register(ctx, new Tool() {
+        @Override
+        public ToolSpec spec() {
+          return new ToolSpec("echo", "", null);
+        }
+
+        @Override
+        public Risk risk() {
+          return Risk.WRITE;
+        }
+
+        @Override
+        public ToolResult call(JsonNode args, ToolContext tc) {
+          return ToolResult.ok("pong");
+        }
+      });
+      return null;
+    });
+  }
+
+  /** Asks in session t and answers the approval question with {@code allow}; returns every event. */
+  private List<Event> chatAndApprove(boolean allow) throws Exception {
+    HttpRequest req = HttpRequest.newBuilder(URI.create(base + "/api/chat"))
+        .POST(HttpRequest.BodyPublishers.ofString("{\"session\":\"t\",\"text\":\"hi\"}"))
+        .header("Content-Type", "application/json").build();
+    HttpResponse<Stream<String>> res = http.send(req, HttpResponse.BodyHandlers.ofLines());
+    StringBuilder all = new StringBuilder();
+    boolean answered = false;
+    try (Stream<String> body = res.body()) {
+      Iterator<String> lines = body.iterator();
+      while (lines.hasNext()) {
+        String line = lines.next();
+        all.append(line).append('\n');
+        if (!answered && line.startsWith("data: ") && all.toString().endsWith("event: approve\n" + line + "\n")) {
+          JsonNode q = Json.parseOrNull(line.substring(6));
+          assertEquals(404, send("POST", "/api/approve", "{\"session\":\"other\",\"id\":\"" + q.path("id").asText()
+              + "\",\"allow\":true}").statusCode(), "only the session that asked may answer");
+          assertEquals(200, send("POST", "/api/approve", "{\"session\":\"t\",\"id\":\"" + q.path("id").asText()
+              + "\",\"allow\":" + allow + "}").statusCode());
+          answered = true;
+        }
+      }
+    }
+    return events(all.toString());
+  }
+
+  @Test
+  void theBrowserApprovesToolCalls() throws Exception {
+    fake.useTool = true;
+    writingEcho();
+    List<Event> ev = chatAndApprove(true);
+    assertEquals(List.of("tool", "approve", "tool", "delta", "delta", "done"), ev.stream().map(Event::name).toList());
+    JsonNode q = ev.get(1).data();
+    assertEquals("echo", q.path("name").asText());
+    assertEquals("write", q.path("risk").asText());
+    assertEquals("{\"text\":\"ping\"}", q.path("arguments").asText());
+    assertEquals("ok", ev.get(2).data().path("status").asText());
+    assertEquals("pong", ev.get(2).data().path("content").asText());
+  }
+
+  @Test
+  void theBrowserDeniesToolCalls() throws Exception {
+    fake.useTool = true;
+    writingEcho();
+    List<Event> ev = chatAndApprove(false);
+    assertEquals("error", ev.get(2).data().path("status").asText());
+    assertEquals("echo: denied by the user", ev.get(2).data().path("content").asText());
+    assertEquals("done", ev.get(ev.size() - 1).name());
+  }
+
+  @Test
+  void unknownApprovalsAreNotFound() throws Exception {
+    assertEquals(404, send("POST", "/api/approve", "{\"session\":\"t\",\"id\":\"nope\",\"allow\":true}").statusCode());
+    assertEquals(400, send("POST", "/api/approve", "{\"id\":\"nope\"}").statusCode());
+    assertEquals(405, get("/api/approve").statusCode());
+  }
+
+  @Test
+  void toolCallsAreStreamedAndHiddenFromHistory() throws Exception {
+    fake.useTool = true;
+    root.plugin("echo", ctx -> {
+      Tools.register(ctx, new Tool() {
+        @Override
+        public ToolSpec spec() {
+          return new ToolSpec("echo", "", null);
+        }
+
+        @Override
+        public Risk risk() {
+          return Risk.READ;
+        }
+
+        @Override
+        public ToolResult call(JsonNode args, ToolContext tc) {
+          return ToolResult.ok("pong");
+        }
+      });
+      return null;
+    });
+    List<Event> ev = events(send("POST", "/api/chat", "{\"session\":\"t\",\"text\":\"hi\"}").body());
+    assertEquals(List.of("tool", "tool", "delta", "delta", "done"), ev.stream().map(Event::name).toList());
+    assertEquals("running", ev.get(0).data().path("status").asText());
+    assertEquals("echo", ev.get(0).data().path("name").asText());
+    assertEquals("ok", ev.get(1).data().path("status").asText());
+    assertEquals("pong", ev.get(1).data().path("content").asText());
+    assertEquals(1, ev.get(4).data().path("toolCalls").asInt());
+    assertEquals("done", ev.get(4).data().path("stop").asText());
+
+    JsonNode history = Json.parseOrNull(get("/api/history?session=t").body());
+    assertEquals(2, history.size(), "only the question and the answer: " + history);
+    assertEquals("Hello m1", history.path(1).path("content").asText());
   }
 
   @Test

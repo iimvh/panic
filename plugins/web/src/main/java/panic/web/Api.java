@@ -7,13 +7,20 @@ import com.sun.net.httpserver.HttpExchange;
 import context.Context;
 import context.Task;
 import core.CancelledException;
+import core.Disposable;
 import core.Signal;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.regex.Pattern;
 import panic.chat.Chat;
 import panic.chat.Conversations;
@@ -29,18 +36,29 @@ import panic.llm.LlmException;
 import panic.llm.Message;
 import panic.llm.ModelInfo;
 import panic.llm.Providers;
+import panic.llm.Role;
+import panic.tools.Tools;
 
 /**
  * The HTTP API. Like the CLI it owns no feature: everything goes through hooks (chat.ask, llm.config,
- * llm.current, llm.providers) and commands, so it reflects exactly what is running.
+ * llm.current, llm.providers, tool.approve) and commands, so it reflects exactly what is running.
  */
 final class Api {
 
   private static final Pattern SESSION = Pattern.compile("[A-Za-z0-9_-]{1,100}");
   private static final int MAX_TEXT = 100_000;
+  /** A tool result shown to the browser is cut here; the model still gets all of it. */
+  private static final int MAX_STEP_CONTENT = 2_000;
 
   private final Context ctx;
   private final Duration heartbeat;
+  /** The open SSE stream of each session: where its approval questions go. */
+  private final Map<String, SseResponse> streams = new ConcurrentHashMap<>();
+  /** Approval questions waiting for {@code POST /api/approve}, by id. */
+  private final Map<String, Pending> pending = new ConcurrentHashMap<>();
+
+  private record Pending(String session, CompletableFuture<Tools.Decision> answer) {
+  }
 
   Api(Context ctx, Duration heartbeat) {
     this.ctx = ctx;
@@ -56,6 +74,7 @@ final class Api {
       case "/api/history" -> only(ex, method, "GET", () -> history(ex));
       case "/api/chat" -> only(ex, method, "POST", () -> chat(ex, signal));
       case "/api/command" -> only(ex, method, "POST", () -> command(ex, signal));
+      case "/api/approve" -> only(ex, method, "POST", () -> approval(ex));
       case "/api/settings" -> only(ex, method, "PUT", () -> settings(ex));
       default -> {
         if (!path.startsWith("/api/")) return false;
@@ -130,6 +149,8 @@ final class Api {
     String session = session(Http.query(ex).get("session"));
     ArrayNode out = Json.MAPPER.createArrayNode();
     for (Message m : ctx.get(Conversations.KEY).get(session).recent(0)) {
+      // tool traffic is for the model; the page shows the questions and the answers
+      if (m.role() == Role.TOOL || m.content().isBlank()) continue;
       out.addObject().put("role", m.role().wire()).put("content", m.content());
     }
     Http.json(ex, 200, out);
@@ -144,15 +165,18 @@ final class Api {
     SseResponse sse = SseResponse.open(ex);
     Signal both = CancelToken.any(signal, sse.gone());
     Task<Void> ping = sse.heartbeat(ctx, heartbeat);
+    streams.put(session, sse);
     try {
       Optional<Chat.Reply> reply = Chat.ask(ctx,
-          new Chat.Ask(session, text, both, d -> sse.send("delta", Json.object().put("text", d))));
+          new Chat.Ask(session, text, both, d -> sse.send("delta", Json.object().put("text", d)),
+              step -> sse.send("tool", step(step))));
       if (reply.isEmpty()) {
         sse.send("unavailable", Json.object().put("message", "no LLM connected"));
         return;
       }
       Chat.Reply r = reply.get();
-      ObjectNode done = Json.object().put("model", r.model()).put("finishReason", r.finishReason());
+      ObjectNode done = Json.object().put("model", r.model()).put("finishReason", r.finishReason())
+          .put("stop", r.stop()).put("toolCalls", r.toolCalls());
       done.putObject("usage").put("promptTokens", r.usage().promptTokens())
           .put("completionTokens", r.usage().completionTokens());
       sse.send("done", done);
@@ -161,8 +185,18 @@ final class Api {
     } catch (RuntimeException e) {
       sse.send("error", Json.object().put("message", message(e)));
     } finally {
+      streams.remove(session, sse);
       ping.dispose();
     }
+  }
+
+  private static ObjectNode step(Chat.Step step) {
+    ObjectNode o = Json.object().put("id", step.call().id()).put("name", step.call().name())
+        .put("arguments", step.call().arguments());
+    if (!step.done()) return o.put("status", "running");
+    String content = step.result().content();
+    if (content.length() > MAX_STEP_CONTENT) content = content.substring(0, MAX_STEP_CONTENT) + "…";
+    return o.put("status", step.result().isError() ? "error" : "ok").put("content", content);
   }
 
   private void command(HttpExchange ex, Signal signal) throws IOException {
@@ -179,6 +213,7 @@ final class Api {
     Session s = new Session(session, t -> sse.send("delta", Json.object().put("text", t)),
         CancelToken.any(signal, sse.gone()));
     Task<Void> ping = sse.heartbeat(ctx, heartbeat);
+    streams.put(session, sse);
     try {
       if (Commands.run(ctx, name, args, s)) {
         sse.send("done");
@@ -192,8 +227,54 @@ final class Api {
     } catch (RuntimeException e) {
       sse.send("error", Json.object().put("message", message(e)));
     } finally {
+      streams.remove(session, sse);
       ping.dispose();
     }
+  }
+
+  // ---------------- approvals ----------------
+
+  /**
+   * Answers {@link Tools#APPROVE} for a session that has a stream open (the chat or command that made the
+   * call): sends SSE {@code approve {id, callId, name, arguments, risk}} and waits for {@code POST /api/approve}. A
+   * browser that leaves denies; a cancelled call is thrown. Other sessions get no answer (null).
+   */
+  Tools.Decision approve(Tools.Approval a) {
+    SseResponse sse = streams.get(a.conversationId());
+    if (sse == null) return null;
+    String id = UUID.randomUUID().toString();
+    CompletableFuture<Tools.Decision> answer = new CompletableFuture<>();
+    pending.put(id, new Pending(a.conversationId(), answer));
+    Disposable cancelled = a.signal().onCancel(() -> answer.cancel(false));
+    Disposable left = sse.gone().onCancel(() -> answer.complete(Tools.Decision.DENY));
+    try {
+      sse.send("approve", Json.object().put("id", id).put("callId", a.call().id()).put("name", a.call().name())
+          .put("arguments", a.call().arguments()).put("risk", a.risk().wire()));
+      return answer.get();
+    } catch (CancellationException e) {
+      throw new CancelledException("approval cancelled");
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new CancelledException("approval interrupted");
+    } catch (ExecutionException e) {
+      return Tools.Decision.DENY;
+    } finally {
+      pending.remove(id);
+      left.dispose();
+      cancelled.dispose();
+    }
+  }
+
+  private void approval(HttpExchange ex) throws IOException {
+    JsonNode body = Http.body(ex);
+    String session = session(body.path("session").asText(null));
+    Pending p = pending.get(body.path("id").asText(""));
+    if (p == null || !p.session().equals(session)) {
+      Http.error(ex, 404, "no such approval (answered, expired or cancelled)");
+      return;
+    }
+    p.answer().complete(body.path("allow").asBoolean(false) ? Tools.Decision.ALLOW : Tools.Decision.DENY);
+    Http.json(ex, 200, Json.object().put("ok", true));
   }
 
   // ---------------- settings ----------------

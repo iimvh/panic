@@ -5,4 +5,5 @@ plugins {
 
 dependencies {
     api(project(":sdk"))
+    api(project(":tools")) // keys only: answers Tools.APPROVE
 }

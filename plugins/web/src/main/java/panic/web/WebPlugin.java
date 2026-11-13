@@ -15,6 +15,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import panic.chat.Conversations;
+import panic.tools.Tools;
 
 /**
  * The web front-end: an HTTP + SSE API ({@link Api}) and the built UI ({@link StaticFiles}).
@@ -22,6 +23,9 @@ import panic.chat.Conversations;
  * Every request runs as a task of this plugin, so disposing it (config change, app stopping) cancels the
  * requests in flight (a streaming answer is aborted) and waits for them before the server stops. Requests
  * that arrive while it is going away get 503.
+ *
+ * It answers {@code Tools.APPROVE} for sessions that have a chat or command stream open: the browser is
+ * asked over SSE and answers with {@code POST /api/approve}.
  */
 public final class WebPlugin implements ConfigPlugin<WebConfig> {
 
@@ -49,6 +53,7 @@ public final class WebPlugin implements ConfigPlugin<WebConfig> {
   public Disposable apply(Context ctx, WebConfig cfg) {
     if (!cfg.enabled()) return null;
     Api api = new Api(ctx, heartbeat);
+    ctx.hook(Tools.APPROVE, api::approve);
     StaticFiles files = new StaticFiles();
     ctx.effect("server", signal -> {
       HttpServer server;

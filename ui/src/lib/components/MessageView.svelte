@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Message } from '$lib/chat.svelte';
 	import { renderMarkdown } from '$lib/markdown';
+	import ApprovalCard from './ApprovalCard.svelte';
 
 	let { message }: { message: Message } = $props();
 
@@ -27,10 +28,23 @@
 		<div class="command">
 			<div class="line">{message.meta}</div>
 			{#if message.text}<pre>{message.text.replace(/\n$/, '')}</pre>{/if}
+			<ApprovalCard {message} />
 		</div>
 	{:else}
 		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 		<div class="answer" {onclick}>
+			{#if message.tools?.length}
+				<ul class="tools">
+					{#each message.tools as tool, i (i)}
+						<li class={tool.status} title={tool.content ?? tool.arguments}>
+							<span class="name">{tool.name}</span>
+							<span class="args">{tool.arguments}</span>
+							<span class="status">{tool.status === 'running' ? '…' : tool.status}</span>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+			<ApprovalCard {message} />
 			{#if message.error}
 				<p class="err">{message.text}</p>
 			{:else if message.text}
@@ -65,6 +79,39 @@
 		min-width: 0;
 		width: 100%;
 		overflow-wrap: anywhere;
+	}
+	.tools {
+		list-style: none;
+		margin: 0 0 8px;
+		padding: 0;
+		display: grid;
+		gap: 4px;
+	}
+	.tools li {
+		display: flex;
+		gap: 8px;
+		align-items: baseline;
+		min-width: 0;
+		font: 12px var(--mono);
+		color: var(--muted);
+		border-left: 2px solid var(--border);
+		padding-left: 8px;
+	}
+	.tools .name {
+		color: var(--text);
+	}
+	.tools .args {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.tools .error {
+		border-left-color: var(--danger);
+	}
+	.tools .error .status {
+		color: var(--danger);
 	}
 	.meta {
 		margin-top: 6px;

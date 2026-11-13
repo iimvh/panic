@@ -1,4 +1,5 @@
-import { ApiError, getHistory, getState, putSettings, stream, type State } from './api';
+import { ApiError, getHistory, getState, postApproval, putSettings, stream, type State } from './api';
+import { askApproval, meta, toolStep, type Approval, type ToolStep } from './reply';
 import { sessionId } from './session';
 
 export type Message = {
@@ -7,6 +8,10 @@ export type Message = {
 	text: string;
 	/** model · tokens, "stopped", ... */
 	meta?: string;
+	/** Tools the bot called while answering, in order. */
+	tools?: ToolStep[];
+	/** A tool call waiting for the user to allow or deny it. */
+	approval?: Approval;
 	error?: boolean;
 	streaming?: boolean;
 };
@@ -63,6 +68,21 @@ class Chat {
 		this.messages = [];
 	}
 
+	/** Answers the approval question shown in `m`. The tool step that follows shows what happened. */
+	async approve(m: Message, allow: boolean) {
+		const a = m.approval;
+		if (!a || a.answering) return;
+		a.answering = true;
+		try {
+			await postApproval(this.session, a.id, allow);
+		} catch (e) {
+			// 404: the question is gone (answered, timed out or stopped); the stream tells the rest
+			if (!(e instanceof ApiError && e.status === 404)) fail(m, errorText(e));
+		} finally {
+			if (m.approval?.id === a.id) m.approval = undefined;
+		}
+	}
+
 	async settings(change: { provider?: string; model?: string }) {
 		this.state = await putSettings(change);
 	}
@@ -74,6 +94,8 @@ class Chat {
 			stream('/api/chat', { session: this.session, text }, ({ event, data }) => {
 				const d = data as Record<string, unknown>;
 				if (event === 'delta') reply.text += String(d.text ?? '');
+				else if (event === 'tool') toolStep(reply, d);
+				else if (event === 'approve') askApproval(reply, d);
 				else if (event === 'done') reply.meta = meta(d);
 				else if (event === 'unavailable') {
 					reply.error = true;
@@ -92,6 +114,7 @@ class Chat {
 			stream('/api/command', { session: this.session, line }, ({ event, data }) => {
 				const d = data as Record<string, unknown>;
 				if (event === 'delta') out.text += String(d.text ?? '');
+				else if (event === 'approve') askApproval(out, d);
 				else if (event === 'unknown') fail(out, `Unknown command /${d.name}. Type /help for the commands available now.`);
 				else if (event === 'usage') fail(out, `Usage: /${d.usage} (${d.message})`);
 				else if (event === 'error') fail(out, String(d.message));
@@ -119,6 +142,7 @@ class Chat {
 			else fail(target, errorText(e));
 		} finally {
 			target.streaming = false;
+			target.approval = undefined;
 			this.busy = false;
 			this.#abort = null;
 		}
@@ -128,15 +152,6 @@ class Chat {
 function fail(m: Message, text: string) {
 	m.error = true;
 	m.text = m.text ? `${m.text}\n\n${text}` : text;
-}
-
-function meta(d: Record<string, unknown>): string {
-	const parts = [String(d.model ?? '')];
-	const u = d.usage as { promptTokens?: number; completionTokens?: number } | undefined;
-	const tokens = (u?.promptTokens ?? 0) + (u?.completionTokens ?? 0);
-	if (tokens > 0) parts.push(`${tokens} tokens`);
-	if (d.finishReason && d.finishReason !== 'stop') parts.push(String(d.finishReason));
-	return parts.filter(Boolean).join(' · ');
 }
 
 function errorText(e: unknown): string {

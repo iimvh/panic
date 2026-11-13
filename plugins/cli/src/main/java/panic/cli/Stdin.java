@@ -1,5 +1,6 @@
 package panic.cli;
 
+import core.Signal;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -10,6 +11,7 @@ import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Reading System.in cannot be interrupted, so a task blocked on it would hold up disposal forever. One
@@ -40,6 +42,23 @@ public final class Stdin {
     }, "stdin");
     reader.setDaemon(true);
     reader.start();
+  }
+
+  /**
+   * The next line, or null at end of input; throws {@code core.CancelledException} once {@code signal} is
+   * cancelled, for waits that a caller other than the plugin may abandon (an approval prompt).
+   */
+  public String readLine(Signal signal) throws InterruptedException {
+    while (true) {
+      signal.throwIfCancelled();
+      Optional<String> line = lines.poll(100, TimeUnit.MILLISECONDS);
+      if (line == null) continue;
+      if (line.isEmpty()) {
+        lines.add(EOF);
+        return null;
+      }
+      return line.get();
+    }
   }
 
   /** The next line, or null at end of input. */

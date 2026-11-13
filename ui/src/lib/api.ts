@@ -53,6 +53,14 @@ export const putSettings = (change: { provider?: string; model?: string }) =>
 		body: JSON.stringify(change)
 	});
 
+/** Answers an `approve` event of a chat or command stream. */
+export const postApproval = (session: string, id: string, allow: boolean) =>
+	json<{ ok: boolean }>('/api/approve', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ session, id, allow })
+	});
+
 /** POSTs `body` and hands every server-sent event to `onEvent` until the stream ends. */
 export async function stream(
 	path: '/api/chat' | '/api/command',

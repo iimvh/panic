@@ -7,6 +7,7 @@ import core.CancelledException;
 import core.Disposable;
 import core.Signal;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import panic.command.Command;
@@ -15,6 +16,7 @@ import panic.command.Out;
 import panic.command.Session;
 import panic.command.UsageException;
 import panic.plugin.App;
+import panic.tools.Tools;
 
 /**
  * The terminal front-end. It owns no feature: it only runs commands that other plugins declare (see
@@ -26,6 +28,10 @@ import panic.plugin.App;
  *  - {@link #once}: runs one command from argv, e.g. {@code panic models free} (with {@code repl=false}).
  *
  * Commands it declares itself: {@code help [command]}, and {@code exit} in the REPL.
+ *
+ * In the REPL it also answers {@link Tools#APPROVE} for its own session: a tool call the policy wants
+ * approved is shown and runs only if the user types {@code y}. One-shot mode answers nothing, so such calls
+ * are denied.
  */
 public final class Cli implements ConfigPlugin<CliConfig> {
 
@@ -50,6 +56,7 @@ public final class Cli implements ConfigPlugin<CliConfig> {
     help(ctx, PREFIX);
     AtomicBoolean stop = new AtomicBoolean();
     Commands.command(ctx, "exit", "quit", call -> stop.set(true));
+    ctx.hook(Tools.APPROVE, a -> a.conversationId().equals(SESSION) ? approve(a, in, out) : null);
     ctx.spawn("repl", signal -> {
       Session session = new Session(SESSION, out, signal);
       out.println("panic — type a message, or " + PREFIX + "help");
@@ -93,6 +100,27 @@ public final class Cli implements ConfigPlugin<CliConfig> {
       err.println("[error] " + message(e));
       return 1;
     }
+  }
+
+  /**
+   * Asks the user at the terminal whether a tool call may run. It runs on the REPL thread, which is blocked in
+   * the command that made the call, so it is the only reader of the terminal meanwhile. Anything but
+   * {@code y}/{@code yes} denies, and so does end of input.
+   */
+  private static Tools.Decision approve(Tools.Approval a, Stdin in, Out out) {
+    out.print("\n[approve] " + a.call().name() + " (" + a.risk().wire() + ") " + a.call().arguments()
+        + "\nallow? [y/N] ");
+    String answer;
+    try {
+      answer = in.readLine(a.signal());
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new CancelledException("approval interrupted");
+    }
+    String yes = answer == null ? "" : answer.strip().toLowerCase(Locale.ROOT);
+    boolean allowed = yes.equals("y") || yes.equals("yes");
+    if (!allowed) out.println("[denied]");
+    return allowed ? Tools.Decision.ALLOW : Tools.Decision.DENY;
   }
 
   private static void dispatch(Context ctx, String line, Session session, Signal signal) {

@@ -184,6 +184,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
 
     private Chat.Reply loop() {
       Conversation conversation = conversations.get(ask.conversationId());
+      if (ask.delegate() != null) conversation.parent(ask.delegate().origin()); // kept out of listings
       prompt = prompt();
       Conversation.Snapshot snapshot = conversation.snapshot();
       summary = snapshot.summary();

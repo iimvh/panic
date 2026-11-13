@@ -243,4 +243,118 @@ class ConversationsPluginTest {
         second.requests.get(0).messages());
     assertNull(get("c").summary());
   }
+
+  /** The store running right now. */
+  private Conversations store() {
+    AtomicReference<Conversations> seen = new AtomicReference<>();
+    root.plugin(Plugin.require(Conversations.KEY).then(ctx -> {
+      seen.set(ctx.get(Conversations.KEY));
+      return null;
+    })).dispose();
+    return seen.get();
+  }
+
+  private final List<String> deleted = new CopyOnWriteArrayList<>();
+
+  private void listenForDeletes() {
+    root.plugin("audit", ctx -> {
+      ctx.on(Conversations.DELETED, d -> deleted.add(d.id()));
+      return null;
+    });
+  }
+
+  private static String run(Root root, String command, String args, String session) {
+    StringBuilder out = new StringBuilder();
+    Commands.run(root, command, args, new Session(session, out::append, new CancelToken()));
+    return out.toString();
+  }
+
+  @Test
+  void listShowsConversationsNewestFirstWithoutEmptyOnesOrSubAgents() throws Exception {
+    start();
+    get("old").append(Message.user("first question\nsecond line"), Message.assistant("a"));
+    Thread.sleep(20);
+    get("odd id/é").append(Message.user("x".repeat(100)), Message.assistant("b"));
+    get("empty");
+    Conversation child = get("old~explore-1");
+    child.parent("old");
+    child.append(Message.user("sub task"), Message.assistant("done"));
+
+    List<Conversations.Info> list = store().list();
+    assertEquals(List.of("odd id/é", "old"), list.stream().map(Conversations.Info::id).toList());
+    assertEquals("first question", list.get(1).title());
+    assertEquals(80, list.get(0).title().length());
+    assertTrue(list.get(0).title().endsWith("…"));
+
+    restart(); // nothing loaded: the listing comes from the files
+    assertEquals(List.of("odd id/é", "old"), store().list().stream().map(Conversations.Info::id).toList());
+    assertEquals("old", get("old~explore-1").parent(), "the parent survives a restart");
+  }
+
+  @Test
+  void deleteRemovesTheConversationAndWhatWorksForIt() {
+    start();
+    listenForDeletes();
+    get("c").append(Message.user("q"), Message.assistant("a"));
+    Conversation child = get("c~a-1");
+    child.parent("c");
+    child.append(Message.user("sub"), Message.assistant("x"));
+    Conversation grandchild = get("c~a-1~b-1");
+    grandchild.parent("c~a-1");
+    grandchild.append(Message.user("subsub"), Message.assistant("y"));
+    get("other").append(Message.user("keep"), Message.assistant("me"));
+
+    restart(); // the cascade works from files too
+    listenForDeletes();
+    assertTrue(store().delete("c"));
+    assertEquals(List.of("c", "c~a-1", "c~a-1~b-1"), deleted);
+    assertFalse(Files.exists(file("c")));
+    assertFalse(Files.exists(file("c~a-1")));
+    assertFalse(Files.exists(file("c~a-1~b-1")));
+    assertEquals(List.of("other"), store().list().stream().map(Conversations.Info::id).toList());
+    assertEquals(0, get("c").size());
+    assertFalse(store().delete("c"), "nothing left to delete");
+    assertFalse(store().delete("never"));
+  }
+
+  @Test
+  void theParentHeaderSurvivesACompactionAndAClear() throws Exception {
+    start();
+    Conversation c = get("s~x-1");
+    c.parent("s");
+    List<Message> turn = List.of(Message.user("q"), Message.assistant("a"));
+    c.append(turn.toArray(Message[]::new));
+    c.append(Message.user("q2"), Message.assistant("a2"));
+    assertTrue(c.compact(c.snapshot().messages().subList(0, 2), "sum"));
+    String text = Files.readString(file("s~x-1"));
+    assertTrue(text.startsWith("{\"parent\":\"s\"}\n{\"summary\":\"sum\"}\n"), text);
+    c.clear();
+    c.append(Message.user("again"), Message.assistant("ok"));
+    assertTrue(Files.readString(file("s~x-1")).startsWith("{\"parent\":\"s\"}\n"));
+    restart();
+    assertEquals("s", get("s~x-1").parent());
+    assertTrue(store().list().isEmpty());
+  }
+
+  @Test
+  void inMemoryStoresListAndDeleteToo() {
+    root.plugin("conversations", new ConversationsPlugin(warnings::add), new ConversationsConfig(null, false));
+    listenForDeletes();
+    get("a").append(Message.user("q"), Message.assistant("x"));
+    assertEquals(List.of("a"), store().list().stream().map(Conversations.Info::id).toList());
+    assertTrue(store().delete("a"));
+    assertEquals(List.of("a"), deleted);
+    assertTrue(store().list().isEmpty());
+  }
+
+  @Test
+  void chatsAndForgetCommands() {
+    start();
+    get("s1").append(Message.user("hello there"), Message.assistant("hi"));
+    String listed = run(root, "chats", "", "s1");
+    assertTrue(listed.startsWith("* s1  ") && listed.contains("  hello there\n"), listed);
+    assertEquals("deleted s1\n", run(root, "forget", "s1", "s2"));
+    assertEquals("no conversation s1\n", run(root, "forget", "s1", "s2"));
+    assertEquals("no conversations\n", run(root, "chats", "", "s2"));
+  }
 }

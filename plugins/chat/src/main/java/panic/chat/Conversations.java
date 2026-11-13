@@ -1,32 +1,63 @@
 package panic.chat;
 
+import context.EventKey;
 import context.Plugin;
 import context.ServiceKey;
-import panic.command.Commands;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.List;
+import java.util.Objects;
 
 /**
  * Where conversations live. A service of its own, independent of the LLM, so switching provider or model
  * (which restarts the chat plugin) keeps every history. Provided by {@link ConversationsPlugin} (on disk), or
  * by {@link #inMemory()} in tests.
+ *
+ * A store lists the conversations people had ({@link #list}: not the ones that work for another, like a
+ * sub-agent's) and deletes them with what works for them ({@link #delete}). Each deleted conversation is
+ * announced on {@link #DELETED}, so plugins keeping data per conversation (plans, traces) can drop it.
  */
 public interface Conversations {
 
   ServiceKey<Conversations> KEY = ServiceKey.of("conversations", Conversations.class);
 
+  /** A conversation as listed: {@code title} is its first question (one line, cut), or "" when there is none. */
+  record Info(String id, String title, long updatedAt) {
+    public Info {
+      Objects.requireNonNull(id, "id");
+      if (title == null) title = "";
+    }
+  }
+
+  /** A conversation was deleted (one event per conversation, its sub-agents' included). */
+  record Deleted(String id) {
+  }
+
+  EventKey<Deleted> DELETED = EventKey.of("conversations.deleted", Deleted.class);
+
   /** The conversation with this id, created empty on first use. */
   Conversation get(String id);
 
-  /** In-memory store; history is gone when the plugin is disposed. Command: {@code reset}. For tests. */
+  /**
+   * The conversations that are not empty and work for no other ({@link Conversation#parent()} is null), most
+   * recently changed first. Empty for a store that cannot list.
+   */
+  default List<Info> list() {
+    return List.of();
+  }
+
+  /**
+   * Deletes conversation {@code id} and every conversation working for it, from memory and storage, and emits
+   * {@link #DELETED} for each. False when there was nothing to delete (or the store cannot delete).
+   */
+  default boolean delete(String id) {
+    return false;
+  }
+
+  /** In-memory store; history is gone when the plugin is disposed. Commands as {@link ConversationsPlugin}. For tests. */
   static Plugin inMemory() {
     return ctx -> {
-      ConcurrentMap<String, Conversation> all = new ConcurrentHashMap<>();
-      ctx.provide(KEY, id -> all.computeIfAbsent(id, Conversation::new));
-      Commands.command(ctx, "reset", "forget this session's conversation", call -> {
-        Conversation c = all.remove(call.session().id());
-        call.out().println(c == null || c.size() == 0 ? "nothing to forget" : "conversation cleared");
-      });
+      ConversationStore store = new ConversationStore(ctx, null, w -> { });
+      ctx.provide(KEY, store);
+      store.commands(ctx);
       return null;
     };
   }

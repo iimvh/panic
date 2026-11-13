@@ -6,7 +6,7 @@ Conversation history and the chat bot, an agent loop that calls tools.
 
 | Name | Config | Requires | Provides / registers |
 | --- | --- | --- | --- |
-| `conversations` | `ConversationsConfig { dir = ".panic/conversations", persist = true }` | none | service `Conversations.KEY` (on disk, or in memory with `persist: false`); command `reset` |
+| `conversations` | `ConversationsConfig { dir = ".panic/conversations", persist = true }` | none | service `Conversations.KEY` (on disk, or in memory with `persist: false`); event `Conversations.DELETED`; commands `reset`, `chats`, `forget` |
 | `chat` | `ChatConfig { systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats, contextTokens, compact, maxReviews, parallelTools }` | `Llm.KEY`, `Conversations.KEY` | hook `Chat.ASK`; events `Chat.TURN`, `Chat.STEP`, `Chat.REVIEWED`, `Trace.SPAN`; command `ask`. Collects hook `Chat.CONTEXT`, asks hook `Chat.REVIEW` |
 
 `conversations` does not depend on the LLM, so history survives a provider or model switch (which restarts
@@ -15,9 +15,10 @@ Conversation history and the chat bot, an agent loop that calls tools.
 ## Storage
 
 Each conversation is a JSON lines file in `dir` (resolved against the app's working directory), named after the
-conversation id (`repl.jsonl`), or `~` + the id in base64url when the id is not a short `[A-Za-z0-9_-]` name. A
-first `{"summary": ...}` line holds the compaction summary; every other line is a message
-(`{"role", "content", "toolCalls"?, "toolCallId"?}`).
+conversation id (`repl.jsonl`), or `~` + the id in base64url when the id is not a short `[A-Za-z0-9_-]` name.
+Header lines come first: `{"parent": ...}` for a conversation that works for another (a sub-agent's, set by
+`chat` from `Chat.Delegate.origin`), and `{"summary": ...}` for the compaction summary. Every other line is a
+message (`{"role", "content", "toolCalls"?, "toolCallId"?}`).
 
 - **Loaded on first use.** A conversation is read the first time it is asked for after a start.
 - **Written through.** An exchange is appended in one write, under the conversation's lock, so concurrent
@@ -28,6 +29,13 @@ first `{"summary": ...}` line holds the compaction summary; every other line is 
 - **Failures are warnings.** If the directory or a file cannot be written, the conversation goes on in memory
   and a warning is printed.
 - **One process per directory.** Two apps sharing `dir` would interleave their writes.
+- **Listing** (`list()`) covers the loaded conversations and the files not loaded yet, reading a file only up to
+  its first question. It leaves out empty conversations and those with a `parent`, newest first. `Info.title`
+  is the first line of the first question, at most 80 characters.
+- **Deleting** (`delete(id)`) removes the conversation and, recursively, every conversation whose `parent` it
+  is (a sub-agent's), from memory and disk. It emits `Conversations.DELETED` once for each, so `todo` and
+  `tracing` drop their data for it. Deleting a conversation while a turn is running in it is the caller's
+  business: `web` refuses it.
 
 ## The agent loop
 
@@ -144,7 +152,8 @@ A span ends `CANCELLED` when the turn was cancelled, `ERROR` when its work threw
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `Conversations.KEY` | service `Conversations` | `get(id)` returns the history of a session (created on first use) |
+| `Conversations.KEY` | service `Conversations` | `get(id)` returns the history of a session (created on first use); `list()` → `Info(id, title, updatedAt)`, newest first; `delete(id)` → whether anything was deleted |
+| `Conversations.DELETED` | event `Deleted(id)` | A conversation was deleted (one event per conversation, sub-agents' included) |
 | `Chat.ASK` | hook `Ask(conversationId, text, signal, onDelta, onStep?, onReview?, onToolDelta?, traceId?, onAgentDelta?, delegate?) → Reply(text, model, finishReason, usage, stop, steps, toolCalls, review, traceId)` | Ask the bot. Use `Chat.ask(ctx, ask)`: it is empty when no LLM is connected and rethrows the handler's own exception. `onStep` hears every tool call when it starts (`result == null`) and when it ends, a sub-agent's too (`Step.nested()`); `onReview` hears every `Reviewed` verdict; `onToolDelta` hears the pieces of a tool call while the model writes it (`ToolCallDelta`, before its step starts); `onAgentDelta` hears a sub-agent's text (`AgentDelta(parentCallId, agent, text)`). `delegate` makes it a [delegated ask](#delegated-asks-sub-agents). Callbacks run in the order things happen, one at a time |
 | `Chat.REVIEW` | hook `Review(conversationId, question, turn, answer, attempt, signal) → Verdict(pass, reason, usage)` | Judges a final answer. No answer accepts it; a rejection sends `reason` back to the model |
 | `Chat.REVIEWED` | event `Reviewed(conversationId, attempt, verdict)` | Emitted after each verdict (auditing...) |
@@ -157,4 +166,6 @@ A span ends `CANCELLED` when the turn was cancelled, `ERROR` when its work threw
 
 `ask <text...>` (only while an LLM is connected; front-ends send plain text here). It prints each tool call as
 `[tool name args]` and the failed ones as `[tool name: error: ...]`; a sub-agent's calls are indented and named
-(`  [explore: tool name args]`). `reset`.
+(`  [explore: tool name args]`). `reset` clears the session's conversation. `chats [count]` lists the
+conversations (default 20; `*` marks the session's own). `forget <id>` deletes one with its sub-agents'
+conversations.

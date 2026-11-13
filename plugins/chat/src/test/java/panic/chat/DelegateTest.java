@@ -134,6 +134,7 @@ class DelegateTest {
     assertEquals(5, conversations.get("c~explore-1").snapshot().messages().size(), "saved in its conversation");
     assertEquals(0, conversations.get("c").snapshot().messages().size());
     assertEquals("explore", turns.get(0).delegate().agent());
+    assertEquals("c", conversations.get("c~explore-1").parent(), "kept out of listings");
   }
 
   @Test

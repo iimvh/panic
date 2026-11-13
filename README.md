@@ -141,7 +141,7 @@ Plain text runs `ask`. In the REPL, commands start with `/`. On the command line
 | `check` | `llm` → `active:<provider>` | while the provider is connected |
 | `status` | `llm` | always |
 | `provider [id]`, `model [id]` | `settings` | always |
-| `reset` | `conversations` | always |
+| `reset`, `chats [count]`, `forget <id>` | `conversations` | always. `reset` clears this session's conversation; `chats` lists the conversations; `forget` deletes one (with its sub-agents' conversations, plan and traces) |
 | `tools`, `tool <name> [args...]` | `tools` | always. `tools` shows each tool's risk and permission. `args` is a JSON object, e.g. `tool read_file {"path":"README.md"}` |
 | `todo` | `todo` | always. Shows this session's task list and acceptance criteria |
 | `checks` | `checks` | always. Lists the configured checks |

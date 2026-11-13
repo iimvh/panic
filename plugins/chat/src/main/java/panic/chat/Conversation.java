@@ -36,6 +36,10 @@ public final class Conversation {
       @Override
       public void delete() {
       }
+
+      @Override
+      public void parent(String parent, String summary, List<Message> messages) {
+      }
     };
 
     /** Messages added at the end. */
@@ -46,22 +50,29 @@ public final class Conversation {
 
     /** The history cleared. */
     void delete();
+
+    /** The conversation now works for {@code parent}; {@code summary} and {@code messages} are its content. */
+    void parent(String parent, String summary, List<Message> messages);
   }
 
   private final String id;
   private final List<Message> messages = new ArrayList<>();
   private final Journal journal;
   private String summary;
+  private String parent;
+  private long updatedAt;
 
   public Conversation(String id) {
-    this(id, Journal.NONE, null, List.of());
+    this(id, Journal.NONE, null, null, List.of(), System.currentTimeMillis());
   }
 
   /** A conversation restored from storage, which records its later changes in {@code journal}. */
-  Conversation(String id, Journal journal, String summary, List<Message> loaded) {
+  Conversation(String id, Journal journal, String summary, String parent, List<Message> loaded, long updatedAt) {
     this.id = Objects.requireNonNull(id, "id");
     this.journal = Objects.requireNonNull(journal, "journal");
     this.summary = summary;
+    this.parent = parent;
+    this.updatedAt = updatedAt;
     messages.addAll(loaded);
   }
 
@@ -74,7 +85,41 @@ public final class Conversation {
     List<Message> added = List.of(exchange);
     if (added.isEmpty()) return;
     messages.addAll(added);
+    updatedAt = System.currentTimeMillis();
     journal.append(added);
+  }
+
+  /**
+   * The conversation this one works for (a sub-agent's conversation names the one that started it), or null for
+   * a conversation of its own. Kept with the conversation; listings leave such conversations out.
+   */
+  public synchronized String parent() {
+    return parent;
+  }
+
+  /** Records the conversation this one works for (see {@link #parent()}). */
+  public synchronized void parent(String parent) {
+    if (Objects.equals(this.parent, parent)) return;
+    this.parent = parent;
+    journal.parent(parent, summary, List.copyOf(messages));
+  }
+
+  /** When the history last changed (ms since epoch). */
+  public synchronized long updatedAt() {
+    return updatedAt;
+  }
+
+  /** The first question asked, or null when there is none (it may have been compacted away). */
+  public synchronized String firstQuestion() {
+    for (Message m : messages) {
+      if (m.role() == Role.USER) return m.content();
+    }
+    return null;
+  }
+
+  /** True when there is neither a message nor a summary. */
+  public synchronized boolean isEmpty() {
+    return messages.isEmpty() && summary == null;
   }
 
   /**
@@ -110,6 +155,7 @@ public final class Conversation {
     }
     messages.subList(0, prefix.size()).clear();
     this.summary = summary;
+    updatedAt = System.currentTimeMillis();
     journal.rewrite(summary, List.copyOf(messages));
     return true;
   }

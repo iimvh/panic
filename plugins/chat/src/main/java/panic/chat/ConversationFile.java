@@ -26,8 +26,8 @@ import panic.llm.Role;
 import panic.llm.ToolCall;
 
 /**
- * One conversation stored as JSON lines: an optional {@code {"summary": ...}} line first, then one message per
- * line. An exchange is appended in a single write, so a crash leaves at most a torn last line. Compaction
+ * One conversation stored as JSON lines: optional header lines first ({@code {"parent": ...}} for a conversation
+ * that works for another, {@code {"summary": ...}}), then one message per line. An exchange is appended in a single write, so a crash leaves at most a torn last line. Compaction
  * rewrites the file through a temporary file and an atomic rename. Loading skips lines that are not valid
  * messages and turns that would be rejected by a provider (a tool call without its result), with a warning,
  * and then rewrites the file clean so later appends start on a fresh line.
@@ -40,6 +40,8 @@ final class ConversationFile implements Conversation.Journal {
 
   private final Path file;
   private final Consumer<String> warn;
+  /** Written as a header whenever the file is (re)created. */
+  private volatile String parent;
 
   private ConversationFile(Path file, Consumer<String> warn) {
     this.file = file;
@@ -56,6 +58,54 @@ final class ConversationFile implements Conversation.Journal {
         + ".jsonl";
   }
 
+  /** The id of the conversation stored in file {@code name}, or null when it is not a conversation file. */
+  static String idOf(String name) {
+    if (!name.endsWith(".jsonl")) return null;
+    String base = name.substring(0, name.length() - ".jsonl".length());
+    if (SAFE.matcher(base).matches()) return base;
+    if (!base.startsWith("~")) return null;
+    try {
+      String id = new String(Base64.getUrlDecoder().decode(base.substring(1)), StandardCharsets.UTF_8);
+      return fileName(id).equals(name) ? id : null;
+    } catch (IllegalArgumentException e) {
+      return null;
+    }
+  }
+
+  /** What a listing needs of a stored conversation, read without loading all of it. */
+  record Head(String parent, String firstQuestion, long updatedAt) {
+  }
+
+  /**
+   * The parent and first question of the conversation in {@code file}, reading only up to its first user
+   * message; null when it cannot be read.
+   */
+  static Head head(Path file) {
+    try (var reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+      long updatedAt = Files.getLastModifiedTime(file).toMillis();
+      String parent = null;
+      String line;
+      while ((line = reader.readLine()) != null) {
+        if (line.isBlank()) continue;
+        JsonNode node;
+        try {
+          node = Json.MAPPER.readTree(line);
+        } catch (JsonProcessingException e) {
+          continue;
+        }
+        if (node == null || !node.isObject()) continue;
+        if (node.has("parent") && !node.has("role")) {
+          parent = node.path("parent").asText(null);
+        } else if ("user".equals(node.path("role").asText())) {
+          return new Head(parent, node.path("content").asText(""), updatedAt);
+        }
+      }
+      return new Head(parent, null, updatedAt);
+    } catch (IOException e) {
+      return null;
+    }
+  }
+
   /** Loads conversation {@code id} from {@code dir} (empty when it has no file yet). */
   static Conversation load(Path dir, String id, Consumer<String> warn) {
     ConversationFile store = new ConversationFile(dir.resolve(fileName(id)), warn);
@@ -63,10 +113,16 @@ final class ConversationFile implements Conversation.Journal {
     try {
       text = new String(Files.readAllBytes(store.file), StandardCharsets.UTF_8);
     } catch (NoSuchFileException e) {
-      return new Conversation(id, store, null, List.of());
+      return new Conversation(id, store, null, null, List.of(), System.currentTimeMillis());
     } catch (IOException e) {
       warn.accept("[conversations] cannot read " + store.file + ": " + e + "; this conversation is kept in memory only");
-      return new Conversation(id, Conversation.Journal.NONE, null, List.of());
+      return new Conversation(id, Conversation.Journal.NONE, null, null, List.of(), System.currentTimeMillis());
+    }
+    long updatedAt;
+    try {
+      updatedAt = Files.getLastModifiedTime(store.file).toMillis();
+    } catch (IOException e) {
+      updatedAt = System.currentTimeMillis();
     }
     String summary = null;
     List<Message> read = new ArrayList<>();
@@ -80,6 +136,8 @@ final class ConversationFile implements Conversation.Journal {
         if (node == null || !node.isObject()) throw new IllegalArgumentException("not a JSON object");
         if (node.has("summary") && !node.has("role")) {
           summary = text(node, "summary");
+        } else if (node.has("parent") && !node.has("role")) {
+          store.parent = text(node, "parent");
         } else {
           read.add(decode(node));
         }
@@ -95,12 +153,25 @@ final class ConversationFile implements Conversation.Journal {
           + " message(s) of incomplete turns");
     }
     if (dirty) store.rewrite(summary, messages);
-    return new Conversation(id, store, summary, messages);
+    return new Conversation(id, store, summary, store.parent, messages, updatedAt);
+  }
+
+  /** The file of {@code id} in {@code dir} deleted, if there is one; false when there was none. */
+  static boolean delete(Path dir, String id, Consumer<String> warn) {
+    Path file = dir.resolve(fileName(id));
+    try {
+      return Files.deleteIfExists(file);
+    } catch (IOException e) {
+      warn.accept("[conversations] cannot delete " + file + ": " + e);
+      return false;
+    }
   }
 
   @Override
   public void append(List<Message> exchange) {
     StringBuilder out = new StringBuilder();
+    // a file created by this append (new, or deleted by a clear) starts with the header
+    if (parent != null && !Files.exists(file)) out.append(line(Json.object().put("parent", parent)));
     for (Message m : exchange) out.append(line(encode(m)));
     try {
       Files.writeString(file, out, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND,
@@ -113,6 +184,7 @@ final class ConversationFile implements Conversation.Journal {
   @Override
   public void rewrite(String summary, List<Message> messages) {
     StringBuilder out = new StringBuilder();
+    if (parent != null) out.append(line(Json.object().put("parent", parent)));
     if (summary != null) out.append(line(Json.object().put("summary", summary)));
     for (Message m : messages) out.append(line(encode(m)));
     Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
@@ -135,6 +207,13 @@ final class ConversationFile implements Conversation.Journal {
     } catch (IOException e) {
       warn.accept("[conversations] cannot delete " + file + ": " + e);
     }
+  }
+
+  /** Rewrites the file with the new header when it exists; a file created later starts with it anyway. */
+  @Override
+  public void parent(String parent, String summary, List<Message> messages) {
+    this.parent = parent;
+    if (Files.exists(file)) rewrite(summary, messages);
   }
 
   /**

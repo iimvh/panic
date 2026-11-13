@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { chat } from '$lib/chat.svelte';
 
-	let { onsettings }: { onsettings: () => void } = $props();
+	let { onsettings, onmenu }: { onsettings: () => void; onmenu: () => void } = $props();
 
 	const state = $derived(chat.state);
 	const label = $derived(
@@ -10,6 +10,11 @@
 </script>
 
 <header>
+	<button class="btn icon menu" onclick={onmenu} aria-label="Chats">
+		<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
+			><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16" /></svg
+		>
+	</button>
 	<div class="brand">
 		<img src="/favicon.svg" alt="" width="24" height="24" />
 		<span>Panic</span>
@@ -91,6 +96,18 @@
 	}
 	.icon {
 		padding: 6px 8px;
+	}
+	/* the chat list is a sidebar on wide screens: its button only shows when it is a drawer */
+	.menu {
+		display: none;
+	}
+	@media (max-width: 860px) {
+		.menu {
+			display: inline-flex;
+		}
+		.actions .btn:not(.icon) {
+			display: none;
+		}
 	}
 	@media (max-width: 520px) {
 		.brand span {

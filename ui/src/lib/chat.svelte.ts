@@ -1,6 +1,7 @@
-import { ApiError, events, follow, getHistory, getState, postApproval, postStop, putSettings, stream, type State } from './api';
+import { ApiError, deleteConversation, events, follow, getConversations, getHistory, getState, postApproval, postStop, putSettings, stream, type State } from './api';
+import { without, type ConversationInfo } from './conversations';
 import { askApproval, clearApproval, createAnswer, duration, failAnswer, fromHistory, type Approval, type Part } from './reply';
-import { sessionId } from './session';
+import { newSessionId, sessionId, setSessionId } from './session';
 
 export type Message = {
 	id: number;
@@ -26,9 +27,12 @@ let nextId = 1;
 
 /** All UI state: what the server runs (state), this session's messages, and the request in flight. */
 class Chat {
-	readonly session = sessionId();
+	/** The conversation shown; another one is opened with `open`, a new one started with `newChat`. */
+	session = $state(sessionId());
 	state = $state<State | null>(null);
 	messages = $state<Message[]>([]);
+	/** The stored conversations, newest first, for the chat list. */
+	conversations = $state<ConversationInfo[]>([]);
 	busy = $state(false);
 	/** Server unreachable or failing; shown as a banner. */
 	offline = $state<string | null>(null);
@@ -40,6 +44,7 @@ class Chat {
 
 	/** The stored conversation, then the answer still running in this session, if any (after a reload). */
 	async load() {
+		void this.loadConversations();
 		try {
 			const [state, history] = await Promise.all([getState(), getHistory(this.session)]);
 			this.state = state;
@@ -75,13 +80,52 @@ class Chat {
 		postStop(this.session).catch(() => this.#abort?.abort());
 	}
 
-	async newChat() {
-		if (this.busy) {
-			this.stop();
-			await this.#current; // the stopped answer ends first, so it cannot come back after the reset
+	/** The chat list again; a failure leaves it as it was (the banner tells about a server gone). */
+	async loadConversations() {
+		try {
+			this.conversations = await getConversations();
+		} catch {
+			// offline: load() reports it
 		}
-		await this.#command('/reset', true);
+	}
+
+	/** Starts a new conversation; the current one stays in the list. A running answer is stopped first. */
+	async newChat() {
+		await this.#settle();
+		this.session = newSessionId();
 		this.messages = [];
+		void this.loadConversations();
+	}
+
+	/** Shows conversation `id`. A running answer is stopped first, so it cannot land in the other chat. */
+	async open(id: string) {
+		if (id === this.session) return;
+		await this.#settle();
+		this.session = setSessionId(id);
+		this.messages = [];
+		await this.load();
+	}
+
+	/** Stops what runs (an answer through the server) and waits for it to end. */
+	async #settle() {
+		if (!this.busy) return;
+		this.stop();
+		await this.#current;
+	}
+
+	/** Deletes conversation `id` with its plan and traces; the current one makes way for a new chat. */
+	async remove(id: string): Promise<string | null> {
+		if (id === this.session && this.busy) return 'Stop the answer before deleting this chat.';
+		try {
+			await deleteConversation(id);
+		} catch (e) {
+			if (e instanceof ApiError && e.status === 409) return 'An answer is still running in that chat.';
+			if (!(e instanceof ApiError && e.status === 404)) return errorText(e);
+		}
+		this.conversations = without(this.conversations, id);
+		if (id === this.session) await this.newChat();
+		else void this.loadConversations();
+		return null;
 	}
 
 	/** Answers the approval question shown in `m`. The tool step that follows shows what happened. */
@@ -126,6 +170,7 @@ class Chat {
 		);
 		reply.meta = [reply.meta, duration(Date.now() - (reply.startedAt ?? Date.now()))].filter(Boolean).join(' · ');
 		if (!this.state?.connected) void this.refresh();
+		void this.loadConversations(); // a new chat appears, the one used moves up
 	}
 
 	/** Picks up the answer this session still runs on the server (the page was reloaded while it ran). */
@@ -190,7 +235,10 @@ class Chat {
 				else if (event === 'cancelled') out.meta = `${line} · stopped`;
 			}, signal)
 		);
-		if (name === 'reset' && !out.error) this.messages = [];
+		if (name === 'reset' && !out.error) {
+			this.messages = [];
+			void this.loadConversations();
+		}
 		else if (quiet) this.messages = this.messages.filter((m) => m.id !== out.id);
 		void this.refresh(); // commands may change what runs (provider, model, ...)
 	}

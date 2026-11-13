@@ -2,11 +2,13 @@
 	import { onMount, tick } from 'svelte';
 	import { chat } from '$lib/chat.svelte';
 	import Composer from '$lib/components/Composer.svelte';
+	import ChatList from '$lib/components/ChatList.svelte';
 	import Header from '$lib/components/Header.svelte';
 	import MessageView from '$lib/components/MessageView.svelte';
 	import Settings from '$lib/components/Settings.svelte';
 
 	let settingsOpen = $state(false);
+	let listOpen = $state(false);
 	let scroller: HTMLElement;
 	let thread: HTMLElement;
 	let stick = $state(true); // follow the answer while the user is at the bottom
@@ -47,8 +49,10 @@
 	const starters = ['Explain virtual threads in Java', 'Write a haiku about deadlines', '/help', '/models free'];
 </script>
 
+<div class="shell">
+<ChatList open={listOpen} onclose={() => (listOpen = false)} />
 <div class="app">
-	<Header onsettings={() => (settingsOpen = true)} />
+	<Header onsettings={() => (settingsOpen = true)} onmenu={() => (listOpen = true)} />
 
 	{#if chat.offline}
 		<div class="banner danger">
@@ -92,9 +96,16 @@
 		<Settings onclose={() => (settingsOpen = false)} />
 	{/if}
 </div>
+</div>
 
 <style>
+	.shell {
+		display: flex;
+		height: 100dvh;
+	}
 	.app {
+		flex: 1;
+		min-width: 0;
 		display: flex;
 		flex-direction: column;
 		height: 100dvh;

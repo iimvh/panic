@@ -1,3 +1,4 @@
+import type { ConversationInfo } from './conversations';
 import { createSseParser, type SseEvent } from './sse';
 
 export type ProviderStatus = { id: string; connected: boolean };
@@ -60,6 +61,13 @@ export const getState = () => json<State>('/api/state');
 
 export const getHistory = (session: string) =>
 	json<HistoryMessage[]>(`/api/history?session=${encodeURIComponent(session)}`);
+
+/** The stored conversations, newest first. */
+export const getConversations = () => json<ConversationInfo[]>('/api/conversations');
+
+/** Deletes a conversation with its plan and traces; ApiError 409 while an answer runs in it, 404 when unknown. */
+export const deleteConversation = (session: string) =>
+	json<{ ok: boolean }>(`/api/conversations?session=${encodeURIComponent(session)}`, { method: 'DELETE' });
 
 /** One trace of the session; ApiError 404 when unknown or when tracing is off (its message says which). */
 export const getTrace = (session: string, id: string) =>

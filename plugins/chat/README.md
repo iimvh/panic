@@ -46,12 +46,35 @@ until the model answers or a limit stops it:
 
 Every failure is an observation for the model, not a crash of the turn. Unknown tools, bad arguments, tool
 errors, calls denied by the permission policy or the user, and timeouts (`toolTimeoutSeconds`, default 60) all
-come back as `error: ...` results. The timeout starts when the tool starts, so the time the user takes to
+come back as `error: ...` results. A tool may set its own limit (`Tool.timeoutSeconds`), which then replaces
+`toolTimeoutSeconds`. The timeout starts when the tool starts, so the time the user takes to
 approve a call does not count (that wait has its own limit, `permissions.askTimeoutSeconds`). Tool output is
 cut at `maxToolOutput` characters (default 16000). When a turn stops early, the calls that were not run get an
 error result, so the saved history stays valid. The whole turn (user, assistant tool calls, tool results,
 answer) is appended at once. A cancelled turn is not saved. `tools: false` turns tools off for models that do
 not support them.
+
+A tool's own token spending (`ToolResult.usage`, a sub-agent's) is added to the turn's `usage` and counts
+toward `maxTokens`. While a tool runs, what it reports (`ToolContext.progress`) reaches the asker: a sub-agent's
+text through `Ask.onAgentDelta`, its tool calls through `Ask.onStep` as nested steps (`Step.parentCallId`,
+`Step.agent`). Nested steps are not emitted on `Chat.STEP`: the sub-agent's own turn emits them.
+
+## Delegated asks (sub-agents)
+
+An `Ask` with a `Chat.Delegate` is a sub-agent doing a task for another turn (the `agents` plugin of
+`plugins/agents` makes them). It runs the same loop in its own conversation, which is saved like any other,
+with these differences:
+
+| Field | Effect |
+| --- | --- |
+| `origin` | The conversation the user talks to: its tool calls are approved there (`Tools.Approval.agent` names the sub-agent) |
+| `agent` | Its name, on its `turn` span, its approvals and `Chat.Turn.delegate` |
+| `systemPrompt` | Replaces `chat.systemPrompt` (null keeps it); contributed sections are still added |
+| `tools` | The only tools offered; a call to any other is refused with an error result (null = all) |
+| `maxSteps`, `maxTokens` | Its own limits (0 = the config's) |
+| `parentSpanId` | Its `turn` span nests under this span, in `Ask.traceId`'s trace |
+
+It is never put to `Chat.REVIEW` (the answer of the turn that asked is reviewed) and never compacts its history.
 
 ## Review
 
@@ -102,9 +125,9 @@ The trace id is `Ask.traceId` when the asker gives one (web does, to tell the UI
 
 | Span | Parent | Attributes |
 | --- | --- | --- |
-| `turn` | none (root) | `conversationId`, `question` (first 200 chars), `questionHash` (`Chat.questionHash`), `model`, `stop`, `steps`, `toolCalls`, `promptTokens`, `completionTokens` (whole turn), `saved` |
+| `turn` | none (root); a sub-agent's under the `tool` span that runs it | `conversationId`, `question` (first 200 chars), `questionHash` (`Chat.questionHash`), `model`, `stop`, `steps`, `toolCalls`, `promptTokens`, `completionTokens` (whole turn), `saved`; `agent`, `origin` for a sub-agent |
 | `llm` | `turn` | `step`, `messages`, `model`, `finishReason`, `promptTokens`, `completionTokens`, `toolCalls`, `firstTokenMicros` (first text or tool-call piece) |
-| `tool` | `turn` | `tool`, `callId`, `approvalMicros` (until the tool started), `outputChars`, `truncated`, `refused` (loop detection), `timedOut`. An error result is an `ERROR` span |
+| `tool` | `turn` | `tool`, `callId`, `approvalMicros` (until the tool started), `outputChars`, `truncated`, `refused` (loop detection, or a tool a sub-agent may not use), `timedOut`, `promptTokens` / `completionTokens` (a tool's own spending). An error result is an `ERROR` span |
 | `review` | `turn` | `attempt`, `verdict` (`pass` / `fail`), `pass`, `reason`, `promptTokens`, `completionTokens`. Only when a reviewer judged (or failed) |
 | `compaction` | `turn` | `messages` (summarised), `kept`, `applied`, `model`, tokens. `ERROR` when the model gave no summary |
 
@@ -115,15 +138,16 @@ A span ends `CANCELLED` when the turn was cancelled, `ERROR` when its work threw
 | Key | Type | Meaning |
 | --- | --- | --- |
 | `Conversations.KEY` | service `Conversations` | `get(id)` returns the history of a session (created on first use) |
-| `Chat.ASK` | hook `Ask(conversationId, text, signal, onDelta, onStep?, onReview?, onToolDelta?, traceId?) → Reply(text, model, finishReason, usage, stop, steps, toolCalls, review, traceId)` | Ask the bot. Use `Chat.ask(ctx, ask)`: it is empty when no LLM is connected and rethrows the handler's own exception. `onStep` hears every tool call when it starts (`result == null`) and when it ends; `onReview` hears every `Reviewed` verdict; `onToolDelta` hears the pieces of a tool call while the model writes it (`ToolCallDelta`, before its step starts). Callbacks run in the order things happen |
+| `Chat.ASK` | hook `Ask(conversationId, text, signal, onDelta, onStep?, onReview?, onToolDelta?, traceId?, onAgentDelta?, delegate?) → Reply(text, model, finishReason, usage, stop, steps, toolCalls, review, traceId)` | Ask the bot. Use `Chat.ask(ctx, ask)`: it is empty when no LLM is connected and rethrows the handler's own exception. `onStep` hears every tool call when it starts (`result == null`) and when it ends, a sub-agent's too (`Step.nested()`); `onReview` hears every `Reviewed` verdict; `onToolDelta` hears the pieces of a tool call while the model writes it (`ToolCallDelta`, before its step starts); `onAgentDelta` hears a sub-agent's text (`AgentDelta(parentCallId, agent, text)`). `delegate` makes it a [delegated ask](#delegated-asks-sub-agents). Callbacks run in the order things happen, one at a time |
 | `Chat.REVIEW` | hook `Review(conversationId, question, turn, answer, attempt, signal) → Verdict(pass, reason, usage)` | Judges a final answer. No answer accepts it; a rejection sends `reason` back to the model |
 | `Chat.REVIEWED` | event `Reviewed(conversationId, attempt, verdict)` | Emitted after each verdict (auditing...) |
-| `Chat.TURN` | event `Turn(conversationId, question, reply)` | Emitted after every completed exchange (logging, memory, cost tracking...) |
-| `Chat.STEP` | event `Step(conversationId, call, result)` | Emitted when a tool call starts and when it ends (auditing...) |
+| `Chat.TURN` | event `Turn(conversationId, question, reply, delegate?)` | Emitted after every completed exchange (logging, memory, cost tracking...) |
+| `Chat.STEP` | event `Step(conversationId, call, result, parentCallId?, agent?)` | Emitted when a tool call starts and when it ends (auditing...) |
 | `Trace.SPAN` (emitted) | event `Span` | The turn's spans, see [Tracing](#tracing). `Chat.questionHash(question)` is the digest on the root |
 | `Chat.CONTEXT` | hook `ContextQuery(conversationId) → Section(name, order, text)`, collected | Sections of the system prompt (environment, tool hints, memory...). Register with `Chat.contribute` |
 
 ## Commands
 
 `ask <text...>` (only while an LLM is connected; front-ends send plain text here). It prints each tool call as
-`[tool name args]` and the failed ones as `[tool name: error: ...]`. `reset`.
+`[tool name args]` and the failed ones as `[tool name: error: ...]`; a sub-agent's calls are indented and named
+(`  [explore: tool name args]`). `reset`.

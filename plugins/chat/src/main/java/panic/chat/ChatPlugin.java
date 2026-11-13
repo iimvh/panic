@@ -158,10 +158,12 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     Chat.Reply run() {
       Disposable byAsker = ask.signal().onCancel(signal::cancel);
       Disposable byPlugin = ctx.signal().onCancel(signal::cancel);
-      span = Trace.open(ctx, ask.traceId(), null, "turn")
+      Chat.Delegate delegate = ask.delegate();
+      span = Trace.open(ctx, ask.traceId(), delegate == null ? null : delegate.parentSpanId(), "turn")
           .attr(Trace.CONVERSATION, ask.conversationId())
           .attr("question", cut(ask.text()))
           .attr("questionHash", Chat.questionHash(ask.text()));
+      if (delegate != null) span.attr("agent", delegate.agent()).attr("origin", delegate.origin());
       try {
         Chat.Reply reply = loop();
         summarise();
@@ -184,7 +186,8 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       summary = snapshot.summary();
       history = snapshot.messages();
       add(Message.user(ask.text()));
-      if (cfg.limitsContext() && cfg.compact()) compact(conversation);
+      // a sub-agent's conversation lives for one task: nothing to gain from summarising it
+      if (cfg.limitsContext() && cfg.compact() && ask.delegate() == null) compact(conversation);
 
       Completion last;
       while (true) {
@@ -198,7 +201,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         if (!last.hasToolCalls()) {
           Chat.Verdict verdict = review(last.text());
           if (verdict == null || verdict.pass()) break;
-          if (reviews >= cfg.maxReviews() || steps >= cfg.maxSteps()) {
+          if (reviews >= cfg.maxReviews() || steps >= maxSteps()) {
             stop = Chat.REJECTED;
             break;
           }
@@ -208,9 +211,9 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
           continue;
         }
 
-        if (steps >= cfg.maxSteps()) {
+        if (steps >= maxSteps()) {
           stop = Chat.MAX_STEPS;
-        } else if (cfg.maxTokens() > 0 && usage.totalTokens() >= cfg.maxTokens()) {
+        } else if (maxTokens() > 0 && usage.totalTokens() >= maxTokens()) {
           stop = Chat.BUDGET;
         }
         // every call gets a result, even when the turn stops here, so the history stays valid
@@ -229,8 +232,28 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       saved = true;
       Chat.Reply reply = new Chat.Reply(last.text(), last.model(), last.finishReason(), usage, stop, steps,
           toolCalls, review, span.traceId());
-      ctx.emit(Chat.TURN, new Chat.Turn(ask.conversationId(), ask.text(), reply));
+      ctx.emit(Chat.TURN, new Chat.Turn(ask.conversationId(), ask.text(), reply, ask.delegate()));
       return reply;
+    }
+
+    /** The step limit: the sub-agent's own when it has one, otherwise the config's. */
+    private int maxSteps() {
+      Chat.Delegate d = ask.delegate();
+      return d != null && d.maxSteps() > 0 ? d.maxSteps() : cfg.maxSteps();
+    }
+
+    /** The token budget (0 = none): the sub-agent's own when it has one, otherwise the config's. */
+    private int maxTokens() {
+      Chat.Delegate d = ask.delegate();
+      return d != null && d.maxTokens() > 0 ? d.maxTokens() : cfg.maxTokens();
+    }
+
+    /** The tools offered to the model: none when tools are off, only the allowed ones for a sub-agent. */
+    private List<ToolSpec> specs() {
+      if (!cfg.tools()) return List.of();
+      List<ToolSpec> all = Tools.specs(ctx);
+      Chat.Delegate d = ask.delegate();
+      return d == null ? all : all.stream().filter(t -> d.allows(t.name())).toList();
     }
 
     /**
@@ -285,7 +308,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
      * reviewer that fails counts as no verdict, so a broken reviewer never blocks an answer. Cancellation is thrown.
      */
     private Chat.Verdict review(String answer) {
-      if (cfg.maxReviews() == 0) return null;
+      if (cfg.maxReviews() == 0 || ask.delegate() != null) return null; // the asker's answer is the one reviewed
       int attempt = reviews + 1;
       OpenSpan s = span.child("review").attr("attempt", attempt);
       Optional<Chat.Verdict> verdict;
@@ -324,7 +347,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
      * turn. Built again for every call, as the turn grows and tools come and go.
      */
     private ChatRequest request() {
-      List<ToolSpec> specs = cfg.tools() ? Tools.specs(ctx) : List.of();
+      List<ToolSpec> specs = specs();
       Message system = system();
       List<Message> messages = new ArrayList<>();
       if (system != null) messages.add(system);
@@ -355,7 +378,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
      * cancelled ask is thrown. {@code maxHistory} plays no part here: it only caps what is sent.
      */
     private void compact(Conversation conversation) {
-      List<ToolSpec> specs = cfg.tools() ? Tools.specs(ctx) : List.of();
+      List<ToolSpec> specs = specs();
       if (fit(system(), specs, 1, 0).dropped().isEmpty()) return;
       ContextWindow.Fit target = fit(system(), specs, 0.5, 0);
       OpenSpan s = span.child("compaction").attr("messages", target.dropped().size())
@@ -436,7 +459,9 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     /** The configured prompt followed by the sections contributed through {@link Chat#CONTEXT}. */
     private String prompt() {
       List<String> parts = new ArrayList<>();
-      if (cfg.systemPrompt() != null && !cfg.systemPrompt().isBlank()) parts.add(cfg.systemPrompt().strip());
+      String base = ask.delegate() != null && ask.delegate().systemPrompt() != null
+          ? ask.delegate().systemPrompt() : cfg.systemPrompt();
+      if (base != null && !base.isBlank()) parts.add(base.strip());
       List<Chat.Section> sections;
       try {
         sections = new ArrayList<>(ctx.collect(Chat.CONTEXT, new Chat.ContextQuery(ask.conversationId())));
@@ -475,7 +500,10 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       ToolResult result;
       String next = Chat.DONE;
       try {
-        if (repeats > cfg.maxRepeats()) {
+        if (ask.delegate() != null && !ask.delegate().allows(call.name())) {
+          result = ToolResult.error(call.name() + " is not available to this agent");
+          s.attr("refused", true);
+        } else if (repeats > cfg.maxRepeats()) {
           result = ToolResult.error("the same call was made " + repeats + " times in a row; change the arguments "
               + "or answer with what you have");
           s.attr("refused", true);
@@ -483,6 +511,10 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         } else {
           toolCalls++;
           ToolResult raw = runTool(call, s);
+          count(raw.usage());
+          if (raw.usage().totalTokens() > 0) {
+            s.attr("promptTokens", raw.usage().promptTokens()).attr("completionTokens", raw.usage().completionTokens());
+          }
           result = truncate(raw);
           s.attr("outputChars", raw.content().length()).attr("truncated", result != raw);
         }
@@ -508,6 +540,8 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
      * is kept on the tool's span as {@code approvalMicros}.
      */
     private ToolResult runTool(ToolCall call, OpenSpan s) {
+      int own = Tools.info(ctx, call.name()).map(Tools.Info::timeoutSeconds).orElse(0);
+      int limit = own > 0 ? own : cfg.toolTimeoutSeconds();
       CancelToken token = new CancelToken();
       Disposable link = signal.onCancel(token::cancel);
       AtomicBoolean timedOut = new AtomicBoolean();
@@ -516,7 +550,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         s.attr("approvalMicros", s.elapsedMicros());
         timer.set(ctx.spawn("tool-timeout", t -> {
           try {
-            Thread.sleep(cfg.toolTimeoutSeconds() * 1000L);
+            Thread.sleep(limit * 1000L);
           } catch (InterruptedException e) {
             return null; // the call finished first
           }
@@ -526,11 +560,14 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         }));
       };
       try {
-        return Tools.call(ctx, call, new ToolContext(ask.conversationId(), token, started));
+        Chat.Delegate d = ask.delegate();
+        ToolContext tc = new ToolContext(ask.conversationId(), token, started, d == null ? null : d.origin(),
+            d == null ? null : d.agent(), span.traceId(), s.id(), p -> progress(call, p));
+        return Tools.call(ctx, call, tc);
       } catch (CancelledException e) {
         if (timedOut.get() && !signal.isCancelled()) {
           s.attr("timedOut", true);
-          return ToolResult.error(call.name() + " timed out after " + cfg.toolTimeoutSeconds() + "s");
+          return ToolResult.error(call.name() + " timed out after " + limit + "s");
         }
         throw e;
       } finally {
@@ -544,8 +581,20 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       String content = result.content();
       if (content.length() <= cfg.maxToolOutput()) return result;
       int cut = content.length() - cfg.maxToolOutput();
-      return new ToolResult(content.substring(0, cfg.maxToolOutput()) + "\n… [truncated " + cut + " chars]",
-          result.isError());
+      return result.withContent(content.substring(0, cfg.maxToolOutput()) + "\n… [truncated " + cut + " chars]");
+    }
+
+    /**
+     * What tool {@code call} shows while it runs (a sub-agent's text and tool calls), passed on to the asker
+     * only: the sub-agent's own turn already emits its steps on {@link Chat#STEP}. Deeper sub-agents are reported
+     * under the same call.
+     */
+    private void progress(ToolCall call, panic.tools.ToolProgress p) {
+      if (p.isText()) {
+        ask.onAgentDelta().accept(new Chat.AgentDelta(call.id(), p.agent(), p.text()));
+      } else {
+        ask.onStep().accept(new Chat.Step(ask.conversationId(), p.call(), p.result(), call.id(), p.agent()));
+      }
     }
 
     private void report(Chat.Step step) {
@@ -583,13 +632,15 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       midLine = !delta.endsWith("\n");
     }
 
+    /** A sub-agent's calls are indented under the call that runs it and carry its name. */
     void step(Chat.Step step) {
       endLine();
       ToolCall call = step.call();
+      String tag = step.nested() ? "  [" + step.agent() + ": tool " : "[tool ";
       if (!step.done()) {
-        out.println("[tool " + call.name() + " " + call.arguments() + "]");
+        out.println(tag + call.name() + " " + call.arguments() + "]");
       } else if (step.result().isError()) {
-        out.println("[tool " + call.name() + ": error: " + firstLine(step.result().content()) + "]");
+        out.println(tag + call.name() + ": error: " + firstLine(step.result().content()) + "]");
       }
     }
 

@@ -8,6 +8,7 @@ import core.Signal;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import panic.command.Hooks;
@@ -29,16 +30,18 @@ public final class Chat {
 
   /**
    * One user message. {@code signal} cancels the reply; {@code onDelta} receives its text as it streams;
-   * {@code onStep} hears each tool call when it starts and when it finishes; {@code onReview} hears every
-   * verdict on a final answer (passed or not), before a rejected answer is attempted again;
-   * {@code onToolDelta} hears the pieces of a tool call while the model writes it (before {@code onStep}
-   * reports it running; nothing when the model cannot stream calls). {@code traceId} names the turn's trace
-   * (see {@link panic.trace.Trace}); null lets chat pick one, which {@link Reply#traceId} returns. The
-   * callbacks are called in the order
-   * things happen, on the turn's thread.
+   * {@code onStep} hears each tool call when it starts and when it finishes (a sub-agent's calls too, with
+   * {@link Step#parentCallId}); {@code onReview} hears every verdict on a final answer (passed or not), before a
+   * rejected answer is attempted again; {@code onToolDelta} hears the pieces of a tool call while the model
+   * writes it (before {@code onStep} reports it running; nothing when the model cannot stream calls);
+   * {@code onAgentDelta} hears the text a sub-agent writes while one of this turn's tool calls runs it.
+   * {@code traceId} names the turn's trace (see {@link panic.trace.Trace}); null lets chat pick one, which
+   * {@link Reply#traceId} returns. {@code delegate} is null for a user's question, set when a sub-agent asks
+   * (see {@link Delegate}). The callbacks are called in the order things happen, one at a time.
    */
   public record Ask(String conversationId, String text, Signal signal, Consumer<String> onDelta,
-      Consumer<Step> onStep, Consumer<Reviewed> onReview, Consumer<ToolCallDelta> onToolDelta, String traceId) {
+      Consumer<Step> onStep, Consumer<Reviewed> onReview, Consumer<ToolCallDelta> onToolDelta, String traceId,
+      Consumer<AgentDelta> onAgentDelta, Delegate delegate) {
     public Ask {
       Objects.requireNonNull(conversationId, "conversationId");
       Objects.requireNonNull(text, "text");
@@ -48,6 +51,12 @@ public final class Chat {
       if (onReview == null) onReview = r -> { };
       if (onToolDelta == null) onToolDelta = d -> { };
       if (traceId != null && traceId.isBlank()) traceId = null;
+      if (onAgentDelta == null) onAgentDelta = d -> { };
+    }
+
+    public Ask(String conversationId, String text, Signal signal, Consumer<String> onDelta,
+        Consumer<Step> onStep, Consumer<Reviewed> onReview, Consumer<ToolCallDelta> onToolDelta, String traceId) {
+      this(conversationId, text, signal, onDelta, onStep, onReview, onToolDelta, traceId, null, null);
     }
 
     public Ask(String conversationId, String text, Signal signal, Consumer<String> onDelta,
@@ -70,10 +79,59 @@ public final class Chat {
     }
   }
 
-  /** A tool call of the bot: {@code result} is null when it starts, set when it is done. */
-  public record Step(String conversationId, ToolCall call, ToolResult result) {
+  /**
+   * An ask made on behalf of another turn: a sub-agent doing a task for it. The turn runs in its own
+   * conversation ({@link Ask#conversationId}) with:
+   * <ul>
+   * <li>{@code origin}: the conversation the user talks to. Tool approvals are asked there, naming
+   * {@code agent}.</li>
+   * <li>{@code systemPrompt}: replaces {@code chat.systemPrompt} (null keeps it). Contributed sections are still
+   * added, for the sub-agent's conversation.</li>
+   * <li>{@code tools}: the only tools offered and allowed (null = all). A call to another tool is refused.</li>
+   * <li>{@code maxSteps} / {@code maxTokens}: its own limits, 0 = those of the chat config.</li>
+   * <li>{@code parentSpanId}: the span its {@code turn} span nests under, in {@link Ask#traceId}'s trace.</li>
+   * </ul>
+   * A delegated turn is never reviewed (the asker's answer is) and never compacts its history.
+   */
+  public record Delegate(String origin, String agent, String systemPrompt, Set<String> tools, int maxSteps,
+      int maxTokens, String parentSpanId) {
+    public Delegate {
+      Objects.requireNonNull(origin, "origin");
+      Objects.requireNonNull(agent, "agent");
+      if (systemPrompt != null && systemPrompt.isBlank()) systemPrompt = null;
+      if (tools != null) tools = Set.copyOf(tools);
+      if (maxSteps < 0) maxSteps = 0;
+      if (maxTokens < 0) maxTokens = 0;
+    }
+
+    /** True when the sub-agent may see and call {@code tool}. */
+    public boolean allows(String tool) {
+      return tools == null || tools.contains(tool);
+    }
+  }
+
+  /** A piece of text a sub-agent wrote while tool call {@code parentCallId} of this turn runs it. */
+  public record AgentDelta(String parentCallId, String agent, String text) {
+  }
+
+  /**
+   * A tool call of the bot: {@code result} is null when it starts, set when it is done. A call made by a
+   * sub-agent that one of this turn's calls runs has that call's id as {@code parentCallId} and the sub-agent's
+   * name as {@code agent} (both null for the bot's own calls).
+   */
+  public record Step(String conversationId, ToolCall call, ToolResult result, String parentCallId, String agent) {
+
+    public Step(String conversationId, ToolCall call, ToolResult result) {
+      this(conversationId, call, result, null, null);
+    }
+
     public boolean done() {
       return result != null;
+    }
+
+    /** True for a sub-agent's call, reported to the asker of the turn that runs it. */
+    public boolean nested() {
+      return parentCallId != null;
     }
   }
 
@@ -146,8 +204,12 @@ public final class Chat {
   public record Reviewed(String conversationId, int attempt, Verdict verdict) {
   }
 
-  /** Emitted after every completed exchange. */
-  public record Turn(String conversationId, String question, Reply reply) {
+  /** Emitted after every completed exchange. {@code delegate} is set when a sub-agent asked. */
+  public record Turn(String conversationId, String question, Reply reply, Delegate delegate) {
+
+    public Turn(String conversationId, String question, Reply reply) {
+      this(conversationId, question, reply, null);
+    }
   }
 
   /**

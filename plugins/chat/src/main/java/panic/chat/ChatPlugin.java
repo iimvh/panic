@@ -33,6 +33,8 @@ import panic.llm.Usage;
 import panic.tools.ToolContext;
 import panic.tools.ToolResult;
 import panic.tools.Tools;
+import panic.trace.OpenSpan;
+import panic.trace.Trace;
 
 /**
  * The chat bot, an agent loop: answers {@link Chat#ASK} with the current LLM, offering it the tools registered
@@ -49,6 +51,10 @@ import panic.tools.Tools;
  * A final answer is put to {@link Chat#REVIEW} when someone answers it (the reviewer of {@code plugins/verify}
  * does when the conversation has acceptance criteria). A rejection is streamed to the asker and sent back to the
  * model as a user message, at most {@link ChatConfig#maxReviews} times; a reviewer that fails accepts.
+ *
+ * Every turn is traced: a root span {@code turn} with children {@code llm} (one per model call), {@code tool},
+ * {@code review} and {@code compaction}, emitted on {@link Trace#SPAN} as each ends, whether the turn is done,
+ * fails or is cancelled. Nobody has to listen; a failing listener never affects the turn.
  *
  * Runs only while both services exist; tools are optional and found through hooks, so none are required. A
  * reply in flight when the plugin is disposed (LLM switched, config changed, app stopping) is cancelled, its
@@ -106,6 +112,9 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
   /** Characters of one message shown to the summariser; tool output beyond this is rarely worth keeping. */
   private static final int SUMMARY_MESSAGE_CHARS = 2_000;
 
+  /** Characters of the question (and of a review's reason) kept on a span: enough to recognise it. */
+  private static final int SPAN_TEXT_CHARS = 200;
+
   /** One question, from the user's message to the bot's answer. */
   private static final class Turn {
 
@@ -128,6 +137,12 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private int repeats;
     private int reviews;
     private String review;
+    private int steps;
+    private String stop = Chat.DONE;
+    private String model;
+    private boolean saved;
+    /** The root span of this turn's trace; open from {@link #run()} to its end. */
+    private OpenSpan span;
 
     Turn(Context ctx, ChatConfig cfg, Llm llm, Conversations conversations, Tokens tokens, Chat.Ask ask) {
       this.ctx = ctx;
@@ -143,8 +158,19 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     Chat.Reply run() {
       Disposable byAsker = ask.signal().onCancel(signal::cancel);
       Disposable byPlugin = ctx.signal().onCancel(signal::cancel);
+      span = Trace.open(ctx, ask.traceId(), null, "turn")
+          .attr(Trace.CONVERSATION, ask.conversationId())
+          .attr("question", cut(ask.text()))
+          .attr("questionHash", Chat.questionHash(ask.text()));
       try {
-        return loop();
+        Chat.Reply reply = loop();
+        summarise();
+        span.end();
+        return reply;
+      } catch (RuntimeException | Error e) {
+        summarise();
+        fail(span, e);
+        throw e;
       } finally {
         byPlugin.dispose();
         byAsker.dispose();
@@ -161,12 +187,11 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       if (cfg.limitsContext() && cfg.compact()) compact(conversation);
 
       Completion last;
-      String stop = Chat.DONE;
-      int steps = 0;
       while (true) {
         steps++;
         ChatRequest request = request();
-        last = llm.stream(request, signal, ask.onDelta(), ask.onToolDelta());
+        last = callModel(request);
+        model = last.model();
         tokens.observe(Tokens.raw(request), last.usage().promptTokens());
         count(last.usage());
         add(last.message());
@@ -201,10 +226,58 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
 
       signal.throwIfCancelled();
       conversation.append(added.toArray(Message[]::new));
+      saved = true;
       Chat.Reply reply = new Chat.Reply(last.text(), last.model(), last.finishReason(), usage, stop, steps,
-          toolCalls, review);
+          toolCalls, review, span.traceId());
       ctx.emit(Chat.TURN, new Chat.Turn(ask.conversationId(), ask.text(), reply));
       return reply;
+    }
+
+    /**
+     * One model call, streamed to the asker, as an {@code llm} span. {@code firstTokenMicros} is when the first
+     * piece of text or of a tool call arrived: the wait the user sees.
+     */
+    private Completion callModel(ChatRequest request) {
+      OpenSpan call = span.child("llm").attr("step", steps).attr("messages", request.messages().size());
+      long[] first = {-1};
+      Runnable mark = () -> {
+        if (first[0] < 0) first[0] = call.elapsedMicros();
+      };
+      Completion c;
+      try {
+        c = llm.stream(request, signal, d -> {
+          mark.run();
+          ask.onDelta().accept(d);
+        }, d -> {
+          mark.run();
+          ask.onToolDelta().accept(d);
+        });
+      } catch (RuntimeException e) {
+        fail(call, e);
+        throw e;
+      }
+      if (first[0] >= 0) call.attr("firstTokenMicros", first[0]);
+      call.attr("model", c.model()).attr("finishReason", c.finishReason())
+          .attr("promptTokens", c.usage().promptTokens()).attr("completionTokens", c.usage().completionTokens())
+          .attr("toolCalls", c.toolCalls().size())
+          .end();
+      return c;
+    }
+
+    /** The turn's totals on its root span, set however it ends. */
+    private void summarise() {
+      span.attr("model", model).attr("stop", stop).attr("steps", steps).attr("toolCalls", toolCalls)
+          .attr("promptTokens", usage.promptTokens()).attr("completionTokens", usage.completionTokens())
+          .attr("saved", saved);
+    }
+
+    /** Ends {@code s} as failed; anything thrown once the turn was cancelled counts as the cancellation. */
+    private void fail(OpenSpan s, Throwable e) {
+      s.fail(signal.isCancelled() && !(e instanceof CancelledException) ? new CancelledException("cancelled") : e);
+    }
+
+    private static String cut(String text) {
+      return text.length() <= SPAN_TEXT_CHARS ? text : text.substring(0, SPAN_TEXT_CHARS) + " …";
     }
 
     /**
@@ -214,17 +287,30 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private Chat.Verdict review(String answer) {
       if (cfg.maxReviews() == 0) return null;
       int attempt = reviews + 1;
+      OpenSpan s = span.child("review").attr("attempt", attempt);
       Optional<Chat.Verdict> verdict;
       try {
         verdict = Hooks.bail(ctx, Chat.REVIEW,
             new Chat.Review(ask.conversationId(), ask.text(), added, answer, attempt, signal));
       } catch (RuntimeException e) {
+        fail(s, e);
         signal.throwIfCancelled();
         if (e instanceof CancelledException c) throw c;
         return null;
       }
-      signal.throwIfCancelled();
-      if (verdict.isEmpty()) return null;
+      if (signal.isCancelled()) {
+        fail(s, new CancelledException("cancelled"));
+        signal.throwIfCancelled();
+      }
+      if (verdict.isEmpty()) {
+        s.attr("verdict", "none").end();
+        return null;
+      }
+      Usage cost = verdict.get().usage();
+      s.attr("verdict", verdict.get().pass() ? "pass" : "fail").attr("pass", verdict.get().pass())
+          .attr("reason", cut(verdict.get().reason()))
+          .attr("promptTokens", cost.promptTokens()).attr("completionTokens", cost.completionTokens())
+          .end();
       count(verdict.get().usage());
       review = verdict.get().reason();
       Chat.Reviewed reviewed = new Chat.Reviewed(ask.conversationId(), attempt, verdict.get());
@@ -272,24 +358,40 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       List<ToolSpec> specs = cfg.tools() ? Tools.specs(ctx) : List.of();
       if (fit(system(), specs, 1, 0).dropped().isEmpty()) return;
       ContextWindow.Fit target = fit(system(), specs, 0.5, 0);
-      String next = summarize(target.dropped());
-      if (next != null && conversation.compact(target.dropped(), next)) {
+      OpenSpan s = span.child("compaction").attr("messages", target.dropped().size())
+          .attr("kept", target.kept().size());
+      String next;
+      try {
+        next = summarize(target.dropped(), s);
+      } catch (RuntimeException e) {
+        fail(s, e);
+        throw e;
+      }
+      boolean applied = next != null && conversation.compact(target.dropped(), next);
+      if (applied) {
         summary = next;
         history = target.kept();
       }
+      s.attr("applied", applied);
+      if (next == null) s.fail("no summary; the turns are only left out of this request");
+      else s.end();
     }
 
-    private String summarize(List<Message> turns) {
+    /** The new summary, or null when the model failed (noted on {@code s}); a cancelled ask is thrown. */
+    private String summarize(List<Message> turns, OpenSpan s) {
       int maxTokens = Math.max(256, Math.min(2_048, cfg.contextTokens() / 8));
       ChatRequest request = new ChatRequest(
           List.of(Message.system(SUMMARY_PROMPT), Message.user(transcript(turns))), null, null, maxTokens);
       try {
         Completion c = llm.complete(request, signal);
         count(c.usage());
+        s.attr("model", c.model()).attr("promptTokens", c.usage().promptTokens())
+            .attr("completionTokens", c.usage().completionTokens());
         String text = c.text().strip();
         return text.isEmpty() ? null : text;
       } catch (LlmException e) {
         signal.throwIfCancelled();
+        s.attr("error", e.getMessage());
         return null;
       }
     }
@@ -369,44 +471,65 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       lastCall = key;
 
       report(new Chat.Step(ask.conversationId(), call, null));
+      OpenSpan s = span.child("tool").attr("tool", call.name()).attr("callId", call.id());
       ToolResult result;
-      String stop = Chat.DONE;
-      if (repeats > cfg.maxRepeats()) {
-        result = ToolResult.error("the same call was made " + repeats + " times in a row; change the arguments "
-            + "or answer with what you have");
-        if (repeats > cfg.maxRepeats() + 1) stop = Chat.LOOP;
-      } else {
-        toolCalls++;
-        result = truncate(runTool(call));
+      String next = Chat.DONE;
+      try {
+        if (repeats > cfg.maxRepeats()) {
+          result = ToolResult.error("the same call was made " + repeats + " times in a row; change the arguments "
+              + "or answer with what you have");
+          s.attr("refused", true);
+          if (repeats > cfg.maxRepeats() + 1) next = Chat.LOOP;
+        } else {
+          toolCalls++;
+          ToolResult raw = runTool(call, s);
+          result = truncate(raw);
+          s.attr("outputChars", raw.content().length()).attr("truncated", result != raw);
+        }
+      } catch (RuntimeException e) {
+        fail(s, e);
+        throw e;
       }
+      if (result.isError()) s.fail(firstLine(result.content()));
+      else s.end();
       add(Message.tool(call.id(), result.isError() ? Chat.TOOL_ERROR_PREFIX + result.content() : result.content()));
       report(new Chat.Step(ask.conversationId(), call, result));
-      return stop;
+      return next;
+    }
+
+    private static String firstLine(String text) {
+      int nl = text.indexOf('\n');
+      return cut(nl < 0 ? text : text.substring(0, nl));
     }
 
     /**
      * Runs the call with its own timeout; a timeout is an error for the model, a cancelled ask is thrown. The
-     * clock starts when the tool starts, so the time a user takes to approve the call does not count.
+     * clock starts when the tool starts, so the time a user takes to approve the call does not count; that time
+     * is kept on the tool's span as {@code approvalMicros}.
      */
-    private ToolResult runTool(ToolCall call) {
+    private ToolResult runTool(ToolCall call, OpenSpan s) {
       CancelToken token = new CancelToken();
       Disposable link = signal.onCancel(token::cancel);
       AtomicBoolean timedOut = new AtomicBoolean();
       AtomicReference<Task<Void>> timer = new AtomicReference<>();
-      Runnable started = () -> timer.set(ctx.spawn("tool-timeout", s -> {
-        try {
-          Thread.sleep(cfg.toolTimeoutSeconds() * 1000L);
-        } catch (InterruptedException e) {
-          return null; // the call finished first
-        }
-        timedOut.set(true);
-        token.cancel();
-        return null;
-      }));
+      Runnable started = () -> {
+        s.attr("approvalMicros", s.elapsedMicros());
+        timer.set(ctx.spawn("tool-timeout", t -> {
+          try {
+            Thread.sleep(cfg.toolTimeoutSeconds() * 1000L);
+          } catch (InterruptedException e) {
+            return null; // the call finished first
+          }
+          timedOut.set(true);
+          token.cancel();
+          return null;
+        }));
+      };
       try {
         return Tools.call(ctx, call, new ToolContext(ask.conversationId(), token, started));
       } catch (CancelledException e) {
         if (timedOut.get() && !signal.isCancelled()) {
+          s.attr("timedOut", true);
           return ToolResult.error(call.name() + " timed out after " + cfg.toolTimeoutSeconds() + "s");
         }
         throw e;

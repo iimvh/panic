@@ -7,7 +7,7 @@ Conversation history and the chat bot, an agent loop that calls tools.
 | Name | Config | Requires | Provides / registers |
 | --- | --- | --- | --- |
 | `conversations` | `ConversationsConfig { dir = ".panic/conversations", persist = true }` | none | service `Conversations.KEY` (on disk, or in memory with `persist: false`); command `reset` |
-| `chat` | `ChatConfig { systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats, contextTokens, compact, maxReviews }` | `Llm.KEY`, `Conversations.KEY` | hook `Chat.ASK`; events `Chat.TURN`, `Chat.STEP`, `Chat.REVIEWED`; command `ask`. Collects hook `Chat.CONTEXT`, asks hook `Chat.REVIEW` |
+| `chat` | `ChatConfig { systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats, contextTokens, compact, maxReviews }` | `Llm.KEY`, `Conversations.KEY` | hook `Chat.ASK`; events `Chat.TURN`, `Chat.STEP`, `Chat.REVIEWED`, `Trace.SPAN`; command `ask`. Collects hook `Chat.CONTEXT`, asks hook `Chat.REVIEW` |
 
 `conversations` does not depend on the LLM, so history survives a provider or model switch (which restarts
 `chat`).
@@ -93,16 +93,34 @@ collects them once per ask, sorts them by `order` then `name`, and sends them af
 `## name` + text. A section returning null or blank is left out for that ask, one that throws is skipped, and
 all of a plugin's sections disappear when it is disposed. Chat does not require the contributors.
 
+## Tracing
+
+Every turn is traced on `Trace.SPAN` (`sdk`, `panic.trace`), whether it is done, fails or is cancelled. Nobody has
+to listen (the `tracing` plugin of `plugins/trace` stores them), and a listener that fails never affects the turn.
+The trace id is `Ask.traceId` when the asker gives one (web does, to tell the UI at once), otherwise a new one;
+`Reply.traceId` returns it. Each span ends (and is emitted) before its parent:
+
+| Span | Parent | Attributes |
+| --- | --- | --- |
+| `turn` | none (root) | `conversationId`, `question` (first 200 chars), `questionHash` (`Chat.questionHash`), `model`, `stop`, `steps`, `toolCalls`, `promptTokens`, `completionTokens` (whole turn), `saved` |
+| `llm` | `turn` | `step`, `messages`, `model`, `finishReason`, `promptTokens`, `completionTokens`, `toolCalls`, `firstTokenMicros` (first text or tool-call piece) |
+| `tool` | `turn` | `tool`, `callId`, `approvalMicros` (until the tool started), `outputChars`, `truncated`, `refused` (loop detection), `timedOut`. An error result is an `ERROR` span |
+| `review` | `turn` | `attempt`, `verdict` (`pass` / `fail` / `none`), `pass`, `reason`, `promptTokens`, `completionTokens` |
+| `compaction` | `turn` | `messages` (summarised), `kept`, `applied`, `model`, tokens. `ERROR` when the model gave no summary |
+
+A span ends `CANCELLED` when the turn was cancelled, `ERROR` when its work threw.
+
 ## Public keys
 
 | Key | Type | Meaning |
 | --- | --- | --- |
 | `Conversations.KEY` | service `Conversations` | `get(id)` returns the history of a session (created on first use) |
-| `Chat.ASK` | hook `Ask(conversationId, text, signal, onDelta, onStep?, onReview?, onToolDelta?) → Reply(text, model, finishReason, usage, stop, steps, toolCalls, review)` | Ask the bot. Use `Chat.ask(ctx, ask)`: it is empty when no LLM is connected and rethrows the handler's own exception. `onStep` hears every tool call when it starts (`result == null`) and when it ends; `onReview` hears every `Reviewed` verdict; `onToolDelta` hears the pieces of a tool call while the model writes it (`ToolCallDelta`, before its step starts). Callbacks run in the order things happen |
+| `Chat.ASK` | hook `Ask(conversationId, text, signal, onDelta, onStep?, onReview?, onToolDelta?, traceId?) → Reply(text, model, finishReason, usage, stop, steps, toolCalls, review, traceId)` | Ask the bot. Use `Chat.ask(ctx, ask)`: it is empty when no LLM is connected and rethrows the handler's own exception. `onStep` hears every tool call when it starts (`result == null`) and when it ends; `onReview` hears every `Reviewed` verdict; `onToolDelta` hears the pieces of a tool call while the model writes it (`ToolCallDelta`, before its step starts). Callbacks run in the order things happen |
 | `Chat.REVIEW` | hook `Review(conversationId, question, turn, answer, attempt, signal) → Verdict(pass, reason, usage)` | Judges a final answer. No answer accepts it; a rejection sends `reason` back to the model |
 | `Chat.REVIEWED` | event `Reviewed(conversationId, attempt, verdict)` | Emitted after each verdict (auditing...) |
 | `Chat.TURN` | event `Turn(conversationId, question, reply)` | Emitted after every completed exchange (logging, memory, cost tracking...) |
 | `Chat.STEP` | event `Step(conversationId, call, result)` | Emitted when a tool call starts and when it ends (auditing...) |
+| `Trace.SPAN` (emitted) | event `Span` | The turn's spans, see [Tracing](#tracing). `Chat.questionHash(question)` is the digest on the root |
 | `Chat.CONTEXT` | hook `ContextQuery(conversationId) → Section(name, order, text)`, collected | Sections of the system prompt (environment, tool hints, memory...). Register with `Chat.contribute` |
 
 ## Commands

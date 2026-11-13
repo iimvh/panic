@@ -32,11 +32,13 @@ public final class Chat {
    * {@code onStep} hears each tool call when it starts and when it finishes; {@code onReview} hears every
    * verdict on a final answer (passed or not), before a rejected answer is attempted again;
    * {@code onToolDelta} hears the pieces of a tool call while the model writes it (before {@code onStep}
-   * reports it running; nothing when the model cannot stream calls). The callbacks are called in the order
+   * reports it running; nothing when the model cannot stream calls). {@code traceId} names the turn's trace
+   * (see {@link panic.trace.Trace}); null lets chat pick one, which {@link Reply#traceId} returns. The
+   * callbacks are called in the order
    * things happen, on the turn's thread.
    */
   public record Ask(String conversationId, String text, Signal signal, Consumer<String> onDelta,
-      Consumer<Step> onStep, Consumer<Reviewed> onReview, Consumer<ToolCallDelta> onToolDelta) {
+      Consumer<Step> onStep, Consumer<Reviewed> onReview, Consumer<ToolCallDelta> onToolDelta, String traceId) {
     public Ask {
       Objects.requireNonNull(conversationId, "conversationId");
       Objects.requireNonNull(text, "text");
@@ -45,20 +47,26 @@ public final class Chat {
       if (onStep == null) onStep = s -> { };
       if (onReview == null) onReview = r -> { };
       if (onToolDelta == null) onToolDelta = d -> { };
+      if (traceId != null && traceId.isBlank()) traceId = null;
+    }
+
+    public Ask(String conversationId, String text, Signal signal, Consumer<String> onDelta,
+        Consumer<Step> onStep, Consumer<Reviewed> onReview, Consumer<ToolCallDelta> onToolDelta) {
+      this(conversationId, text, signal, onDelta, onStep, onReview, onToolDelta, null);
     }
 
     public Ask(String conversationId, String text, Signal signal, Consumer<String> onDelta,
         Consumer<Step> onStep, Consumer<Reviewed> onReview) {
-      this(conversationId, text, signal, onDelta, onStep, onReview, null);
+      this(conversationId, text, signal, onDelta, onStep, onReview, null, null);
     }
 
     public Ask(String conversationId, String text, Signal signal, Consumer<String> onDelta,
         Consumer<Step> onStep) {
-      this(conversationId, text, signal, onDelta, onStep, null, null);
+      this(conversationId, text, signal, onDelta, onStep, null, null, null);
     }
 
     public Ask(String conversationId, String text, Signal signal, Consumer<String> onDelta) {
-      this(conversationId, text, signal, onDelta, null, null, null);
+      this(conversationId, text, signal, onDelta, null, null, null, null);
     }
   }
 
@@ -90,10 +98,16 @@ public final class Chat {
    * The answer. {@code text} is the bot's last message; {@code usage} adds up every model call of the turn
    * (reviews included); {@code stop} says why it ended ({@link #DONE}, {@link #MAX_STEPS}, {@link #BUDGET},
    * {@link #LOOP}, {@link #REJECTED}). {@code review} is the reason of the last verdict, null when nobody
-   * reviewed the answer.
+   * reviewed the answer. {@code traceId} is the turn's trace, whose spans are emitted on
+   * {@link panic.trace.Trace#SPAN}.
    */
   public record Reply(String text, String model, String finishReason, Usage usage, String stop, int steps,
-      int toolCalls, String review) {
+      int toolCalls, String review, String traceId) {
+
+    public Reply(String text, String model, String finishReason, Usage usage, String stop, int steps,
+        int toolCalls, String review) {
+      this(text, model, finishReason, usage, stop, steps, toolCalls, review, null);
+    }
 
     public Reply(String text, String model, String finishReason, Usage usage, String stop, int steps,
         int toolCalls) {
@@ -134,6 +148,20 @@ public final class Chat {
 
   /** Emitted after every completed exchange. */
   public record Turn(String conversationId, String question, Reply reply) {
+  }
+
+  /**
+   * A short, stable digest of a question, kept on the root span of each turn's trace ({@code questionHash}), so
+   * a front-end can find the trace of a stored question without the trace keeping (or matching on) its text.
+   */
+  public static String questionHash(String question) {
+    try {
+      byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+          .digest(question.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      return java.util.HexFormat.of().formatHex(digest, 0, 8);
+    } catch (java.security.NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 is always available", e);
+    }
   }
 
   /** The question put to {@link #CONTEXT} contributors, once per ask. */

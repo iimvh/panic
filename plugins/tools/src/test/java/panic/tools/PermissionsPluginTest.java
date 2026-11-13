@@ -107,6 +107,22 @@ class PermissionsPluginTest {
   }
 
   @Test
+  void aSubAgentsCallIsAskedInTheConversationOfItsOrigin() {
+    approver(a -> Tools.Decision.ALLOW);
+    ToolContext sub = new ToolContext("c~explore-1", new CancelToken(), null, "c", "explore", null, null, null);
+    assertEquals(ToolResult.ok("change ran"), Tools.call(root, new ToolCall("id", "change", "{}"), sub));
+    assertEquals(1, asked.size());
+    assertEquals("c", asked.get(0).conversationId());
+    assertEquals("explore", asked.get(0).agent());
+
+    // without an origin the sub-agent's own conversation is asked, and nobody answers for it
+    ToolContext orphan = new ToolContext("c~explore-2", new CancelToken());
+    assertEquals(ToolResult.error("change: denied by the user"),
+        Tools.call(root, new ToolCall("id", "change", "{}"), orphan));
+    assertEquals(1, asked.size());
+  }
+
+  @Test
   void theUserDecides() {
     approver(a -> a.call().name().equals("change") ? Tools.Decision.ALLOW : Tools.Decision.DENY);
     assertEquals(ToolResult.ok("change ran"), call("change"));

@@ -44,13 +44,25 @@ to its section restarts only it and applies from the next call.
 | Key / helper | Type | Meaning |
 | --- | --- | --- |
 | `Tools.register(ctx, tool)` | registers hooks in `ctx` | Declares a `Tool`. It exists while the plugin does, and disposal waits for a call in progress |
-| `Tools.LIST` | hook `Listing → Info(ToolSpec, Risk)` | Every tool available right now (`collect`). Use `Tools.specs(ctx)` (what the model sees) or `Tools.infos(ctx)` (with risks). Both sort and drop duplicate names (first wins) |
+| `Tools.LIST` | hook `Listing → Info(ToolSpec, Risk, timeoutSeconds)` | Every tool available right now (`collect`). Use `Tools.specs(ctx)` (what the model sees), `Tools.infos(ctx)` (with risks and time limits) or `Tools.info(ctx, name)`. They sort and drop duplicate names (first wins) |
 | `Tools.RUN` | hook `Invocation(ToolCall, ToolContext) → ToolResult` | Runs a call through the permission gate. Use `Tools.call(ctx, call, toolCtx)` |
 | `Tools.POLICY` | hook `Check(ToolCall, Risk) → Verdict(Permission, askTimeoutSeconds)` | The rule for a call. Answered by `permissions`. `Tools.verdict(ctx, call, risk)` applies the fallback |
-| `Tools.APPROVE` | hook `Approval(conversationId, ToolCall, Risk, Signal) → Decision` | Asks the user. Front-ends answer only for their own conversations and return null otherwise. A blocking answer must honour `signal` |
+| `Tools.APPROVE` | hook `Approval(conversationId, ToolCall, Risk, Signal, agent?) → Decision` | Asks the user. `conversationId` is the call's `origin`, the conversation the user talks to, also for a sub-agent's call (`agent` names it). Front-ends answer only for their own conversations and return null otherwise. A blocking answer must honour `signal` |
 
-`ToolContext(conversationId, signal, started?)`: `started` runs right before the tool itself, never for a
-refused call. The agent loop starts its tool timeout there, so approval time does not count.
+`ToolContext(conversationId, signal, started?, origin?, agent?, traceId?, spanId?, progress?)`:
+
+- `started` runs right before the tool itself, never for a refused call. The agent loop starts its tool timeout
+  there, so approval time does not count.
+- `origin` is the conversation the user talks to (default `conversationId`). A sub-agent's calls run in its own
+  conversation, but are approved in `origin`; `agent` names the sub-agent (null for the main agent).
+- `traceId` / `spanId` are the caller's trace and the call's span (null when untraced), so a tool doing traced
+  work of its own can nest it under the call.
+- `progress` hears `ToolProgress` (a piece of `text`, or one of the tool's own calls starting or ending) while a
+  long tool runs. The agent loop passes it on to the asker; nobody has to listen.
+
+`ToolResult(content, isError, usage?)`: `usage` is what the tool spent on a model of its own (a sub-agent). The
+agent loop adds it to the turn's usage and budget. `Tool.timeoutSeconds()` (default 0 = the caller's limit,
+`chat.toolTimeoutSeconds`) lets a slow tool ask for more time.
 
 `Tools.call` never throws for a bad call. An unknown tool, invalid JSON, arguments that fail the schema, denied
 calls and exceptions thrown by the tool all come back as `ToolResult.error(...)`, so the model can read them. Only

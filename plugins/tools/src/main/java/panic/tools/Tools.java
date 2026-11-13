@@ -46,11 +46,16 @@ public final class Tools {
     }
   }
 
-  /** A tool as listed: what the model sees, and its risk. */
-  public record Info(ToolSpec spec, Risk risk) {
+  /** A tool as listed: what the model sees, its risk, and its own time limit (0 = the caller's). */
+  public record Info(ToolSpec spec, Risk risk, int timeoutSeconds) {
     public Info {
       Objects.requireNonNull(spec, "spec");
       Objects.requireNonNull(risk, "risk");
+      if (timeoutSeconds < 0) timeoutSeconds = 0;
+    }
+
+    public Info(ToolSpec spec, Risk risk) {
+      this(spec, risk, 0);
     }
   }
 
@@ -75,10 +80,16 @@ public final class Tools {
   }
 
   /**
-   * A call that needs the user's approval. {@code signal} is cancelled when the caller gives up or the wait
-   * times out: an answer that blocks must honour it.
+   * A call that needs the user's approval. {@code conversationId} is the conversation the user talks to
+   * ({@link ToolContext#origin}), also when a sub-agent makes the call; {@code agent} then names it (null for
+   * the main agent). {@code signal} is cancelled when the caller gives up or the wait times out: an answer that
+   * blocks must honour it.
    */
-  public record Approval(String conversationId, ToolCall call, Risk risk, Signal signal) {
+  public record Approval(String conversationId, ToolCall call, Risk risk, Signal signal, String agent) {
+
+    public Approval(String conversationId, ToolCall call, Risk risk, Signal signal) {
+      this(conversationId, call, risk, signal, null);
+    }
   }
 
   /** The user's answer to an {@link Approval}. */
@@ -103,7 +114,7 @@ public final class Tools {
   /** Declares {@code tool} in {@code ctx}. Disposing the result (or ctx) removes it. */
   public static Disposable register(Context ctx, Tool tool) {
     ToolSpec spec = Objects.requireNonNull(tool.spec(), "spec");
-    Info info = new Info(spec, Objects.requireNonNull(tool.risk(), "risk"));
+    Info info = new Info(spec, Objects.requireNonNull(tool.risk(), "risk"), tool.timeoutSeconds());
     Disposable run = ctx.hook(RUN, inv -> {
       if (!inv.call().name().equals(spec.name())) return null;
       return run(ctx, tool, info, inv);
@@ -132,7 +143,12 @@ public final class Tools {
   }
 
   public static Optional<ToolSpec> find(Context ctx, String name) {
-    return specs(ctx).stream().filter(s -> s.name().equals(name)).findFirst();
+    return info(ctx, name).map(Info::spec);
+  }
+
+  /** The tool named {@code name} as listed right now, if any. */
+  public static Optional<Info> info(Context ctx, String name) {
+    return infos(ctx).stream().filter(i -> i.spec().name().equals(name)).findFirst();
   }
 
   /** What the policy says about {@code call} right now. */
@@ -176,7 +192,7 @@ public final class Tools {
     Disposable byCaller = inv.context().signal().onCancel(signal::cancel);
     Disposable byOwner = owner.signal().onCancel(signal::cancel);
     try {
-      ToolResult result = tool.call(args, new ToolContext(inv.context().conversationId(), signal));
+      ToolResult result = tool.call(args, inv.context().forTool(signal));
       signal.throwIfCancelled();
       return result == null ? ToolResult.ok("") : result;
     } catch (CancelledException e) {
@@ -212,7 +228,8 @@ public final class Tools {
       return null;
     });
     try {
-      Decision d = Hooks.bail(owner, APPROVE, new Approval(inv.context().conversationId(), inv.call(), risk, wait))
+      ToolContext tc = inv.context();
+      Decision d = Hooks.bail(owner, APPROVE, new Approval(tc.origin(), inv.call(), risk, wait, tc.agent()))
           .orElse(Decision.DENY);
       if (caller.isCancelled() || owner.signal().isCancelled()) throw new CancelledException("approval cancelled");
       return timedOut.get() ? Decision.DENY : d;

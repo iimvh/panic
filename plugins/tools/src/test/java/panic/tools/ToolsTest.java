@@ -70,6 +70,50 @@ class ToolsTest {
   }
 
   @Test
+  void theToolSeesItsCallersContextAndReportsProgress() {
+    List<ToolProgress> heard = new java.util.concurrent.CopyOnWriteArrayList<>();
+    offer("slow", new Tool() {
+      @Override
+      public ToolSpec spec() {
+        return new ToolSpec("slow", "", Json.parseOrNull("{\"type\":\"object\"}"));
+      }
+
+      @Override
+      public Risk risk() {
+        return Risk.READ;
+      }
+
+      @Override
+      public int timeoutSeconds() {
+        return 600;
+      }
+
+      @Override
+      public ToolResult call(JsonNode args, ToolContext ctx) {
+        ctx.progress().accept(ToolProgress.text("helper", "working"));
+        return new ToolResult(ctx.origin() + "/" + ctx.agent() + "/" + ctx.traceId() + "/" + ctx.spanId(), false,
+            new panic.llm.Usage(3, 4));
+      }
+    });
+    assertEquals(600, Tools.info(root, "slow").orElseThrow().timeoutSeconds());
+
+    ToolContext tc = new ToolContext("c~x-1", new CancelToken(), null, "c", "x", "trace", "span", heard::add);
+    ToolResult r = Tools.call(root, new ToolCall("id", "slow", "{}"), tc);
+    assertEquals("c/x/trace/span", r.content());
+    assertEquals(new panic.llm.Usage(3, 4), r.usage());
+    assertEquals(List.of(ToolProgress.text("helper", "working")), heard);
+  }
+
+  @Test
+  void aToolWithoutAnOwnLimitLeavesItToTheCaller() {
+    offer("echoer", echo("first"));
+    assertEquals(0, Tools.info(root, "echo").orElseThrow().timeoutSeconds());
+    ToolContext plain = new ToolContext("c", new CancelToken());
+    assertEquals("c", plain.origin());
+    assertEquals(null, plain.agent());
+  }
+
+  @Test
   void toolsLiveAsLongAsTheirPlugin() {
     ConfigHandle<Boolean> plugin = offer("echoer", echo("first"));
     assertEquals(List.of("echo"), Tools.specs(root).stream().map(ToolSpec::name).toList());

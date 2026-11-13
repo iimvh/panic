@@ -23,4 +23,12 @@ public interface Tool {
   Risk risk();
 
   ToolResult call(JsonNode args, ToolContext ctx);
+
+  /**
+   * How long a call may run once started, in seconds; 0 (the default) leaves it to the caller's own limit
+   * ({@code chat.toolTimeoutSeconds}). Tools that are slow by nature (a sub-agent, a test run) say so here.
+   */
+  default int timeoutSeconds() {
+    return 0;
+  }
 }

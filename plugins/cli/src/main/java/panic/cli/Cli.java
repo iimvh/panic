@@ -9,7 +9,9 @@ import core.Signal;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import panic.command.Command;
 import panic.command.Commands;
 import panic.command.Out;
@@ -56,7 +58,8 @@ public final class Cli implements ConfigPlugin<CliConfig> {
     help(ctx, PREFIX);
     AtomicBoolean stop = new AtomicBoolean();
     Commands.command(ctx, "exit", "quit", call -> stop.set(true));
-    ctx.hook(Tools.APPROVE, a -> a.conversationId().equals(SESSION) ? approve(a, in, out) : null);
+    ReentrantLock asking = new ReentrantLock(true);
+    ctx.hook(Tools.APPROVE, a -> a.conversationId().equals(SESSION) ? approve(a, in, out, asking) : null);
     ctx.spawn("repl", signal -> {
       Session session = new Session(SESSION, out, signal);
       out.println("panic — type a message, or " + PREFIX + "help");
@@ -103,16 +106,23 @@ public final class Cli implements ConfigPlugin<CliConfig> {
   }
 
   /**
-   * Asks the user at the terminal whether a tool call may run. It runs on the REPL thread, which is blocked in
-   * the command that made the call, so it is the only reader of the terminal meanwhile. Anything but
-   * {@code y}/{@code yes} denies, and so does end of input.
+   * Asks the user at the terminal whether a tool call may run. The REPL thread is blocked in the command that
+   * made the call, so the approvals are the only readers of the terminal meanwhile; calls running in parallel
+   * (or sub-agents) may ask at the same time, so {@code asking} puts their questions one after the other. A
+   * sub-agent's call is shown with its name. Anything but {@code y}/{@code yes} denies, and so does end of input.
    */
-  private static Tools.Decision approve(Tools.Approval a, Stdin in, Out out) {
-    out.print("\n[approve] " + a.call().name() + " (" + a.risk().wire() + ") " + a.call().arguments()
-        + "\nallow? [y/N] ");
+  private static Tools.Decision approve(Tools.Approval a, Stdin in, Out out, ReentrantLock asking) {
     String answer;
     try {
-      answer = in.readLine(a.signal());
+      while (!asking.tryLock(100, TimeUnit.MILLISECONDS)) a.signal().throwIfCancelled();
+      try {
+        a.signal().throwIfCancelled();
+        out.print("\n[approve] " + (a.agent() == null ? "" : a.agent() + ": ") + a.call().name() + " ("
+            + a.risk().wire() + ") " + a.call().arguments() + "\nallow? [y/N] ");
+        answer = in.readLine(a.signal());
+      } finally {
+        asking.unlock();
+      }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new CancelledException("approval interrupted");

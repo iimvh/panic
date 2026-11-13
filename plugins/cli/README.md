@@ -13,10 +13,12 @@ end of input or on `exit` it calls `App.exit()`. The app sets `repl` from its fl
 commands turn it off).
 
 In the REPL it answers `Tools.APPROVE` (from `plugins/tools`) for its own session (`repl`): it prints
-`[approve] <tool> (<risk>) <arguments>` and `allow? [y/N]`, then reads one line. `y` or `yes` allows the call.
-Anything else, or end of input, denies it. The prompt runs on the REPL thread, which is blocked in the command
-that made the call, so nothing else reads the terminal meanwhile. The wait honours the approval's signal (the
-caller gave up, or `askTimeoutSeconds` passed). Calls from other sessions are not answered here, and one-shot
+`[approve] <tool> (<risk>) <arguments>` (`[approve] <agent>: <tool> …` for a sub-agent's call) and
+`allow? [y/N]`, then reads one line. `y` or `yes` allows the call. Anything else, or end of input, denies it. The
+REPL thread is blocked in the command that made the call, so only approvals read the terminal meanwhile. Calls
+running in parallel (`chat.parallelTools`, sub-agents) may ask at the same time: their questions are put one
+after the other, in arrival order. Each wait, for its turn and for the answer, honours the approval's signal
+(the caller gave up, or `askTimeoutSeconds` passed). Calls from other sessions are not answered here, and one-shot
 mode answers nothing, so its calls that need approval are denied.
 
 `Cli.once(ctx, argv, out, err, signal)` runs a single command for `panic <command> [args]` and returns

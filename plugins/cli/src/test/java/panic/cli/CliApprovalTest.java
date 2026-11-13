@@ -127,4 +127,38 @@ class CliApprovalTest {
     assertEquals("error: change: denied by the user\n", out.toString());
     assertFalse(screen.toString().contains("[approve]"));
   }
+
+  @Test
+  void callsAskingTogetherAreAskedOneAfterTheOther() throws Exception {
+    // a command of the REPL session that runs two calls at once, like parallel tools or a sub-agent do
+    root.plugin("both", ctx -> {
+      Commands.command(ctx, "both", "two calls at once", call -> {
+        ToolContext main = new ToolContext(Cli.SESSION, call.signal());
+        ToolContext sub = new ToolContext("repl~explore-1", call.signal(), null, Cli.SESSION, "explore", null, null,
+            null);
+        context.Task<ToolResult> first = ctx.spawn("first",
+            s -> Tools.call(ctx, new panic.llm.ToolCall("a", "change", "{}"), main));
+        context.Task<ToolResult> second = ctx.spawn("second",
+            s -> Tools.call(ctx, new panic.llm.ToolCall("b", "change", "{\"n\":2}"), sub));
+        try {
+          call.out().println("first " + first.await().content() + ", second " + second.await().content());
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+      });
+      return null;
+    });
+    see("> ", 1);
+    type("/both");
+    see("allow? [y/N] ", 1);
+    Thread.sleep(300);
+    assertEquals(1, screen.toString().split("allow\\?", -1).length - 1, "one question at a time");
+    String firstAsked = screen.toString();
+    type(firstAsked.contains("explore: ") ? "n" : "y");
+    see("allow? [y/N] ", 2);
+    type(firstAsked.contains("explore: ") ? "y" : "n");
+    see("first changed, second change: denied by the user\n", 1);
+    assertEquals(1, ran.get());
+    assertEquals(1, screen.toString().split("\\[approve\\] explore: change \\(write\\) \\{\"n\":2\\}", -1).length - 1);
+  }
 }

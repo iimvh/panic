@@ -1,5 +1,5 @@
-/** One server-sent event; `data` is parsed JSON when it is JSON, else the raw text. */
-export type SseEvent = { event: string; data: unknown };
+/** One server-sent event; `data` is parsed JSON when it is JSON, else the raw text; `id` when it has one. */
+export type SseEvent = { event: string; data: unknown; id?: string };
 
 /**
  * Incremental SSE parser: feed it text chunks as they arrive (they may split events anywhere).
@@ -10,6 +10,7 @@ export function createSseParser(onEvent: (e: SseEvent) => void) {
 
 	function dispatch(block: string) {
 		let event = 'message';
+		let id: string | undefined;
 		const data: string[] = [];
 		for (const line of block.split('\n')) {
 			if (line === '' || line.startsWith(':')) continue;
@@ -19,6 +20,7 @@ export function createSseParser(onEvent: (e: SseEvent) => void) {
 			if (value.startsWith(' ')) value = value.slice(1);
 			if (field === 'event') event = value;
 			else if (field === 'data') data.push(value);
+			else if (field === 'id') id = value;
 		}
 		if (data.length === 0 && event === 'message') return;
 		const raw = data.join('\n');
@@ -28,7 +30,7 @@ export function createSseParser(onEvent: (e: SseEvent) => void) {
 		} catch {
 			// not JSON: keep the text
 		}
-		onEvent({ event, data: parsed });
+		onEvent(id === undefined ? { event, data: parsed } : { event, data: parsed, id });
 	}
 
 	return {

@@ -1,4 +1,5 @@
 import type { HistoryMessage } from './api';
+import type { SseEvent } from './sse';
 import type { Message } from './chat.svelte';
 
 /** One tool call of the bot, as the `tool` server-sent events describe it. */
@@ -158,6 +159,55 @@ export function fromHistory(history: HistoryMessage[], id: () => number): Messag
 		}
 	}
 	return out;
+}
+
+/** Events after which an answer stream has nothing more to say. */
+const LAST = new Set(['done', 'cancelled', 'error', 'unavailable']);
+
+/**
+ * Builds `reply` from the events of one answer, from `POST /api/chat` or from `GET /api/stream` when the page
+ * resumes it (then `question` gets the text of the `start` event). `seq()` is the last SSE id seen, to resume
+ * after; `ended()` says whether the last event came. Text is batched with `schedule` (see createBatcher), and
+ * `finish()` flushes it and closes drafts once the stream is over.
+ */
+export function createAnswer(reply: Message, schedule: (run: () => void) => void, question?: Message) {
+	const text$ = createBatcher((t) => appendText(reply, t), schedule);
+	let seq = 0;
+	let ended = false;
+	return {
+		onEvent({ event, data, id }: SseEvent) {
+			if (id !== undefined && Number(id) > seq) seq = Number(id);
+			const d = (data ?? {}) as Record<string, unknown>;
+			if (event === 'delta') return text$.push(String(d.text ?? ''));
+			text$.flush(); // anything else comes after the text before it
+			if (LAST.has(event)) ended = true;
+			if (event === 'start') {
+				if (question && !question.text) question.text = String(d.question ?? '');
+				// a resumed answer started before this page: take the server's time
+				if (question && typeof d.startedAt === 'number') reply.startedAt = d.startedAt;
+			} else if (event === 'tool_delta') toolDelta(reply, d);
+			else if (event === 'tool') toolStep(reply, d);
+			else if (event === 'review') review(reply, d);
+			else if (event === 'approve') askApproval(reply, d);
+			else if (event === 'done') reply.meta = meta(d);
+			else if (event === 'unavailable') failAnswer(reply, 'No LLM is connected. Open Settings to pick a provider with an API key.');
+			else if (event === 'error') failAnswer(reply, String(d.message));
+			else if (event === 'cancelled') reply.meta = 'stopped';
+		},
+		seq: () => seq,
+		ended: () => ended,
+		finish() {
+			text$.flush();
+			endDrafts(reply);
+		}
+	};
+}
+
+/** An answer shows the error where it happened, after what was streamed. */
+export function failAnswer(m: Message, text: string) {
+	m.error = true;
+	m.parts ??= [];
+	m.parts.push({ kind: 'error', text });
 }
 
 /** What a streaming answer is doing right now, for the status line. */

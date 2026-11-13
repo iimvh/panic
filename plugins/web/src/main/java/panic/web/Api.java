@@ -53,7 +53,10 @@ final class Api {
 
   private final Context ctx;
   private final Duration heartbeat;
-  /** The open SSE stream of each session: where its approval questions go. */
+  private final Duration detach;
+  /** The answer in flight of each session: where its events and approval questions go. */
+  private final Map<String, Run> runs = new ConcurrentHashMap<>();
+  /** The open command stream of each session: where approval questions of commands go. */
   private final Map<String, SseResponse> streams = new ConcurrentHashMap<>();
   /** Approval questions waiting for {@code POST /api/approve}, by id. */
   private final Map<String, Pending> pending = new ConcurrentHashMap<>();
@@ -61,9 +64,10 @@ final class Api {
   private record Pending(String session, CompletableFuture<Tools.Decision> answer) {
   }
 
-  Api(Context ctx, Duration heartbeat) {
+  Api(Context ctx, Duration heartbeat, Duration detach) {
     this.ctx = ctx;
     this.heartbeat = heartbeat;
+    this.detach = detach;
   }
 
   /** Returns false when the path is not an API path. */
@@ -74,6 +78,8 @@ final class Api {
       case "/api/models" -> only(ex, method, "GET", () -> models(ex, signal));
       case "/api/history" -> only(ex, method, "GET", () -> history(ex));
       case "/api/chat" -> only(ex, method, "POST", () -> chat(ex, signal));
+      case "/api/stream" -> only(ex, method, "GET", () -> follow(ex, signal));
+      case "/api/stop" -> only(ex, method, "POST", () -> stop(ex));
       case "/api/command" -> only(ex, method, "POST", () -> command(ex, signal));
       case "/api/approve" -> only(ex, method, "POST", () -> approval(ex));
       case "/api/settings" -> only(ex, method, "PUT", () -> settings(ex));
@@ -186,23 +192,49 @@ final class Api {
 
   // ---------------- streaming ----------------
 
+  /**
+   * Starts an answer and streams it. The answer runs on this request's task, but the connection only
+   * watches it: if the browser goes, the answer goes on (see {@link Run}) until {@code POST /api/stop}, until
+   * nobody has watched for {@code detachSeconds}, or until the plugin stops. One answer per session at a time.
+   */
   private void chat(HttpExchange ex, Signal signal) throws IOException {
     JsonNode body = Http.body(ex);
     String session = session(body.path("session").asText(null));
     String text = text(body.path("text").asText(""));
+    Run run = new Run(detach);
+    if (runs.putIfAbsent(session, run) != null) {
+      Http.error(ex, 409, "an answer is already running in this session");
+      return;
+    }
     SseResponse sse = SseResponse.open(ex);
-    Signal both = CancelToken.any(signal, sse.gone());
     Task<Void> ping = sse.heartbeat(ctx, heartbeat);
-    streams.put(session, sse);
+    Task<Void> watch = detach.isZero() ? null : ctx.spawn("detach " + session, s -> {
+      while (!s.isCancelled() && !run.abandoned()) Thread.sleep(Math.min(detach.toMillis(), 250));
+      run.cancel();
+      return null;
+    });
+    try {
+      run.publish("start", Json.object().put("question", text).put("startedAt", System.currentTimeMillis()));
+      run.attach(sse, 0);
+      answer(run, session, text, CancelToken.any(signal, run.cancelled()));
+    } finally {
+      runs.remove(session, run);
+      run.end();
+      if (watch != null) watch.dispose();
+      ping.dispose();
+    }
+  }
+
+  private void answer(Run run, String session, String text, Signal signal) {
     try {
       Optional<Chat.Reply> reply = Chat.ask(ctx,
-          new Chat.Ask(session, text, both, d -> sse.send("delta", Json.object().put("text", d)),
-              step -> sse.send("tool", step(step)),
-              r -> sse.send("review", Json.object().put("attempt", r.attempt()).put("pass", r.verdict().pass())
+          new Chat.Ask(session, text, signal, d -> run.publish("delta", Json.object().put("text", d)),
+              step -> run.publish("tool", step(step)),
+              r -> run.publish("review", Json.object().put("attempt", r.attempt()).put("pass", r.verdict().pass())
                   .put("reason", r.verdict().reason())),
-              d -> sse.send("tool_delta", toolDelta(d))));
+              d -> run.publish("tool_delta", toolDelta(d))));
       if (reply.isEmpty()) {
-        sse.send("unavailable", Json.object().put("message", "no LLM connected"));
+        run.publish("unavailable", Json.object().put("message", "no LLM connected"));
         return;
       }
       Chat.Reply r = reply.get();
@@ -211,15 +243,53 @@ final class Api {
       if (r.review() != null) done.put("review", r.review());
       done.putObject("usage").put("promptTokens", r.usage().promptTokens())
           .put("completionTokens", r.usage().completionTokens());
-      sse.send("done", done);
+      run.publish("done", done);
     } catch (CancelledException e) {
-      sse.send("cancelled");
+      run.publish("cancelled", Json.object());
     } catch (RuntimeException e) {
-      sse.send("error", Json.object().put("message", message(e)));
+      run.publish("error", Json.object().put("message", message(e)));
+    }
+  }
+
+  /**
+   * Attaches to the answer in flight of a session: replays its events after {@code after} (the last SSE id
+   * the page saw, 0 for all), then streams the rest. {@code 204} when the session has none.
+   */
+  private void follow(HttpExchange ex, Signal signal) throws IOException {
+    Map<String, String> q = Http.query(ex);
+    String session = session(q.get("session"));
+    long after;
+    try {
+      after = Long.parseLong(q.getOrDefault("after", "0"));
+    } catch (NumberFormatException e) {
+      throw new Http.BadRequest("bad after");
+    }
+    Run run = runs.get(session);
+    if (run == null) {
+      ex.sendResponseHeaders(204, -1);
+      return;
+    }
+    SseResponse sse = SseResponse.open(ex);
+    Task<Void> ping = sse.heartbeat(ctx, heartbeat);
+    try {
+      run.attach(sse, after);
+      run.await(sse, signal);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
     } finally {
-      streams.remove(session, sse);
       ping.dispose();
     }
+  }
+
+  private void stop(HttpExchange ex) throws IOException {
+    String session = session(Http.body(ex).path("session").asText(null));
+    Run run = runs.get(session);
+    if (run == null) {
+      Http.error(ex, 404, "nothing is running in this session");
+      return;
+    }
+    run.cancel();
+    Http.json(ex, 200, Json.object().put("ok", true));
   }
 
   private static ObjectNode step(Chat.Step step) {
@@ -276,21 +346,24 @@ final class Api {
   // ---------------- approvals ----------------
 
   /**
-   * Answers {@link Tools#APPROVE} for a session that has a stream open (the chat or command that made the
-   * call): sends SSE {@code approve {id, callId, name, arguments, risk}} and waits for {@code POST /api/approve}. A
-   * browser that leaves denies; a cancelled call is thrown. Other sessions get no answer (null).
+   * Answers {@link Tools#APPROVE} for a session with an answer or a command running here: sends SSE
+   * {@code approve {id, callId, name, arguments, risk}} and waits for {@code POST /api/approve}. For an answer
+   * the question is logged with its events, so a page that reloads gets it again; for a command a browser that
+   * leaves denies. A cancelled call is thrown. Other sessions get no answer (null).
    */
   Tools.Decision approve(Tools.Approval a) {
-    SseResponse sse = streams.get(a.conversationId());
-    if (sse == null) return null;
+    Run run = runs.get(a.conversationId());
+    SseResponse sse = run == null ? streams.get(a.conversationId()) : null;
+    if (run == null && sse == null) return null;
     String id = UUID.randomUUID().toString();
     CompletableFuture<Tools.Decision> answer = new CompletableFuture<>();
     pending.put(id, new Pending(a.conversationId(), answer));
     Disposable cancelled = a.signal().onCancel(() -> answer.cancel(false));
-    Disposable left = sse.gone().onCancel(() -> answer.complete(Tools.Decision.DENY));
+    Disposable left = sse == null ? () -> { } : sse.gone().onCancel(() -> answer.complete(Tools.Decision.DENY));
     try {
-      sse.send("approve", Json.object().put("id", id).put("callId", a.call().id()).put("name", a.call().name())
-          .put("arguments", a.call().arguments()).put("risk", a.risk().wire()));
+      ObjectNode question = Json.object().put("id", id).put("callId", a.call().id()).put("name", a.call().name())
+          .put("arguments", a.call().arguments()).put("risk", a.risk().wire());
+      if (run != null) run.publish("approve", question); else sse.send("approve", question);
       return answer.get();
     } catch (CancellationException e) {
       throw new CancelledException("approval cancelled");

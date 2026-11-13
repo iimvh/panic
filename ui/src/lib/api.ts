@@ -66,6 +66,14 @@ export const postApproval = (session: string, id: string, allow: boolean) =>
 		body: JSON.stringify({ session, id, allow })
 	});
 
+/** Asks the server to stop the session's answer; the answer's stream then ends with `cancelled`. */
+export const postStop = (session: string) =>
+	json<{ ok: boolean }>('/api/stop', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ session })
+	});
+
 /** POSTs `body` and hands every server-sent event to `onEvent` until the stream ends. */
 export async function stream(
 	path: '/api/chat' | '/api/command',
@@ -79,6 +87,20 @@ export async function stream(
 		body: JSON.stringify(body),
 		signal
 	});
+	await events(res, onEvent);
+}
+
+/**
+ * Attaches to the session's answer in flight (events after SSE id `after`, then live). Null when none runs;
+ * else read its events with `events(res, onEvent)`.
+ */
+export async function follow(session: string, after: number, signal?: AbortSignal): Promise<Response | null> {
+	const res = await fetch(`/api/stream?session=${encodeURIComponent(session)}&after=${after}`, { signal });
+	return res.status === 204 ? null : res;
+}
+
+/** Hands every server-sent event of `res` to `onEvent` until the stream ends. */
+export async function events(res: Response, onEvent: (e: SseEvent) => void): Promise<void> {
 	if (!res.ok || !res.body) await fail(res);
 	const parser = createSseParser(onEvent);
 	const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();

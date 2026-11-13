@@ -31,5 +31,5 @@
     "tools": { "todo_write": "allow" },
     "askTimeoutSeconds": 120
   },
-  "web": { "enabled": false, "host": "127.0.0.1", "port": 8080 }
+  "web": { "enabled": false, "host": "127.0.0.1", "port": 8080, "detachSeconds": 120 }
 }

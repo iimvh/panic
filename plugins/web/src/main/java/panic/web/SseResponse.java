@@ -45,6 +45,11 @@ final class SseResponse {
     write("event: " + event + "\ndata: " + data + "\n\n");
   }
 
+  /** With an SSE {@code id}, which a client sends back to resume after it (see {@link Run}). */
+  void send(long id, String event, JsonNode data) {
+    write("id: " + id + "\nevent: " + event + "\ndata: " + data + "\n\n");
+  }
+
   /**
    * Writes an SSE comment every {@code every} until the returned task is disposed, so a browser that left
    * is noticed even while nothing else is written (a model that has not produced its first token yet).
@@ -63,13 +68,18 @@ final class SseResponse {
     });
   }
 
-  private synchronized void write(String text) {
-    if (gone.isCancelled()) return;
+  private void write(String text) {
+    if (!writeOrFail(text)) gone.cancel(); // outside the lock: listeners may take other locks
+  }
+
+  private synchronized boolean writeOrFail(String text) {
+    if (gone.isCancelled()) return true;
     try {
       out.write(text.getBytes(StandardCharsets.UTF_8));
       out.flush();
+      return true;
     } catch (IOException e) {
-      gone.cancel();
+      return false;
     }
   }
 }

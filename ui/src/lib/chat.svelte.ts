@@ -1,5 +1,5 @@
-import { ApiError, getHistory, getState, postApproval, putSettings, stream, type State } from './api';
-import { appendText, askApproval, createBatcher, duration, endDrafts, fromHistory, meta, review, toolDelta, toolStep, type Approval, type Part } from './reply';
+import { ApiError, events, follow, getHistory, getState, postApproval, postStop, putSettings, stream, type State } from './api';
+import { askApproval, createAnswer, duration, failAnswer, fromHistory, type Approval, type Part } from './reply';
 import { sessionId } from './session';
 
 export type Message = {
@@ -29,16 +29,23 @@ class Chat {
 	/** Server unreachable or failing; shown as a banner. */
 	offline = $state<string | null>(null);
 	#abort: AbortController | null = null;
+	/** The request in flight is an answer (stopped through the server) rather than a command. */
+	#answering = false;
+	/** The request in flight, to wait for it to end. */
+	#current: Promise<void> = Promise.resolve();
 
+	/** The stored conversation, then the answer still running in this session, if any (after a reload). */
 	async load() {
 		try {
 			const [state, history] = await Promise.all([getState(), getHistory(this.session)]);
 			this.state = state;
-			this.messages = fromHistory(history, () => nextId++);
+			if (!this.busy) this.messages = fromHistory(history, () => nextId++);
 			this.offline = null;
 		} catch (e) {
 			this.offline = errorText(e);
+			return;
 		}
+		if (!this.busy) await this.#resume();
 	}
 
 	async refresh() {
@@ -58,12 +65,17 @@ class Chat {
 		else await this.#ask(text);
 	}
 
+	/** An answer is stopped by the server (it outlives the connection), so its stream ends with `cancelled`. */
 	stop() {
-		this.#abort?.abort();
+		if (!this.#answering) return this.#abort?.abort();
+		postStop(this.session).catch(() => this.#abort?.abort());
 	}
 
 	async newChat() {
-		if (this.busy) this.stop();
+		if (this.busy) {
+			this.stop();
+			await this.#current; // the stopped answer ends first, so it cannot come back after the reset
+		}
 		await this.#command('/reset', true);
 		this.messages = [];
 	}
@@ -90,34 +102,80 @@ class Chat {
 	async #ask(text: string) {
 		this.messages.push({ id: nextId++, role: 'user', text });
 		const reply = this.#push({ id: nextId++, role: 'assistant', text: '', parts: [], streaming: true, startedAt: Date.now() });
-		// many deltas per frame: render them once per frame; anything else first flushes the text before it
-		const text$ = createBatcher((t) => appendText(reply, t), frame);
-		await this.#run(reply, () =>
-			stream('/api/chat', { session: this.session, text }, ({ event, data }) => {
-				const d = data as Record<string, unknown>;
-				if (event === 'delta') return text$.push(String(d.text ?? ''));
-				text$.flush();
-				if (event === 'tool_delta') toolDelta(reply, d);
-				else if (event === 'tool') toolStep(reply, d);
-				else if (event === 'review') review(reply, d);
-				else if (event === 'approve') askApproval(reply, d);
-				else if (event === 'done') reply.meta = meta(d);
-				else if (event === 'unavailable') fail(reply, 'No LLM is connected. Open Settings to pick a provider with an API key.');
-				else if (event === 'error') fail(reply, String(d.message));
-				else if (event === 'cancelled') reply.meta = 'stopped';
-			}, this.#abort?.signal).finally(() => {
-				text$.flush();
-				endDrafts(reply);
-			})
+		const answer = createAnswer(reply, frame);
+		await this.#run(
+			() => reply,
+			async (signal) => {
+				try {
+					try {
+						await stream('/api/chat', { session: this.session, text }, answer.onEvent, signal);
+					} catch (e) {
+						// the answer started and the connection broke: it is still running, attach again
+						if (!(e instanceof TypeError) || answer.seq() === 0) throw e;
+					}
+					await this.#reattach(answer, signal);
+				} finally {
+					answer.finish();
+				}
+			},
+			true
 		);
 		reply.meta = [reply.meta, duration(Date.now() - (reply.startedAt ?? Date.now()))].filter(Boolean).join(' · ');
 		if (!this.state?.connected) void this.refresh();
 	}
 
+	/** Picks up the answer this session still runs on the server (the page was reloaded while it ran). */
+	async #resume() {
+		let reply: Message | null = null;
+		await this.#run(
+			() => reply,
+			async (signal) => {
+				const res = await follow(this.session, 0, signal);
+				if (!res) return;
+				const question = this.#push({ id: nextId++, role: 'user', text: '' });
+				reply = this.#push({ id: nextId++, role: 'assistant', text: '', parts: [], streaming: true, startedAt: Date.now() });
+				const answer = createAnswer(reply, frame, question);
+				try {
+					try {
+						await events(res, answer.onEvent);
+					} catch (e) {
+						if (!(e instanceof TypeError)) throw e;
+					}
+					await this.#reattach(answer, signal);
+				} finally {
+					answer.finish();
+				}
+			},
+			true
+		);
+	}
+
+	/**
+	 * Attaches again (with backoff, a few times) until the answer's last event came. If it ended while the
+	 * page was away, the stored conversation already holds it: the messages are loaded again.
+	 */
+	async #reattach(answer: ReturnType<typeof createAnswer>, signal: AbortSignal) {
+		for (let tries = 0; !answer.ended(); tries++) {
+			if (tries === 5) throw new Error('Lost the connection to the answer. Reload the page to see it.');
+			await sleep(500 * 2 ** tries, signal);
+			try {
+				const res = await follow(this.session, answer.seq(), signal);
+				if (!res) {
+					this.messages = fromHistory(await getHistory(this.session), () => nextId++);
+					return;
+				}
+				await events(res, answer.onEvent);
+				tries = -1; // it was working: a new drop starts the count again
+			} catch (e) {
+				if (!(e instanceof TypeError)) throw e;
+			}
+		}
+	}
+
 	async #command(line: string, quiet = false) {
 		const name = line.slice(1).split(/\s+/, 1)[0];
 		const out = this.#push({ id: nextId++, role: 'command', text: '', meta: line, streaming: true });
-		await this.#run(out, () =>
+		await this.#run(() => out, (signal) =>
 			stream('/api/command', { session: this.session, line }, ({ event, data }) => {
 				const d = data as Record<string, unknown>;
 				if (event === 'delta') out.text += String(d.text ?? '');
@@ -126,7 +184,7 @@ class Chat {
 				else if (event === 'usage') fail(out, `Usage: /${d.usage} (${d.message})`);
 				else if (event === 'error') fail(out, String(d.message));
 				else if (event === 'cancelled') out.meta = `${line} · stopped`;
-			}, this.#abort?.signal)
+			}, signal)
 		);
 		if (name === 'reset' && !out.error) this.messages = [];
 		else if (quiet) this.messages = this.messages.filter((m) => m.id !== out.id);
@@ -139,18 +197,31 @@ class Chat {
 		return this.messages[this.messages.length - 1];
 	}
 
-	async #run(target: Message, request: () => Promise<void>) {
+	/** Runs one request at a time; `target` is the message its errors and its end are shown on (none yet: null). */
+	#run(target: () => Message | null, request: (signal: AbortSignal) => Promise<void>, answering = false) {
+		this.#current = this.#runNow(target, request, answering);
+		return this.#current;
+	}
+
+	async #runNow(target: () => Message | null, request: (signal: AbortSignal) => Promise<void>, answering: boolean) {
 		this.busy = true;
+		this.#answering = answering;
 		this.#abort = new AbortController();
 		try {
-			await request(); // reads this.#abort lazily, so it gets the controller made above
+			await request(this.#abort.signal);
 		} catch (e) {
-			if (e instanceof DOMException && e.name === 'AbortError') target.meta = (target.meta ? target.meta + ' · ' : '') + 'stopped';
-			else fail(target, errorText(e));
+			const t = target();
+			if (!t) this.offline = errorText(e);
+			else if (e instanceof DOMException && e.name === 'AbortError') t.meta = (t.meta ? t.meta + ' · ' : '') + 'stopped';
+			else fail(t, errorText(e));
 		} finally {
-			target.streaming = false;
-			target.approval = undefined;
+			const t = target();
+			if (t) {
+				t.streaming = false;
+				t.approval = undefined;
+			}
 			this.busy = false;
+			this.#answering = false;
 			this.#abort = null;
 		}
 	}
@@ -158,9 +229,21 @@ class Chat {
 
 /** An answer shows the error where it happened, after what was streamed; a command appends it to its output. */
 function fail(m: Message, text: string) {
+	if (m.role === 'assistant') return failAnswer(m, text);
 	m.error = true;
-	if (m.parts) m.parts.push({ kind: 'error', text });
-	else m.text = m.text ? `${m.text}\n\n${text}` : text;
+	m.text = m.text ? `${m.text}\n\n${text}` : text;
+}
+
+/** Waits `ms`, or throws an AbortError as soon as `signal` aborts (Stop while waiting to attach again). */
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+		const timer = setTimeout(resolve, ms);
+		signal.addEventListener('abort', () => {
+			clearTimeout(timer);
+			reject(new DOMException('Aborted', 'AbortError'));
+		}, { once: true });
+	});
 }
 
 /** Next animation frame; a timer where there is none (tests, a hidden tab still gets its text at the end). */

@@ -22,4 +22,11 @@ describe('createSseParser', () => {
 		p.feed('data: hello\ndata: world\n\n');
 		expect(got).toEqual([{ event: 'message', data: 'hello\nworld' }]);
 	});
+
+	it('passes the id of an event', () => {
+		const got: SseEvent[] = [];
+		const p = createSseParser((e) => got.push(e));
+		p.feed('id: 7\nevent: delta\ndata: {"text":"x"}\n\n');
+		expect(got).toEqual([{ event: 'delta', data: { text: 'x' }, id: '7' }]);
+	});
 });

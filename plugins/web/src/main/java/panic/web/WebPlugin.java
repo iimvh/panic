@@ -52,7 +52,7 @@ public final class WebPlugin implements ConfigPlugin<WebConfig> {
   @Override
   public Disposable apply(Context ctx, WebConfig cfg) {
     if (!cfg.enabled()) return null;
-    Api api = new Api(ctx, heartbeat);
+    Api api = new Api(ctx, heartbeat, Duration.ofSeconds(cfg.detachSeconds()));
     ctx.hook(Tools.APPROVE, api::approve);
     StaticFiles files = new StaticFiles();
     ctx.effect("server", signal -> {

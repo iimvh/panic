@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from './chat.svelte';
-import { activity, appendText, askApproval, createBatcher, duration, endDrafts, fromHistory, meta, review, size, toolDelta, toolStep, type Part } from './reply';
+import { activity, appendText, createAnswer, askApproval, createBatcher, duration, endDrafts, fromHistory, meta, review, size, toolDelta, toolStep, type Part } from './reply';
 
 const steps = (m: Message) => (m.parts ?? []).flatMap((p) => (p.kind === 'tool' ? [p.step] : []));
 const kinds = (m: Message) => (m.parts ?? []).map((p: Part) => p.kind);
@@ -193,5 +193,48 @@ describe('toolDelta', () => {
 	it('sizes the arguments', () => {
 		expect(size('abc')).toBe('3 B');
 		expect(size('x'.repeat(3277))).toBe('3.2 KB');
+	});
+});
+
+describe('createAnswer', () => {
+	const now = (run: () => void) => run();
+
+	it('builds the answer, remembers the last id and knows when it ended', () => {
+		const reply: Message = { id: 2, role: 'assistant', text: '', parts: [] };
+		const a = createAnswer(reply, now);
+		a.onEvent({ event: 'start', data: { question: 'q', startedAt: 5 }, id: '1' });
+		expect(reply.startedAt).toBeUndefined(); // a new ask keeps the page's own clock
+		a.onEvent({ event: 'delta', data: { text: 'Hi' }, id: '2' });
+		a.onEvent({ event: 'tool_delta', data: { index: 0, id: 'a', name: 'time', arguments: '{}' }, id: '3' });
+		expect(a.ended()).toBe(false);
+		a.onEvent({ event: 'done', data: { model: 'm' }, id: '4' });
+		a.finish();
+		expect(a.seq()).toBe(4);
+		expect(a.ended()).toBe(true);
+		expect(kinds(reply)).toEqual(['text', 'tool']);
+		expect(steps(reply)[0].status).toBe('error'); // a draft that never ran
+		expect(reply.meta).toBe('m');
+	});
+
+	it('fills in the question of a resumed answer, and replays do not go back', () => {
+		const question: Message = { id: 1, role: 'user', text: '' };
+		const reply: Message = { id: 2, role: 'assistant', text: '', parts: [] };
+		const a = createAnswer(reply, now, question);
+		a.onEvent({ event: 'start', data: { question: 'q', startedAt: 5 }, id: '1' });
+		a.onEvent({ event: 'delta', data: { text: 'a' }, id: '3' });
+		a.onEvent({ event: 'delta', data: { text: 'b' }, id: '2' });
+		expect(question.text).toBe('q');
+		expect(reply.startedAt).toBe(5);
+		expect(a.seq()).toBe(3);
+	});
+
+	it('shows errors in the timeline', () => {
+		const reply: Message = { id: 2, role: 'assistant', text: '', parts: [] };
+		const a = createAnswer(reply, now);
+		a.onEvent({ event: 'delta', data: { text: 'part' } });
+		a.onEvent({ event: 'error', data: { message: 'boom' } });
+		expect(reply.error).toBe(true);
+		expect(reply.parts?.at(-1)).toEqual({ kind: 'error', text: 'boom' });
+		expect(a.ended()).toBe(true);
 	});
 });

@@ -59,7 +59,10 @@ import panic.tools.Tools;
 
 class WebPluginTest {
 
-  /** Streams "Hel" "lo <model>"; with {@code block}, waits after the first delta until cancelled. */
+  /**
+   * Streams "Hel" "lo <model>"; with {@code block}, waits after the first delta until cancelled or until
+   * {@code released}.
+   */
   static final class Fake implements Provider, ChatModel {
     volatile CountDownLatch block;
     /** When set, a question is first answered with a call to the {@code echo} tool. */
@@ -67,6 +70,7 @@ class WebPluginTest {
     /** With {@link #useTool}: the call also comes in two pieces before the completion. */
     volatile boolean streamCalls;
     final CountDownLatch cancelled = new CountDownLatch(1);
+    final CountDownLatch released = new CountDownLatch(1);
 
     @Override
     public String id() {
@@ -112,14 +116,13 @@ class WebPluginTest {
       onDelta.accept("Hel");
       CountDownLatch b = block;
       if (b != null) {
-        CountDownLatch release = new CountDownLatch(1);
         s.onCancel(() -> {
           cancelled.countDown();
-          release.countDown();
+          released.countDown();
         });
         b.countDown();
         try {
-          release.await();
+          released.await();
         } catch (InterruptedException e) {
           Thread.currentThread().interrupt();
         }
@@ -186,7 +189,8 @@ class WebPluginTest {
         if (line.startsWith("event: ")) name = line.substring(7);
         if (line.startsWith("data: ")) data = line.substring(6);
       }
-      if (name != null) out.add(new Event(name, Json.parseOrNull(data)));
+      // every answer starts with "start {question, startedAt}", for a page that resumes it; tested on its own
+      if (name != null && !name.equals("start")) out.add(new Event(name, Json.parseOrNull(data)));
     }
     return out;
   }
@@ -418,17 +422,114 @@ class WebPluginTest {
     assertEquals(400, get("/..%2F..%2Fetc/passwd").statusCode());
   }
 
-  @Test
-  void closingTheConnectionCancelsTheAnswer() throws Exception {
+  /** Opens an answer in session {@code s} and reads it up to the first delta ("Hel"), which the fake then holds. */
+  private BufferedReader slowAnswer() throws Exception {
     fake.block = new CountDownLatch(1);
     HttpRequest req = HttpRequest.newBuilder(URI.create(base + "/api/chat"))
         .POST(HttpRequest.BodyPublishers.ofString("{\"session\":\"s\",\"text\":\"slow\"}")).build();
     HttpResponse<InputStream> r = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
+    assertEquals(200, r.statusCode());
     BufferedReader in = new BufferedReader(new InputStreamReader(r.body(), StandardCharsets.UTF_8));
-    assertEquals("event: delta", in.readLine());
+    assertEquals(List.of("id: 1", "event: start"), List.of(in.readLine(), in.readLine()));
+    assertTrue(in.readLine().contains("\"question\":\"slow\""));
+    assertEquals(List.of("", "id: 2", "event: delta", "data: {\"text\":\"Hel\"}", ""),
+        List.of(in.readLine(), in.readLine(), in.readLine(), in.readLine(), in.readLine()));
     fake.block.await();
-    in.close(); // the browser goes away (or Stop): the next heartbeat fails and cancels the answer
+    return in;
+  }
+
+  private BufferedReader follow(String query) throws Exception {
+    HttpResponse<InputStream> r = http.send(HttpRequest.newBuilder(URI.create(base + "/api/stream?" + query)).build(),
+        HttpResponse.BodyHandlers.ofInputStream());
+    assertEquals(200, r.statusCode());
+    return new BufferedReader(new InputStreamReader(r.body(), StandardCharsets.UTF_8));
+  }
+
+  private static String rest(BufferedReader in) throws Exception {
+    StringBuilder out = new StringBuilder();
+    for (String line; (line = in.readLine()) != null; ) out.append(line).append('\n');
+    return out.toString();
+  }
+
+  @Test
+  void anAnswerOutlivesItsConnectionAndCanBeResumed() throws Exception {
+    slowAnswer().close(); // the page reloads
+    assertFalse(fake.cancelled.await(500, TimeUnit.MILLISECONDS), "leaving does not stop the answer");
+
+    try (BufferedReader in = follow("session=s&after=1")) {
+      assertEquals(List.of("id: 2", "event: delta"), List.of(in.readLine(), in.readLine()), "only what came after 1");
+      in.readLine();
+      in.readLine();
+      fake.released.countDown();
+      String body = rest(in);
+      assertTrue(body.startsWith("id: 3\nevent: delta\ndata: {\"text\":\"lo m1\"}"), body);
+      assertEquals(List.of("delta", "done"), events(body).stream().map(Event::name).toList());
+    }
+    assertEquals(204, get("/api/stream?session=s").statusCode(), "nothing runs any more");
+    assertEquals(2, Json.parseOrNull(get("/api/history?session=s").body()).size());
+  }
+
+  @Test
+  void aSessionRunsOneAnswerAtATime() throws Exception {
+    try (BufferedReader in = slowAnswer()) {
+      assertEquals(409, send("POST", "/api/chat", "{\"session\":\"s\",\"text\":\"again\"}").statusCode());
+      assertEquals(204, get("/api/stream?session=other").statusCode());
+      fake.released.countDown();
+      assertEquals(List.of("delta", "done"), events(rest(in)).stream().map(Event::name).toList());
+    }
+  }
+
+  @Test
+  void stopCancelsTheAnswer() throws Exception {
+    try (BufferedReader in = slowAnswer()) {
+      assertEquals(404, send("POST", "/api/stop", "{\"session\":\"other\"}").statusCode());
+      assertEquals(200, send("POST", "/api/stop", "{\"session\":\"s\"}").statusCode());
+      assertTrue(fake.cancelled.await(5, TimeUnit.SECONDS));
+      assertEquals(List.of("cancelled"), events(rest(in)).stream().map(Event::name).toList());
+    }
+  }
+
+  @Test
+  void anAnswerNobodyWatchesIsStopped() throws Exception {
+    web.update(new WebConfig(true, "127.0.0.1", 0, 0));
+    slowAnswer().close(); // the next heartbeat fails, and with detachSeconds 0 the answer stops
     assertTrue(fake.cancelled.await(5, TimeUnit.SECONDS), "the answer in flight was cancelled");
+  }
+
+  @Test
+  void anAbandonedAnswerStopsAfterDetachSeconds() throws Exception {
+    web.update(new WebConfig(true, "127.0.0.1", 0, 1));
+    slowAnswer().close();
+    assertFalse(fake.cancelled.await(300, TimeUnit.MILLISECONDS), "still within detachSeconds");
+    assertTrue(fake.cancelled.await(5, TimeUnit.SECONDS), "stopped once nobody came back");
+  }
+
+  @Test
+  void anApprovalAskedWhileAwayIsAskedAgainOnResume() throws Exception {
+    fake.useTool = true;
+    writingEcho();
+    HttpRequest req = HttpRequest.newBuilder(URI.create(base + "/api/chat"))
+        .POST(HttpRequest.BodyPublishers.ofString("{\"session\":\"t\",\"text\":\"hi\"}")).build();
+    HttpResponse<InputStream> r = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
+    try (BufferedReader in = new BufferedReader(new InputStreamReader(r.body(), StandardCharsets.UTF_8))) {
+      while (!"event: approve".equals(in.readLine())) {
+        // up to the question
+      }
+    } // the page goes before answering
+
+    try (BufferedReader in = follow("session=t&after=0")) {
+      String id = null;
+      List<String> names = new ArrayList<>();
+      for (String line; (line = in.readLine()) != null; ) {
+        if (line.startsWith("event: ")) names.add(line.substring(7));
+        if (id == null && line.startsWith("data: ") && names.get(names.size() - 1).equals("approve")) {
+          id = Json.parseOrNull(line.substring(6)).path("id").asText();
+          assertEquals(200, send("POST", "/api/approve", "{\"session\":\"t\",\"id\":\"" + id + "\",\"allow\":true}")
+              .statusCode());
+        }
+      }
+      assertEquals(List.of("start", "tool", "approve", "tool", "delta", "delta", "done"), names);
+    }
   }
 
   @Test

@@ -12,7 +12,15 @@ export type ToolStep = {
 	content?: string;
 	/** While drafting: the call's position in the model's reply, which pieces are matched by. */
 	draft?: number;
+	/** When this call runs a sub-agent: what it writes and the tools it calls, as they happen. */
+	agent?: SubAgent;
 };
+
+/** A sub-agent's work under the call that runs it (`agent_delta` and `tool` events with `parent`). */
+export type SubAgent = { name: string; text: string; parts: Part[] };
+
+/** Something that holds a timeline of parts: an answer, or a sub-agent inside it. */
+type Timeline = { text: string; parts?: Part[] };
 
 /**
  * One piece of an answer, in the order it happened: text the model wrote, a tool call, a reviewer's verdict,
@@ -34,12 +42,14 @@ export type Approval = {
 	arguments: string;
 	/** read, write, exec or network */
 	risk: string;
+	/** The sub-agent that makes the call, if it is not the main agent. */
+	agent?: string;
 	/** The answer is being sent. */
 	answering?: boolean;
 };
 
 /** Appends streamed text: to the last part when it is text, else as a new text part. */
-export function appendText(m: Message, delta: string) {
+export function appendText(m: Timeline, delta: string) {
 	if (!delta) return;
 	m.text += delta;
 	m.parts ??= [];
@@ -48,15 +58,28 @@ export function appendText(m: Message, delta: string) {
 	else m.parts.push({ kind: 'text', text: delta });
 }
 
-/** Shows the question; the call's finished `tool` step (or the end of the stream) clears it. */
+/**
+ * Shows the question; the call's finished `tool` step (or the end of the stream) clears it. Calls running in
+ * parallel may ask at the same time: one question is shown, the others wait in `waiting`, in arrival order.
+ */
 export function askApproval(m: Message, d: Record<string, unknown>) {
-	m.approval = {
+	const a: Approval = {
 		id: String(d.id ?? ''),
 		callId: String(d.callId ?? ''),
 		name: String(d.name ?? ''),
 		arguments: String(d.arguments ?? ''),
 		risk: String(d.risk ?? '')
 	};
+	if (d.agent) a.agent = String(d.agent);
+	if (!m.approval || m.approval.id === a.id) m.approval = a;
+	else if (!m.waiting?.some((w) => w.id === a.id)) (m.waiting ??= []).push(a);
+}
+
+/** Removes the questions `gone` matches; when the one shown goes, the next waiting one is shown. */
+export function clearApproval(m: Message, gone: (a: Approval) => boolean) {
+	if (m.waiting) m.waiting = m.waiting.filter((a) => !gone(a));
+	if (m.approval && gone(m.approval)) m.approval = m.waiting?.shift();
+	if (m.waiting?.length === 0) m.waiting = undefined;
 }
 
 /** Adds a piece of a tool call the model is still writing: a new drafting row, or more of its arguments. */
@@ -77,7 +100,8 @@ export function toolDelta(m: Message, d: Record<string, unknown>) {
 
 /**
  * Adds a tool call when it starts, and updates it in place when it finishes. A call that starts takes the
- * place of its draft (same id, else the first draft left), so it stays where the model wrote it.
+ * place of its draft (same id, else the first draft left), so it stays where the model wrote it. A sub-agent's
+ * call (`parent` set) goes into the timeline of the call that runs that sub-agent.
  */
 export function toolStep(m: Message, d: Record<string, unknown>) {
 	const step: ToolStep = {
@@ -87,8 +111,14 @@ export function toolStep(m: Message, d: Record<string, unknown>) {
 		status: d.status === 'ok' || d.status === 'error' ? d.status : 'running',
 		content: d.content === undefined ? undefined : String(d.content)
 	};
-	m.parts ??= [];
-	const find = (match: (s: ToolStep) => boolean) => m.parts!.findIndex((p) => p.kind === 'tool' && match(p.step));
+	const into = d.parent ? subAgent(m, String(d.parent), d.agent) : m;
+	if (into) upsertStep(into, step);
+	if (step.status !== 'running') clearApproval(m, (a) => a.callId === step.id);
+}
+
+function upsertStep(t: Timeline, step: ToolStep) {
+	t.parts ??= [];
+	const find = (match: (s: ToolStep) => boolean) => t.parts!.findIndex((p) => p.kind === 'tool' && match(p.step));
 	let i: number;
 	if (step.status === 'running') {
 		i = find((s) => s.status === 'drafting' && s.id === step.id);
@@ -96,9 +126,28 @@ export function toolStep(m: Message, d: Record<string, unknown>) {
 	} else {
 		i = find((s) => s.id === step.id && s.status === 'running');
 	}
-	if (i >= 0) m.parts[i] = { kind: 'tool', step };
-	else m.parts.push({ kind: 'tool', step });
-	if (step.status !== 'running' && m.approval?.callId === step.id) m.approval = undefined;
+	const old = i >= 0 ? t.parts[i] : undefined;
+	if (old?.kind === 'tool' && old.step.agent) step.agent = old.step.agent; // the sub-agent's work stays
+	if (i >= 0) t.parts[i] = { kind: 'tool', step };
+	else t.parts.push({ kind: 'tool', step });
+}
+
+/** The sub-agent run by call `parent` of `m` (created on its first event); undefined when there is no such call. */
+function subAgent(m: Message, parent: string, name: unknown): SubAgent | undefined {
+	for (let i = (m.parts?.length ?? 0) - 1; i >= 0; i--) {
+		const p = m.parts![i];
+		if (p.kind === 'tool' && p.step.id === parent) {
+			p.step.agent ??= { name: String(name ?? ''), text: '', parts: [] };
+			return p.step.agent;
+		}
+	}
+	return undefined;
+}
+
+/** Adds text a sub-agent wrote (`agent_delta`) to the timeline of the call that runs it. */
+export function agentText(m: Message, d: Record<string, unknown>) {
+	const agent = subAgent(m, String(d.parent ?? ''), d.agent);
+	if (agent) appendText(agent, String(d.text ?? ''));
 }
 
 /** At the end of a stream: calls still drafting never ran (the turn stopped or failed). */
@@ -175,6 +224,9 @@ const LAST = new Set(['done', 'cancelled', 'error', 'unavailable']);
  */
 export function createAnswer(reply: Message, schedule: (run: () => void) => void, question?: Message) {
 	const text$ = createBatcher((t) => appendText(reply, t), schedule);
+	// one batcher per sub-agent, so parallel sub-agents writing at once still render once per frame
+	const agents = new Map<string, ReturnType<typeof createBatcher>>();
+	const flushAgents = () => agents.forEach((b) => b.flush());
 	let seq = 0;
 	let ended = false;
 	return {
@@ -182,7 +234,17 @@ export function createAnswer(reply: Message, schedule: (run: () => void) => void
 			if (id !== undefined && Number(id) > seq) seq = Number(id);
 			const d = (data ?? {}) as Record<string, unknown>;
 			if (event === 'delta') return text$.push(String(d.text ?? ''));
+			if (event === 'agent_delta') {
+				const parent = String(d.parent ?? '');
+				let b = agents.get(parent);
+				if (!b) {
+					b = createBatcher((t) => agentText(reply, { ...d, text: t }), schedule);
+					agents.set(parent, b);
+				}
+				return b.push(String(d.text ?? ''));
+			}
 			text$.flush(); // anything else comes after the text before it
+			flushAgents();
 			if (LAST.has(event)) ended = true;
 			if (typeof d.traceId === 'string' && (event === 'start' || event === 'done')) reply.traceId = d.traceId;
 			if (event === 'start') {
@@ -202,6 +264,7 @@ export function createAnswer(reply: Message, schedule: (run: () => void) => void
 		ended: () => ended,
 		finish() {
 			text$.flush();
+			flushAgents();
 			endDrafts(reply);
 		}
 	};
@@ -218,6 +281,13 @@ export function failAnswer(m: Message, text: string) {
 export function activity(m: Message): string {
 	if (m.approval) return 'Waiting for approval';
 	const last = m.parts?.at(-1);
+	const running = (m.parts ?? []).filter((p) => p.kind === 'tool' && p.step.status === 'running');
+	if (running.length > 1) return `Running ${running.length} tools…`;
+	if (last?.kind === 'tool' && last.step.status === 'running' && last.step.agent) {
+		const inner = last.step.agent.parts.at(-1);
+		const what = inner?.kind === 'tool' && inner.step.status === 'running' ? `running ${inner.step.name}` : 'working';
+		return `${last.step.agent.name}: ${what}…`;
+	}
 	if (last?.kind === 'tool' && last.step.status === 'running') return `Running ${last.step.name}…`;
 	if (last?.kind === 'tool' && last.step.status === 'drafting') return `Writing ${last.step.name || 'a tool'} call…`;
 	if (last?.kind === 'text') return 'Writing…';

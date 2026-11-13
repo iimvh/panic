@@ -10,10 +10,14 @@
 	<div class="approval" role="group" aria-label="Approve tool call">
 		<div class="head">
 			<span class="label">Allow</span>
+			{#if a.agent}<span class="agent">{a.agent}:</span>{/if}
 			<span class="name">{a.name}</span>
 			<span class="risk {a.risk}">{a.risk}</span>
 		</div>
 		<pre class="args">{a.arguments}</pre>
+		{#if message.waiting?.length}
+			<div class="more">{message.waiting.length} more waiting</div>
+		{/if}
 		<div class="actions">
 			<button class="deny" disabled={a.answering} onclick={() => chat.approve(message, false)}>Deny</button>
 			<button class="allow" disabled={a.answering} onclick={() => chat.approve(message, true)}>Allow</button>
@@ -42,6 +46,15 @@
 	}
 	.name {
 		font: 600 13px var(--mono);
+	}
+	.agent {
+		font-size: 13px;
+		font-weight: 600;
+	}
+	.more {
+		margin: -2px 0 8px;
+		font-size: 12px;
+		color: var(--muted);
 	}
 	.risk {
 		font: 11px var(--mono);

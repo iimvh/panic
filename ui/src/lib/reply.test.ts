@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from './chat.svelte';
-import { activity, appendText, createAnswer, askApproval, createBatcher, duration, endDrafts, fromHistory, meta, review, size, toolDelta, toolStep, type Part } from './reply';
+import { activity, agentText, appendText, clearApproval, createAnswer, askApproval, createBatcher, duration, endDrafts, fromHistory, meta, review, size, toolDelta, toolStep, type Part } from './reply';
 
 const steps = (m: Message) => (m.parts ?? []).flatMap((p) => (p.kind === 'tool' ? [p.step] : []));
 const kinds = (m: Message) => (m.parts ?? []).map((p: Part) => p.kind);
@@ -259,5 +259,68 @@ describe('createAnswer', () => {
 		expect(reply.error).toBe(true);
 		expect(reply.parts?.at(-1)).toEqual({ kind: 'error', text: 'boom' });
 		expect(a.ended()).toBe(true);
+	});
+});
+
+describe('sub-agents', () => {
+	it('nests a sub-agent’s text and calls under the call that runs it', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '' };
+		toolStep(m, { id: 'a', name: 'agent', arguments: '{"agent":"explore"}', status: 'running' });
+		agentText(m, { parent: 'a', agent: 'explore', text: 'Looking ' });
+		agentText(m, { parent: 'a', agent: 'explore', text: 'around.' });
+		toolStep(m, { id: 'x', name: 'read_file', status: 'running', parent: 'a', agent: 'explore' });
+		toolStep(m, { id: 'x', name: 'read_file', status: 'ok', content: 'text', parent: 'a', agent: 'explore' });
+		toolStep(m, { id: 'a', name: 'agent', arguments: '{"agent":"explore"}', status: 'ok', content: 'found it' });
+
+		expect(kinds(m)).toEqual(['tool']);
+		const agent = steps(m)[0].agent!;
+		expect(agent.name).toBe('explore');
+		expect(agent.text).toBe('Looking around.');
+		expect(agent.parts.map((p) => p.kind)).toEqual(['text', 'tool']);
+		expect(agent.parts[1].kind === 'tool' && agent.parts[1].step.status).toBe('ok');
+		expect(steps(m)[0].content).toBe('found it');
+		expect(m.text).toBe(''); // a sub-agent’s text is not the answer’s
+	});
+
+	it('says what a sub-agent is doing and how many tools run at once', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '' };
+		toolStep(m, { id: 'a', name: 'agent', status: 'running' });
+		agentText(m, { parent: 'a', agent: 'explore', text: 'hm' });
+		expect(activity(m)).toBe('explore: working…');
+		toolStep(m, { id: 'x', name: 'list_dir', status: 'running', parent: 'a', agent: 'explore' });
+		expect(activity(m)).toBe('explore: running list_dir…');
+		toolStep(m, { id: 'b', name: 'agent', status: 'running' });
+		expect(activity(m)).toBe('Running 2 tools…');
+	});
+
+	it('batches each sub-agent’s text per frame and keeps parallel ones apart', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '', parts: [] };
+		const frames: (() => void)[] = [];
+		const answer = createAnswer(m, (run) => frames.push(run));
+		answer.onEvent({ event: 'tool', data: { id: 'a', name: 'agent', status: 'running' } });
+		answer.onEvent({ event: 'tool', data: { id: 'b', name: 'agent', status: 'running' } });
+		answer.onEvent({ event: 'agent_delta', data: { parent: 'a', agent: 'one', text: 'x' } });
+		answer.onEvent({ event: 'agent_delta', data: { parent: 'b', agent: 'two', text: 'y' } });
+		answer.onEvent({ event: 'agent_delta', data: { parent: 'a', agent: 'one', text: 'z' } });
+		expect(steps(m)[0].agent).toBeUndefined();
+		frames.splice(0).forEach((run) => run());
+		expect(steps(m).map((s) => [s.agent?.name, s.agent?.text])).toEqual([['one', 'xz'], ['two', 'y']]);
+	});
+
+	it('queues questions asked together and shows the next when one is answered', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '' };
+		toolStep(m, { id: 'a', name: 'agent', status: 'running' });
+		toolStep(m, { id: 'x', name: 'write_file', status: 'running', parent: 'a', agent: 'explore' });
+		toolStep(m, { id: 'y', name: 'write_file', status: 'running' });
+		askApproval(m, { id: 'q1', callId: 'x', name: 'write_file', risk: 'write', agent: 'explore' });
+		askApproval(m, { id: 'q2', callId: 'y', name: 'write_file', risk: 'write' });
+		expect(m.approval?.agent).toBe('explore');
+		expect(m.waiting?.map((a) => a.id)).toEqual(['q2']);
+
+		toolStep(m, { id: 'x', name: 'write_file', status: 'ok', parent: 'a', agent: 'explore' });
+		expect(m.approval?.id).toBe('q2');
+		expect(m.waiting).toBeUndefined();
+		clearApproval(m, (a) => a.id === 'q2');
+		expect(m.approval).toBeUndefined();
 	});
 });

@@ -1,5 +1,5 @@
 import { ApiError, events, follow, getHistory, getState, postApproval, postStop, putSettings, stream, type State } from './api';
-import { askApproval, createAnswer, duration, failAnswer, fromHistory, type Approval, type Part } from './reply';
+import { askApproval, clearApproval, createAnswer, duration, failAnswer, fromHistory, type Approval, type Part } from './reply';
 import { sessionId } from './session';
 
 export type Message = {
@@ -14,6 +14,8 @@ export type Message = {
 	startedAt?: number;
 	/** A tool call waiting for the user to allow or deny it. */
 	approval?: Approval;
+	/** More questions, asked while `approval` is shown (calls running in parallel); shown next, in order. */
+	waiting?: Approval[];
 	error?: boolean;
 	streaming?: boolean;
 	/** The answer's trace (assistant only), when the server traces turns. */
@@ -93,7 +95,7 @@ class Chat {
 			// 404: the question is gone (answered, timed out or stopped); the stream tells the rest
 			if (!(e instanceof ApiError && e.status === 404)) fail(m, errorText(e));
 		} finally {
-			if (m.approval?.id === a.id) m.approval = undefined;
+			clearApproval(m, (x) => x.id === a.id);
 		}
 	}
 
@@ -221,6 +223,7 @@ class Chat {
 			if (t) {
 				t.streaming = false;
 				t.approval = undefined;
+				t.waiting = undefined;
 			}
 			this.busy = false;
 			this.#answering = false;

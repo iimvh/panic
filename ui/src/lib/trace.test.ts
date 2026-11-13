@@ -46,6 +46,22 @@ describe('layout', () => {
 		]);
 	});
 
+	it('nests a sub-agent’s turn under the tool call that ran it', () => {
+		const rows = layout([
+			span('r', null, 'turn', 0, 1000, { steps: 2 }),
+			span('a', 'r', 'tool', 100, 800, { tool: 'agent', promptTokens: 40, completionTokens: 8 }),
+			span('s', 'a', 'turn', 110, 780, { agent: 'explore', steps: 3 }),
+			span('l', 's', 'llm', 120, 100, { step: 1 })
+		]);
+		expect(rows.map((r) => [r.label, r.depth])).toEqual([
+			['turn', 0],
+			['tool · agent', 1],
+			['agent · explore', 2],
+			['llm · step 1', 3]
+		]);
+		expect(rows[1].detail).toBe('40+8 tok');
+	});
+
 	it('names stops other than done', () => {
 		expect(layout([span('r', null, 'turn', 0, 1, { stop: 'max_steps', steps: 1 })])[0].detail).toBe('stopped: max steps · 1 step');
 	});

@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { chat, type Message } from '$lib/chat.svelte';
-	import { activity, duration, size } from '$lib/reply';
+	import { activity, duration } from '$lib/reply';
 	import ApprovalCard from './ApprovalCard.svelte';
 	import TextPart from './TextPart.svelte';
+	import ToolRow from './ToolRow.svelte';
 	import TraceView from './TraceView.svelte';
 
 	let { message }: { message: Message } = $props();
@@ -49,18 +50,7 @@
 				{#if part.kind === 'text'}
 					<TextPart text={part.text} live={message.streaming && i === parts.length - 1} />
 				{:else if part.kind === 'tool'}
-					{@const tool = part.step}
-					<div class="tool {tool.status}" title={tool.content ?? tool.arguments}>
-						<span class="name">{tool.name}</span>
-						{#if tool.status === 'drafting'}
-							<!-- the end of what is being written, right-aligned so the newest text shows -->
-							<span class="args tail"><bdi>{tool.arguments.slice(-200)}</bdi></span>
-							<span class="status">writing · {size(tool.arguments)}</span>
-						{:else}
-							<span class="args">{tool.arguments}</span>
-							<span class="status">{tool.status === 'running' ? '…' : tool.status}</span>
-						{/if}
-					</div>
+					<ToolRow step={part.step} />
 				{:else if part.kind === 'review'}
 					<div class="review" class:rejected={!part.pass}>
 						{part.pass ? 'Review passed' : `Review rejected the answer: ${part.reason}`}
@@ -114,47 +104,10 @@
 		width: 100%;
 		overflow-wrap: anywhere;
 	}
-	.tool {
-		display: flex;
-		gap: 8px;
-		align-items: baseline;
-		min-width: 0;
-		margin: 4px 0;
-		font: 12px var(--mono);
-		color: var(--muted);
-		border-left: 2px solid var(--border);
-		padding-left: 8px;
-	}
-	.tool + :global(.md),
+	.answer > :global(.tool + .md),
+	.answer > :global(details + .md),
 	.review + :global(.md) {
 		margin-top: 8px;
-	}
-	.tool .name {
-		color: var(--text);
-	}
-	.tool .args {
-		flex: 1;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	/* clip the start, not the end: the newest text stays in view */
-	.tool .tail {
-		direction: rtl;
-	}
-	.tool.drafting {
-		border-left-style: dashed;
-		border-left-color: var(--accent);
-	}
-	.tool.running {
-		border-left-color: var(--accent);
-	}
-	.tool.error {
-		border-left-color: var(--danger);
-	}
-	.tool.error .status {
-		color: var(--danger);
 	}
 	.review {
 		margin: 8px 0;

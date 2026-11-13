@@ -66,6 +66,7 @@ export function label(s: TraceSpan): string {
 	if (s.name === 'llm') return `llm · step ${num(s.attrs.step)}`;
 	if (s.name === 'tool') return `tool · ${String(s.attrs.tool ?? '?')}`;
 	if (s.name === 'review') return `review · ${num(s.attrs.attempt)}`;
+	if (s.name === 'turn' && s.attrs.agent) return `agent · ${String(s.attrs.agent)}`; // a sub-agent's turn
 	return s.name;
 }
 
@@ -82,7 +83,7 @@ function detail(s: TraceSpan): string {
 	if (s.name === 'tool') {
 		if (num(a.approvalMicros) >= 1000) parts.push(`approval ${ms(num(a.approvalMicros) / 1000)}`);
 		if (a.outputChars !== undefined) parts.push(`${num(a.outputChars)} chars${a.truncated ? ' (cut)' : ''}`);
-		if (a.refused) parts.push('refused: repeated');
+		if (a.refused) parts.push('refused');
 	}
 	if (s.name === 'review' && a.verdict) parts.push(String(a.verdict));
 	if (s.name === 'compaction') parts.push(`${num(a.messages)} messages`);

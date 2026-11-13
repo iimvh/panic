@@ -30,8 +30,9 @@ import panic.tools.Tools;
  * by default. A failing check is an error result: the loop goes on and the model can fix and run it again.
  *
  * Requires nothing; with no checks configured it registers no tool. The process (and its children) is killed
- * when its timeout passes or the call is cancelled, which includes the chat's own tool timeout
- * ({@code chat.toolTimeoutSeconds}) and the plugin being disposed. Command: {@code checks}.
+ * when its timeout passes or the call is cancelled (the caller gave up, or the plugin is disposed). The tool
+ * declares the longest configured timeout as its own limit, so {@code chat.toolTimeoutSeconds} does not cut it.
+ * Command: {@code checks}.
  */
 public final class ChecksPlugin implements ConfigPlugin<ChecksConfig> {
 
@@ -70,6 +71,12 @@ public final class ChecksPlugin implements ConfigPlugin<ChecksConfig> {
     @Override
     public Risk risk() {
       return Risk.EXEC;
+    }
+
+    /** The longest configured check, plus a little to report it: the chat's own tool limit must not cut it. */
+    @Override
+    public int timeoutSeconds() {
+      return cfg.checks().values().stream().mapToInt(ChecksConfig.Check::timeoutSeconds).max().orElse(0) + 10;
     }
 
     @Override

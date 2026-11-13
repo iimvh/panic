@@ -120,6 +120,12 @@ class ChecksPluginTest {
   }
 
   @Test
+  void theToolAsksForTheLongestCheckAsItsOwnLimit() {
+    checks(Map.of("fast", sh("true", 5), "slow", sh("true", 900)), 0);
+    assertEquals(910, Tools.info(root, "check").orElseThrow().timeoutSeconds());
+  }
+
+  @Test
   void noChecksNoToolAndTheToolGoesWithThePlugin() {
     ConfigHandle<ChecksConfig> h = checks(Map.of(), 0);
     assertTrue(Tools.specs(root).isEmpty());

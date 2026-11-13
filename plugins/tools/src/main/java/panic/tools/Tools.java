@@ -1,0 +1,228 @@
+package panic.tools;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import context.Context;
+import context.HookKey;
+import context.Task;
+import core.CancelledException;
+import core.Disposable;
+import core.Signal;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import panic.command.Hooks;
+import panic.llm.CancelToken;
+import panic.llm.Json;
+import panic.llm.ToolCall;
+import panic.llm.ToolSpec;
+
+/**
+ * The tool registry, built like {@code panic.command.Commands}: a plugin declares tools with {@link #register};
+ * they are z hooks of that plugin, so they disappear when it is disposed, after any call in progress. Callers
+ * (the agent loop, the {@code tool} command) list them with {@link #specs} and run them with {@link #call}.
+ * No service is involved: offering a tool never ties a plugin's lifetime to its callers'.
+ *
+ * Every call passes the permission gate, inside the registered hook so no caller can skip it: after its
+ * arguments are checked, the {@link #POLICY} hook says allow, ask or deny for the tool's {@link Risk}; an ask
+ * goes to the {@link #APPROVE} hook, which front-ends answer by asking the user. No answer, a timeout or a
+ * refusal denies the call.
+ *
+ * {@link #call} never throws for a bad call: unknown tool, invalid JSON, arguments that break the schema,
+ * denied calls and exceptions from the tool all come back as {@link ToolResult#error}, for the model to read.
+ * Only cancellation is thrown ({@code core.CancelledException}).
+ */
+public final class Tools {
+
+  /** A request to run one tool call. */
+  public record Invocation(ToolCall call, ToolContext context) {
+    public Invocation {
+      Objects.requireNonNull(call, "call");
+      Objects.requireNonNull(context, "context");
+    }
+  }
+
+  /** A tool as listed: what the model sees, and its risk. */
+  public record Info(ToolSpec spec, Risk risk) {
+    public Info {
+      Objects.requireNonNull(spec, "spec");
+      Objects.requireNonNull(risk, "risk");
+    }
+  }
+
+  /** The question put to the policy: may this call run? */
+  public record Check(ToolCall call, Risk risk) {
+  }
+
+  /** The policy's answer. {@code askTimeoutSeconds} bounds the wait for the user when it is {@code ASK}. */
+  public record Verdict(Permission permission, int askTimeoutSeconds) {
+
+    public static final int DEFAULT_ASK_TIMEOUT_SECONDS = 120;
+
+    public Verdict {
+      Objects.requireNonNull(permission, "permission");
+      if (askTimeoutSeconds <= 0) askTimeoutSeconds = DEFAULT_ASK_TIMEOUT_SECONDS;
+    }
+
+    /** The rule when no policy plugin runs: reading is allowed, anything else needs the user. */
+    public static Verdict fallback(Risk risk) {
+      return new Verdict(risk == Risk.READ ? Permission.ALLOW : Permission.ASK, DEFAULT_ASK_TIMEOUT_SECONDS);
+    }
+  }
+
+  /**
+   * A call that needs the user's approval. {@code signal} is cancelled when the caller gives up or the wait
+   * times out: an answer that blocks must honour it.
+   */
+  public record Approval(String conversationId, ToolCall call, Risk risk, Signal signal) {
+  }
+
+  /** The user's answer to an {@link Approval}. */
+  public enum Decision { ALLOW, DENY }
+
+  public enum Listing { ALL }
+
+  public static final HookKey<Listing, Info> LIST = HookKey.of("tool.list", Listing.class, Info.class);
+  public static final HookKey<Invocation, ToolResult> RUN = HookKey.of("tool.run", Invocation.class, ToolResult.class);
+  /** Answered by the policy plugin ({@code permissions}); without it {@link Verdict#fallback} applies. */
+  public static final HookKey<Check, Verdict> POLICY = HookKey.of("tool.policy", Check.class, Verdict.class);
+  /**
+   * Answered by front-ends, only for the conversations they are talking to (return null for others). No
+   * answer means {@link Decision#DENY}.
+   */
+  public static final HookKey<Approval, Decision> APPROVE = HookKey.of("tool.approve", Approval.class,
+      Decision.class);
+
+  private Tools() {
+  }
+
+  /** Declares {@code tool} in {@code ctx}. Disposing the result (or ctx) removes it. */
+  public static Disposable register(Context ctx, Tool tool) {
+    ToolSpec spec = Objects.requireNonNull(tool.spec(), "spec");
+    Info info = new Info(spec, Objects.requireNonNull(tool.risk(), "risk"));
+    Disposable run = ctx.hook(RUN, inv -> {
+      if (!inv.call().name().equals(spec.name())) return null;
+      return run(ctx, tool, info, inv);
+    });
+    Disposable list = ctx.hook(LIST, q -> info);
+    return () -> {
+      list.dispose();
+      run.dispose();
+    };
+  }
+
+  /** The tools available right now, by name, with their risk. When two plugins declare a name, the first wins. */
+  public static List<Info> infos(Context ctx) {
+    Set<String> seen = new HashSet<>();
+    List<Info> out = new ArrayList<>();
+    for (Info info : ctx.collect(LIST, Listing.ALL)) {
+      if (seen.add(info.spec().name())) out.add(info);
+    }
+    out.sort(Comparator.comparing(i -> i.spec().name()));
+    return out;
+  }
+
+  /** What the model is told about the tools available right now (see {@link #infos}). */
+  public static List<ToolSpec> specs(Context ctx) {
+    return infos(ctx).stream().map(Info::spec).toList();
+  }
+
+  public static Optional<ToolSpec> find(Context ctx, String name) {
+    return specs(ctx).stream().filter(s -> s.name().equals(name)).findFirst();
+  }
+
+  /** What the policy says about {@code call} right now. */
+  public static Verdict verdict(Context ctx, ToolCall call, Risk risk) {
+    return Hooks.bail(ctx, POLICY, new Check(call, risk)).orElseGet(() -> Verdict.fallback(risk));
+  }
+
+  /** Runs {@code call} on the calling thread. See the class comment for what it returns. */
+  public static ToolResult call(Context ctx, ToolCall call, ToolContext context) {
+    context.signal().throwIfCancelled();
+    return Hooks.bail(ctx, RUN, new Invocation(call, context))
+        .orElseGet(() -> ToolResult.error("unknown tool: " + call.name()));
+  }
+
+  private static ToolResult run(Context owner, Tool tool, Info info, Invocation inv) {
+    String name = info.spec().name();
+    JsonNode args = Json.parseOrNull(inv.call().arguments());
+    if (args == null) return ToolResult.error(name + ": arguments are not valid JSON: " + inv.call().arguments());
+    List<String> problems = Schema.validate(info.spec().parameters(), args);
+    if (!problems.isEmpty()) {
+      return ToolResult.error(name + ": invalid arguments: " + String.join("; ", problems));
+    }
+    Verdict verdict = verdict(owner, inv.call(), info.risk());
+    switch (verdict.permission()) {
+      case DENY -> {
+        return ToolResult.error(name + ": denied by policy");
+      }
+      case ASK -> {
+        if (approve(owner, inv, info.risk(), verdict.askTimeoutSeconds()) != Decision.ALLOW) {
+          return ToolResult.error(name + ": denied by the user");
+        }
+      }
+      case ALLOW -> {
+      }
+    }
+    inv.context().signal().throwIfCancelled();
+    inv.context().started().run();
+    // Cancelled by the caller or by the owner's disposal; the links are removed after the call so a
+    // long-lived plugin does not collect one listener per call.
+    CancelToken signal = new CancelToken();
+    Disposable byCaller = inv.context().signal().onCancel(signal::cancel);
+    Disposable byOwner = owner.signal().onCancel(signal::cancel);
+    try {
+      ToolResult result = tool.call(args, new ToolContext(inv.context().conversationId(), signal));
+      signal.throwIfCancelled();
+      return result == null ? ToolResult.ok("") : result;
+    } catch (CancelledException e) {
+      throw e;
+    } catch (RuntimeException e) {
+      if (signal.isCancelled()) throw new CancelledException("tool " + name + " cancelled");
+      String detail = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+      return ToolResult.error(name + " failed: " + detail);
+    } finally {
+      byOwner.dispose();
+      byCaller.dispose();
+    }
+  }
+
+  /**
+   * Asks {@link #APPROVE} and waits at most {@code timeoutSeconds}. A timeout or no answer denies; a cancelled
+   * caller (or the owner's disposal) is thrown, so the turn stops instead of carrying on without the tool.
+   */
+  private static Decision approve(Context owner, Invocation inv, Risk risk, int timeoutSeconds) {
+    Signal caller = inv.context().signal();
+    CancelToken wait = new CancelToken();
+    Disposable byCaller = caller.onCancel(wait::cancel);
+    Disposable byOwner = owner.signal().onCancel(wait::cancel);
+    AtomicBoolean timedOut = new AtomicBoolean();
+    Task<Void> timer = owner.spawn("approval-timeout", s -> {
+      try {
+        Thread.sleep(timeoutSeconds * 1000L);
+      } catch (InterruptedException e) {
+        return null; // answered first
+      }
+      timedOut.set(true);
+      wait.cancel();
+      return null;
+    });
+    try {
+      Decision d = Hooks.bail(owner, APPROVE, new Approval(inv.context().conversationId(), inv.call(), risk, wait))
+          .orElse(Decision.DENY);
+      if (caller.isCancelled() || owner.signal().isCancelled()) throw new CancelledException("approval cancelled");
+      return timedOut.get() ? Decision.DENY : d;
+    } catch (CancelledException e) {
+      if (timedOut.get() && !caller.isCancelled() && !owner.signal().isCancelled()) return Decision.DENY;
+      throw e;
+    } finally {
+      timer.dispose();
+      byOwner.dispose();
+      byCaller.dispose();
+    }
+  }
+}

@@ -71,7 +71,7 @@ to make a change pass.
 3. List it in the module's `PluginSet` with a unique, lowercase, dashed name. The name is also its
    `panic.json` section and its node in the tree.
 4. Export public keys as `public static final` constants on a small interface or class named after the
-   concept (`Llm.KEY`, `Chat.ASK`, `Conversations.KEY`).
+   concept (`Llm.KEY`, `Chat.ASK`, `Conversations.KEY`, `Tools.RUN`).
 5. Add the plugin's section to `panic.example.json` if it has user-facing config, and its commands to the
    root README if users will run them.
 6. Write tests and the module README, then run the checks below.
@@ -115,6 +115,7 @@ every pull request. A change is not done until it passes.
 | `sdk` | none | [`panic.command`](sdk/src/main/java/panic/command), [`panic.plugin`](sdk/src/main/java/panic/plugin) |
 | `plugins/llm` | `openrouter`, `mistral`, `llm`, `settings` | [README](plugins/llm/README.md) |
 | `plugins/chat` | `conversations`, `chat` | [README](plugins/chat/README.md) |
+| `plugins/tools` | `tools`, `permissions`, `files`, `clock` | [README](plugins/tools/README.md) |
 | `plugins/cli` | `cli` | [README](plugins/cli/README.md) |
 | `plugins/web` | `web` | [README](plugins/web/README.md) |
 | `app` | none (bootstraps) | `Panic`, `PluginHost`, `ConfigLoader`, `ConfigWatch`, `Main` |

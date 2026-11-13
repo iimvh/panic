@@ -16,6 +16,8 @@ export type Message = {
 	approval?: Approval;
 	error?: boolean;
 	streaming?: boolean;
+	/** The answer's trace (assistant only), when the server traces turns. */
+	traceId?: string;
 };
 
 let nextId = 1;

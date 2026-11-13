@@ -151,6 +151,19 @@ describe('fromHistory', () => {
 		expect(out[1].parts?.[3]).toEqual({ kind: 'text', text: 'first' });
 		expect(out.map((m) => m.id)).toEqual([1, 2, 3, 4]);
 	});
+
+	it('gives each answer the trace of its question', () => {
+		const out = fromHistory(
+			[
+				{ role: 'user', content: 'q', traceId: 't1' },
+				{ role: 'assistant', content: 'a' },
+				{ role: 'user', content: 'untraced' },
+				{ role: 'assistant', content: 'b' }
+			],
+			() => 0
+		);
+		expect(out.map((m) => m.traceId)).toEqual([undefined, 't1', undefined, undefined]);
+	});
 });
 
 describe('toolDelta', () => {
@@ -214,6 +227,16 @@ describe('createAnswer', () => {
 		expect(kinds(reply)).toEqual(['text', 'tool']);
 		expect(steps(reply)[0].status).toBe('error'); // a draft that never ran
 		expect(reply.meta).toBe('m');
+	});
+
+	it('learns the trace id from start, and from done when start was missed', () => {
+		const reply: Message = { id: 2, role: 'assistant', text: '', parts: [] };
+		const a = createAnswer(reply, now);
+		a.onEvent({ event: 'start', data: { question: 'q', traceId: 'abc' }, id: '1' });
+		expect(reply.traceId).toBe('abc');
+		const later: Message = { id: 3, role: 'assistant', text: '', parts: [] };
+		createAnswer(later, now).onEvent({ event: 'done', data: { model: 'm', traceId: 'def' }, id: '9' });
+		expect(later.traceId).toBe('def');
 	});
 
 	it('fills in the question of a resumed answer, and replays do not go back', () => {

@@ -12,10 +12,23 @@ export type State = {
 export type Model = { id: string; name: string; contextLength: number; free: boolean | null };
 /** One stored message: questions, answers with their tool calls, tool results and reviewer rejections. */
 export type HistoryMessage =
-	| { role: 'user'; content: string }
+	| { role: 'user'; content: string; traceId?: string }
 	| { role: 'assistant'; content: string; toolCalls?: { id: string; name: string; arguments: string }[] }
 	| { role: 'tool'; toolCallId: string; status: 'ok' | 'error'; content: string }
 	| { role: 'review'; reason: string };
+
+/** One span of a trace, as `GET /api/trace` returns it. Times are microseconds. */
+export type TraceSpan = {
+	id: string;
+	parentId: string | null;
+	name: string;
+	startMicros: number;
+	durationMicros: number;
+	status: 'ok' | 'error' | 'cancelled';
+	error?: string;
+	attrs: Record<string, unknown>;
+};
+export type Trace = { traceId: string; spans: TraceSpan[] };
 
 export class ApiError extends Error {
 	constructor(
@@ -47,6 +60,10 @@ export const getState = () => json<State>('/api/state');
 
 export const getHistory = (session: string) =>
 	json<HistoryMessage[]>(`/api/history?session=${encodeURIComponent(session)}`);
+
+/** One trace of the session; ApiError 404 when unknown or when tracing is off (its message says which). */
+export const getTrace = (session: string, id: string) =>
+	json<Trace>(`/api/trace?session=${encodeURIComponent(session)}&id=${encodeURIComponent(id)}`);
 
 export const getModels = (filter = '') =>
 	json<Model[]>(`/api/models?filter=${encodeURIComponent(filter)}`);

@@ -1,13 +1,15 @@
 <script lang="ts">
-	import type { Message } from '$lib/chat.svelte';
+	import { chat, type Message } from '$lib/chat.svelte';
 	import { activity, duration, size } from '$lib/reply';
 	import ApprovalCard from './ApprovalCard.svelte';
 	import TextPart from './TextPart.svelte';
+	import TraceView from './TraceView.svelte';
 
 	let { message }: { message: Message } = $props();
 
 	const parts = $derived(message.parts ?? []);
 	const status = $derived(message.streaming ? activity(message) : '');
+	let showTrace = $state(false);
 
 	let now = $state(Date.now());
 	$effect(() => {
@@ -75,7 +77,17 @@
 					{#if message.startedAt}<span class="time">{duration(now - message.startedAt)}</span>{/if}
 				</div>
 			{/if}
-			{#if message.meta && !message.streaming}<div class="meta">{message.meta}</div>{/if}
+			{#if !message.streaming && (message.meta || message.traceId)}
+				<div class="meta">
+					{#if message.meta}<span>{message.meta}</span>{/if}
+					{#if message.traceId}
+						<button type="button" class="trace-toggle" aria-expanded={showTrace} onclick={() => (showTrace = !showTrace)}>
+							{showTrace ? 'Hide trace' : 'Trace'}
+						</button>
+					{/if}
+				</div>
+				{#if showTrace && message.traceId}<TraceView session={chat.session} traceId={message.traceId} />{/if}
+			{/if}
 		</div>
 	{/if}
 </article>
@@ -167,9 +179,32 @@
 		font-variant-numeric: tabular-nums;
 	}
 	.meta {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 4px 10px;
 		margin-top: 6px;
 		font-size: 12px;
 		color: var(--muted);
+	}
+	.trace-toggle {
+		padding: 0;
+		border: 0;
+		background: none;
+		color: var(--muted);
+		font: inherit;
+		text-decoration: underline dotted;
+		text-underline-offset: 3px;
+		cursor: pointer;
+	}
+	.trace-toggle:hover,
+	.trace-toggle[aria-expanded='true'] {
+		color: var(--text);
+	}
+	.trace-toggle:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+		border-radius: 3px;
 	}
 	.err {
 		margin: 8px 0 0;

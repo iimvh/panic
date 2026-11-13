@@ -134,16 +134,19 @@ export function fromHistory(history: HistoryMessage[], id: () => number): Messag
 	const reply = () => {
 		if (!answer) {
 			answer = { id: id(), role: 'assistant', text: '', parts: [] };
+			if (traceId) answer.traceId = traceId;
 			out.push(answer);
 		}
 		return answer;
 	};
 	let attempt = 0;
+	let traceId: string | undefined;
 	for (const m of history) {
 		if (m.role === 'user') {
 			out.push({ id: id(), role: 'user', text: m.content });
 			answer = null;
 			attempt = 0;
+			traceId = m.traceId;
 		} else if (m.role === 'assistant') {
 			const a = reply();
 			if (m.content) appendText(a, m.content);
@@ -181,6 +184,7 @@ export function createAnswer(reply: Message, schedule: (run: () => void) => void
 			if (event === 'delta') return text$.push(String(d.text ?? ''));
 			text$.flush(); // anything else comes after the text before it
 			if (LAST.has(event)) ended = true;
+			if (typeof d.traceId === 'string' && (event === 'start' || event === 'done')) reply.traceId = d.traceId;
 			if (event === 'start') {
 				if (question && !question.text) question.text = String(d.question ?? '');
 				// a resumed answer started before this page: take the server's time

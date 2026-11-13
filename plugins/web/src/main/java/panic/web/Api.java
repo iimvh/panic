@@ -37,6 +37,7 @@ import panic.llm.Message;
 import panic.llm.ModelInfo;
 import panic.llm.Providers;
 import panic.llm.ToolCall;
+import panic.llm.ToolCallDelta;
 import panic.tools.Tools;
 
 /**
@@ -198,7 +199,8 @@ final class Api {
           new Chat.Ask(session, text, both, d -> sse.send("delta", Json.object().put("text", d)),
               step -> sse.send("tool", step(step)),
               r -> sse.send("review", Json.object().put("attempt", r.attempt()).put("pass", r.verdict().pass())
-                  .put("reason", r.verdict().reason()))));
+                  .put("reason", r.verdict().reason())),
+              d -> sse.send("tool_delta", toolDelta(d))));
       if (reply.isEmpty()) {
         sse.send("unavailable", Json.object().put("message", "no LLM connected"));
         return;
@@ -225,6 +227,13 @@ final class Api {
         .put("arguments", step.call().arguments());
     if (!step.done()) return o.put("status", "running");
     return o.put("status", step.result().isError() ? "error" : "ok").put("content", cut(step.result().content()));
+  }
+
+  private static ObjectNode toolDelta(ToolCallDelta d) {
+    ObjectNode o = Json.object().put("index", d.index());
+    if (d.id() != null) o.put("id", d.id());
+    if (d.name() != null) o.put("name", d.name());
+    return o.put("arguments", d.arguments());
   }
 
   private static String cut(String content) {

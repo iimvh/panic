@@ -48,6 +48,7 @@ import panic.llm.Provider;
 import panic.llm.Providers;
 import panic.llm.Role;
 import panic.llm.ToolCall;
+import panic.llm.ToolCallDelta;
 import panic.llm.ToolSpec;
 import panic.llm.Usage;
 import panic.tools.Risk;
@@ -63,6 +64,8 @@ class WebPluginTest {
     volatile CountDownLatch block;
     /** When set, a question is first answered with a call to the {@code echo} tool. */
     volatile boolean useTool;
+    /** With {@link #useTool}: the call also comes in two pieces before the completion. */
+    volatile boolean streamCalls;
     final CountDownLatch cancelled = new CountDownLatch(1);
 
     @Override
@@ -88,6 +91,16 @@ class WebPluginTest {
     @Override
     public Completion complete(ChatRequest r, Signal s) {
       return stream(r, s, d -> { });
+    }
+
+    @Override
+    public Completion stream(ChatRequest r, Signal s, Consumer<String> onDelta, Consumer<ToolCallDelta> onToolDelta) {
+      Completion c = stream(r, s, onDelta);
+      if (streamCalls && c.hasToolCalls()) {
+        onToolDelta.accept(new ToolCallDelta(0, "t1", "echo", "{\"text\":"));
+        onToolDelta.accept(new ToolCallDelta(0, null, null, "\"ping\"}"));
+      }
+      return c;
     }
 
     @Override
@@ -319,6 +332,7 @@ class WebPluginTest {
   @Test
   void toolCallsAreStreamedAndKeptInHistory() throws Exception {
     fake.useTool = true;
+    fake.streamCalls = true;
     root.plugin("echo", ctx -> {
       Tools.register(ctx, new Tool() {
         @Override
@@ -339,13 +353,17 @@ class WebPluginTest {
       return null;
     });
     List<Event> ev = events(send("POST", "/api/chat", "{\"session\":\"t\",\"text\":\"hi\"}").body());
-    assertEquals(List.of("tool", "tool", "delta", "delta", "done"), ev.stream().map(Event::name).toList());
-    assertEquals("running", ev.get(0).data().path("status").asText());
-    assertEquals("echo", ev.get(0).data().path("name").asText());
-    assertEquals("ok", ev.get(1).data().path("status").asText());
-    assertEquals("pong", ev.get(1).data().path("content").asText());
-    assertEquals(1, ev.get(4).data().path("toolCalls").asInt());
-    assertEquals("done", ev.get(4).data().path("stop").asText());
+    assertEquals(List.of("tool_delta", "tool_delta", "tool", "tool", "delta", "delta", "done"),
+        ev.stream().map(Event::name).toList());
+    assertEquals("{\"index\":0,\"id\":\"t1\",\"name\":\"echo\",\"arguments\":\"{\\\"text\\\":\"}",
+        ev.get(0).data().toString());
+    assertEquals("{\"index\":0,\"arguments\":\"\\\"ping\\\"}\"}", ev.get(1).data().toString());
+    assertEquals("running", ev.get(2).data().path("status").asText());
+    assertEquals("echo", ev.get(2).data().path("name").asText());
+    assertEquals("ok", ev.get(3).data().path("status").asText());
+    assertEquals("pong", ev.get(3).data().path("content").asText());
+    assertEquals(1, ev.get(6).data().path("toolCalls").asInt());
+    assertEquals("done", ev.get(6).data().path("stop").asText());
 
     JsonNode history = Json.parseOrNull(get("/api/history?session=t").body());
     assertEquals(List.of("user", "assistant", "tool", "assistant"),

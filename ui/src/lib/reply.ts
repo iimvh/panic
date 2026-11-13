@@ -6,8 +6,11 @@ export type ToolStep = {
 	id: string;
 	name: string;
 	arguments: string;
-	status: 'running' | 'ok' | 'error';
+	/** drafting: the model is still writing the call (`tool_delta` events), it has not run yet. */
+	status: 'drafting' | 'running' | 'ok' | 'error';
 	content?: string;
+	/** While drafting: the call's position in the model's reply, which pieces are matched by. */
+	draft?: number;
 };
 
 /**
@@ -55,7 +58,26 @@ export function askApproval(m: Message, d: Record<string, unknown>) {
 	};
 }
 
-/** Adds a tool call when it starts, and updates it in place when it finishes. */
+/** Adds a piece of a tool call the model is still writing: a new drafting row, or more of its arguments. */
+export function toolDelta(m: Message, d: Record<string, unknown>) {
+	m.parts ??= [];
+	const index = Number(d.index ?? 0);
+	const part = m.parts.find((p) => p.kind === 'tool' && p.step.status === 'drafting' && p.step.draft === index);
+	const piece = String(d.arguments ?? '');
+	if (part?.kind === 'tool') {
+		if (d.id) part.step.id = String(d.id);
+		if (d.name) part.step.name = String(d.name);
+		part.step.arguments += piece;
+	} else {
+		const step: ToolStep = { id: String(d.id ?? ''), name: String(d.name ?? ''), arguments: piece, status: 'drafting', draft: index };
+		m.parts.push({ kind: 'tool', step });
+	}
+}
+
+/**
+ * Adds a tool call when it starts, and updates it in place when it finishes. A call that starts takes the
+ * place of its draft (same id, else the first draft left), so it stays where the model wrote it.
+ */
 export function toolStep(m: Message, d: Record<string, unknown>) {
 	const step: ToolStep = {
 		id: String(d.id ?? ''),
@@ -65,10 +87,34 @@ export function toolStep(m: Message, d: Record<string, unknown>) {
 		content: d.content === undefined ? undefined : String(d.content)
 	};
 	m.parts ??= [];
-	const i = m.parts.findIndex((p) => p.kind === 'tool' && p.step.id === step.id && p.step.status === 'running');
-	if (step.status !== 'running' && i >= 0) m.parts[i] = { kind: 'tool', step };
+	const find = (match: (s: ToolStep) => boolean) => m.parts!.findIndex((p) => p.kind === 'tool' && match(p.step));
+	let i: number;
+	if (step.status === 'running') {
+		i = find((s) => s.status === 'drafting' && s.id === step.id);
+		if (i < 0) i = find((s) => s.status === 'drafting');
+	} else {
+		i = find((s) => s.id === step.id && s.status === 'running');
+	}
+	if (i >= 0) m.parts[i] = { kind: 'tool', step };
 	else m.parts.push({ kind: 'tool', step });
 	if (step.status !== 'running' && m.approval?.callId === step.id) m.approval = undefined;
+}
+
+/** At the end of a stream: calls still drafting never ran (the turn stopped or failed). */
+export function endDrafts(m: Message) {
+	for (const p of m.parts ?? []) {
+		if (p.kind === 'tool' && p.step.status === 'drafting') {
+			p.step.status = 'error';
+			p.step.content = 'not run';
+			delete p.step.draft;
+		}
+	}
+}
+
+/** "812 B", "3.2 KB". */
+export function size(text: string): string {
+	const n = new TextEncoder().encode(text).length;
+	return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`;
 }
 
 /** A reviewer's verdict on the answer so far; a rejection is followed by another attempt. */
@@ -119,6 +165,7 @@ export function activity(m: Message): string {
 	if (m.approval) return 'Waiting for approval';
 	const last = m.parts?.at(-1);
 	if (last?.kind === 'tool' && last.step.status === 'running') return `Running ${last.step.name}…`;
+	if (last?.kind === 'tool' && last.step.status === 'drafting') return `Writing ${last.step.name || 'a tool'} call…`;
 	if (last?.kind === 'text') return 'Writing…';
 	if (last?.kind === 'review' && !last.pass) return 'Trying again…';
 	return 'Thinking…';

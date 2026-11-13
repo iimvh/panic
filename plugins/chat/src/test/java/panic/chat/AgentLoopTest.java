@@ -37,6 +37,7 @@ import panic.llm.Message;
 import panic.llm.Provider;
 import panic.llm.Role;
 import panic.llm.ToolCall;
+import panic.llm.ToolCallDelta;
 import panic.llm.ToolSpec;
 import panic.llm.Usage;
 import panic.tools.Risk;
@@ -70,6 +71,17 @@ class AgentLoopTest {
     @Override
     public Completion complete(ChatRequest r, Signal s) {
       return stream(r, s, d -> { });
+    }
+
+    /** Reports every scripted call as one piece, the way a provider that sends whole calls does. */
+    @Override
+    public Completion stream(ChatRequest r, Signal s, Consumer<String> onDelta, Consumer<ToolCallDelta> onToolDelta) {
+      Completion c = stream(r, s, onDelta);
+      for (int i = 0; i < c.toolCalls().size(); i++) {
+        ToolCall call = c.toolCalls().get(i);
+        onToolDelta.accept(new ToolCallDelta(i, call.id(), call.name(), call.arguments()));
+      }
+      return c;
     }
 
     @Override
@@ -152,6 +164,18 @@ class AgentLoopTest {
 
   private static List<Message> toolMessages(ChatRequest r) {
     return r.messages().stream().filter(m -> m.role() == Role.TOOL).toList();
+  }
+
+  @Test
+  void piecesOfToolCallsComeBeforeTheirSteps() {
+    tools(ECHO);
+    chat(ChatConfig.DEFAULT);
+    llm.then(r -> calls(call("a", "echo", "{\"text\":\"hi\"}"))).then(r -> answer("done"));
+    List<String> seen = new java.util.concurrent.CopyOnWriteArrayList<>();
+    Chat.ask(root, new Chat.Ask("c", "go", new CancelToken(), d -> seen.add("text " + d),
+        s -> seen.add((s.done() ? "done " : "run ") + s.call().id()), null,
+        d -> seen.add("piece " + d.index() + " " + d.name() + " " + d.arguments()))).orElseThrow();
+    assertEquals(List.of("piece 0 echo {\"text\":\"hi\"}", "run a", "done a", "text done"), seen);
   }
 
   @Test

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from './chat.svelte';
-import { activity, appendText, askApproval, createBatcher, duration, fromHistory, meta, review, toolStep, type Part } from './reply';
+import { activity, appendText, askApproval, createBatcher, duration, endDrafts, fromHistory, meta, review, size, toolDelta, toolStep, type Part } from './reply';
 
 const steps = (m: Message) => (m.parts ?? []).flatMap((p) => (p.kind === 'tool' ? [p.step] : []));
 const kinds = (m: Message) => (m.parts ?? []).map((p: Part) => p.kind);
@@ -150,5 +150,48 @@ describe('fromHistory', () => {
 		]);
 		expect(out[1].parts?.[3]).toEqual({ kind: 'text', text: 'first' });
 		expect(out.map((m) => m.id)).toEqual([1, 2, 3, 4]);
+	});
+});
+
+describe('toolDelta', () => {
+	it('grows a draft until the call starts in its place', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '' };
+		appendText(m, 'Writing it.');
+		toolDelta(m, { index: 0, id: 'a', name: 'write_file', arguments: '{"path":' });
+		toolDelta(m, { index: 1, id: 'b', name: 'time', arguments: '{}' });
+		toolDelta(m, { index: 0, arguments: '"x"}' });
+		expect(steps(m).map((t) => [t.name, t.status, t.arguments])).toEqual([
+			['write_file', 'drafting', '{"path":"x"}'],
+			['time', 'drafting', '{}']
+		]);
+		expect(activity(m)).toBe('Writing time call…');
+
+		toolStep(m, { id: 'a', name: 'write_file', arguments: '{"path":"x"}', status: 'running' });
+		toolStep(m, { id: 'a', name: 'write_file', status: 'ok' });
+		toolStep(m, { id: 'b', name: 'time', arguments: '{}', status: 'running' });
+		expect(kinds(m)).toEqual(['text', 'tool', 'tool']);
+		expect(steps(m).map((t) => [t.name, t.status])).toEqual([
+			['write_file', 'ok'],
+			['time', 'running']
+		]);
+	});
+
+	it('takes the first draft when the pieces had no id', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '' };
+		toolDelta(m, { index: 0, name: 'time', arguments: '{}' });
+		toolStep(m, { id: 'call_0', name: 'time', status: 'running' });
+		expect(steps(m).map((t) => [t.id, t.status])).toEqual([['call_0', 'running']]);
+	});
+
+	it('marks drafts left at the end as not run', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '' };
+		toolDelta(m, { index: 0, id: 'a', name: 'write_file', arguments: '{' });
+		endDrafts(m);
+		expect(steps(m).map((t) => [t.status, t.content])).toEqual([['error', 'not run']]);
+	});
+
+	it('sizes the arguments', () => {
+		expect(size('abc')).toBe('3 B');
+		expect(size('x'.repeat(3277))).toBe('3.2 KB');
 	});
 });

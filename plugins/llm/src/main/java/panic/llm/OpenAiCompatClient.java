@@ -92,7 +92,14 @@ public final class OpenAiCompatClient implements ChatModel {
 
   @Override
   public Completion stream(ChatRequest request, Signal signal, Consumer<String> onDelta) {
+    return stream(request, signal, onDelta, d -> { });
+  }
+
+  @Override
+  public Completion stream(ChatRequest request, Signal signal, Consumer<String> onDelta,
+      Consumer<ToolCallDelta> onToolDelta) {
     Objects.requireNonNull(onDelta, "onDelta");
+    Objects.requireNonNull(onToolDelta, "onToolDelta");
     HttpResponse<InputStream> response = sendChecked(post("/chat/completions", body(request, true)), signal);
 
     ToolCallParts calls = new ToolCallParts();
@@ -115,7 +122,7 @@ public final class OpenAiCompatClient implements ChatModel {
           text.append(piece);
           onDelta.accept(piece);
         }
-        calls.add(choice.path("delta").path("tool_calls"));
+        calls.add(choice.path("delta").path("tool_calls"), onToolDelta);
         String reason = textOrNull(choice.path("finish_reason"));
         if (reason != null) finish[0] = reason;
       });
@@ -324,16 +331,23 @@ public final class OpenAiCompatClient implements ChatModel {
     private final List<String[]> parts = new ArrayList<>(); // {id, name, arguments}
     private final Map<Integer, String[]> byIndex = new HashMap<>();
 
-    void add(JsonNode deltas) {
+    /** Adds the pieces of one chunk, and reports each one that brings something to {@code out}. */
+    void add(JsonNode deltas, Consumer<ToolCallDelta> out) {
       for (JsonNode d : deltas) {
         String id = textOrNull(d.path("id"));
         String[] part = find(d.path("index"), id);
-        if (id != null && !id.isEmpty()) part[0] = id;
+        String newId = null;
+        if (id != null && !id.isEmpty() && !id.equals(part[0])) newId = part[0] = id;
         JsonNode fn = d.path("function");
         String name = textOrNull(fn.path("name"));
-        if (name != null && !name.isEmpty()) part[1] = name;
+        String newName = null;
+        if (name != null && !name.isEmpty() && !name.equals(part[1])) newName = part[1] = name;
         JsonNode args = fn.path("arguments");
-        if (!args.isMissingNode() && !args.isNull()) part[2] += args.isTextual() ? args.asText() : args.toString();
+        String piece = args.isMissingNode() || args.isNull() ? "" : args.isTextual() ? args.asText() : args.toString();
+        part[2] += piece;
+        if (newId != null || newName != null || !piece.isEmpty()) {
+          out.accept(new ToolCallDelta(parts.indexOf(part), newId, newName, piece));
+        }
       }
     }
 

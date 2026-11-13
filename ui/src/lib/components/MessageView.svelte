@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Message } from '$lib/chat.svelte';
-	import { activity, duration } from '$lib/reply';
+	import { activity, duration, size } from '$lib/reply';
 	import ApprovalCard from './ApprovalCard.svelte';
 	import TextPart from './TextPart.svelte';
 
@@ -50,8 +50,14 @@
 					{@const tool = part.step}
 					<div class="tool {tool.status}" title={tool.content ?? tool.arguments}>
 						<span class="name">{tool.name}</span>
-						<span class="args">{tool.arguments}</span>
-						<span class="status">{tool.status === 'running' ? '…' : tool.status}</span>
+						{#if tool.status === 'drafting'}
+							<!-- the end of what is being written, right-aligned so the newest text shows -->
+							<span class="args tail"><bdi>{tool.arguments.slice(-200)}</bdi></span>
+							<span class="status">writing · {size(tool.arguments)}</span>
+						{:else}
+							<span class="args">{tool.arguments}</span>
+							<span class="status">{tool.status === 'running' ? '…' : tool.status}</span>
+						{/if}
 					</div>
 				{:else if part.kind === 'review'}
 					<div class="review" class:rejected={!part.pass}>
@@ -120,6 +126,14 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	/* clip the start, not the end: the newest text stays in view */
+	.tool .tail {
+		direction: rtl;
+	}
+	.tool.drafting {
+		border-left-style: dashed;
+		border-left-color: var(--accent);
 	}
 	.tool.running {
 		border-left-color: var(--accent);

@@ -87,6 +87,12 @@ public final class LlmPlugin implements ConfigPlugin<LlmConfig> {
       return provider.chat().stream(defaults(request), signal, onDelta);
     }
 
+    @Override
+    public Completion stream(ChatRequest request, Signal signal, Consumer<String> onDelta,
+        Consumer<ToolCallDelta> onToolDelta) {
+      return provider.chat().stream(defaults(request), signal, onDelta, onToolDelta);
+    }
+
     private ChatRequest defaults(ChatRequest request) {
       return request.withDefaults(cfg.model(), cfg.temperature(), cfg.maxTokens());
     }

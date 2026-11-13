@@ -1,5 +1,5 @@
 import { ApiError, getHistory, getState, postApproval, putSettings, stream, type State } from './api';
-import { appendText, askApproval, createBatcher, duration, fromHistory, meta, review, toolStep, type Approval, type Part } from './reply';
+import { appendText, askApproval, createBatcher, duration, endDrafts, fromHistory, meta, review, toolDelta, toolStep, type Approval, type Part } from './reply';
 import { sessionId } from './session';
 
 export type Message = {
@@ -97,14 +97,18 @@ class Chat {
 				const d = data as Record<string, unknown>;
 				if (event === 'delta') return text$.push(String(d.text ?? ''));
 				text$.flush();
-				if (event === 'tool') toolStep(reply, d);
+				if (event === 'tool_delta') toolDelta(reply, d);
+				else if (event === 'tool') toolStep(reply, d);
 				else if (event === 'review') review(reply, d);
 				else if (event === 'approve') askApproval(reply, d);
 				else if (event === 'done') reply.meta = meta(d);
 				else if (event === 'unavailable') fail(reply, 'No LLM is connected. Open Settings to pick a provider with an API key.');
 				else if (event === 'error') fail(reply, String(d.message));
 				else if (event === 'cancelled') reply.meta = 'stopped';
-			}, this.#abort?.signal).finally(() => text$.flush())
+			}, this.#abort?.signal).finally(() => {
+				text$.flush();
+				endDrafts(reply);
+			})
 		);
 		reply.meta = [reply.meta, duration(Date.now() - (reply.startedAt ?? Date.now()))].filter(Boolean).join(' · ');
 		if (!this.state?.connected) void this.refresh();

@@ -193,8 +193,15 @@ class OpenAiCompatClientTest {
         "{\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}",
         "[DONE]"))) {
       List<String> deltas = new ArrayList<>();
-      Completion c = new OpenAiCompatClient("fake", server.url(), "k").stream(HELLO, new CancelToken(), deltas::add);
+      List<ToolCallDelta> pieces = new ArrayList<>();
+      Completion c = new OpenAiCompatClient("fake", server.url(), "k")
+          .stream(HELLO, new CancelToken(), deltas::add, pieces::add);
       assertEquals(List.of("Checking"), deltas, "tool calls are not text deltas");
+      assertEquals(List.of(
+          new ToolCallDelta(0, "a", "weather", ""),
+          new ToolCallDelta(0, null, null, "{\"ci"),
+          new ToolCallDelta(1, "b", "time", "{}"),
+          new ToolCallDelta(0, null, null, "ty\":\"Hue\"}")), pieces);
       assertEquals("Checking", c.text());
       assertEquals("tool_calls", c.finishReason());
       assertEquals(List.of(new ToolCall("a", "weather", "{\"city\":\"Hue\"}"), new ToolCall("b", "time", "{}")),
@@ -210,9 +217,13 @@ class OpenAiCompatClientTest {
             + "\"arguments\":\"{\\\"city\\\":\\\"Hue\\\"}\"}},{\"id\":\"x2\",\"function\":{\"name\":\"time\","
             + "\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}",
         "[DONE]"))) {
-      Completion c = new OpenAiCompatClient("fake", server.url(), "k").stream(HELLO, new CancelToken(), d -> { });
+      List<ToolCallDelta> pieces = new ArrayList<>();
+      Completion c = new OpenAiCompatClient("fake", server.url(), "k")
+          .stream(HELLO, new CancelToken(), d -> { }, pieces::add);
       assertEquals(List.of(new ToolCall("x1", "weather", "{\"city\":\"Hue\"}"), new ToolCall("x2", "time", "{}")),
           c.toolCalls());
+      assertEquals(List.of(new ToolCallDelta(0, "x1", "weather", "{\"city\":\"Hue\"}"),
+          new ToolCallDelta(1, "x2", "time", "{}")), pieces, "a whole call is one piece");
     }
   }
 

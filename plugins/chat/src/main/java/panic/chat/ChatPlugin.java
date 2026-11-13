@@ -166,7 +166,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       while (true) {
         steps++;
         ChatRequest request = request();
-        last = llm.stream(request, signal, ask.onDelta());
+        last = llm.stream(request, signal, ask.onDelta(), ask.onToolDelta());
         tokens.observe(Tokens.raw(request), last.usage().promptTokens());
         count(last.usage());
         add(last.message());

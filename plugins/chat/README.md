@@ -98,7 +98,7 @@ all of a plugin's sections disappear when it is disposed. Chat does not require 
 | Key | Type | Meaning |
 | --- | --- | --- |
 | `Conversations.KEY` | service `Conversations` | `get(id)` returns the history of a session (created on first use) |
-| `Chat.ASK` | hook `Ask(conversationId, text, signal, onDelta, onStep?, onReview?) → Reply(text, model, finishReason, usage, stop, steps, toolCalls, review)` | Ask the bot. Use `Chat.ask(ctx, ask)`: it is empty when no LLM is connected and rethrows the handler's own exception. `onStep` hears every tool call when it starts (`result == null`) and when it ends; `onReview` hears every `Reviewed` verdict. Callbacks run in the order things happen |
+| `Chat.ASK` | hook `Ask(conversationId, text, signal, onDelta, onStep?, onReview?, onToolDelta?) → Reply(text, model, finishReason, usage, stop, steps, toolCalls, review)` | Ask the bot. Use `Chat.ask(ctx, ask)`: it is empty when no LLM is connected and rethrows the handler's own exception. `onStep` hears every tool call when it starts (`result == null`) and when it ends; `onReview` hears every `Reviewed` verdict; `onToolDelta` hears the pieces of a tool call while the model writes it (`ToolCallDelta`, before its step starts). Callbacks run in the order things happen |
 | `Chat.REVIEW` | hook `Review(conversationId, question, turn, answer, attempt, signal) → Verdict(pass, reason, usage)` | Judges a final answer. No answer accepts it; a rejection sends `reason` back to the model |
 | `Chat.REVIEWED` | event `Reviewed(conversationId, attempt, verdict)` | Emitted after each verdict (auditing...) |
 | `Chat.TURN` | event `Turn(conversationId, question, reply)` | Emitted after every completed exchange (logging, memory, cost tracking...) |

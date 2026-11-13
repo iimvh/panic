@@ -32,6 +32,7 @@ The API carries tools; it does not run them (that is the caller's job).
 | `Completion.toolCalls()` | `ToolCall(id, name, arguments)` the model asked for (`finishReason` is `tool_calls`); `arguments` is raw JSON text, not validated |
 | `Completion.message()` | The answer as the assistant `Message` to append to the history |
 | `Message.tool(callId, content)` | The result of one call, sent back with role `tool` |
+| `ChatModel.stream(request, signal, onDelta, onToolDelta)` | Also hands each piece of a tool call to `onToolDelta` as it streams: `ToolCallDelta(index, id?, name?, arguments)`, `arguments` being only the new text. Progress only (the calls still come in the `Completion`); the default reports nothing |
 
 Streams hand only text to `onDelta`; tool calls are rebuilt from their fragments and returned in the
 `Completion`.

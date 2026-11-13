@@ -620,6 +620,37 @@ class WebPluginTest {
   }
 
   @Test
+  void conversationsAreListedAndDeleted() throws Exception {
+    assertEquals("[]", get("/api/conversations").body());
+    send("POST", "/api/chat", "{\"session\":\"one\",\"text\":\"first chat\"}").body();
+    Thread.sleep(20);
+    send("POST", "/api/chat", "{\"session\":\"two\",\"text\":\"second chat\\nmore\"}").body();
+
+    JsonNode list = Json.parseOrNull(get("/api/conversations").body());
+    assertEquals(List.of("two", "one"), Json.MAPPER.convertValue(list.findValuesAsText("id"), List.class));
+    assertEquals("second chat", list.path(0).path("title").asText());
+    assertTrue(list.path(0).path("updatedAt").asLong() >= list.path(1).path("updatedAt").asLong());
+
+    assertEquals(200, send("DELETE", "/api/conversations?session=one", "").statusCode());
+    assertEquals(List.of("two"),
+        Json.MAPPER.convertValue(Json.parseOrNull(get("/api/conversations").body()).findValuesAsText("id"), List.class));
+    assertEquals(0, Json.parseOrNull(get("/api/history?session=one").body()).size());
+    assertEquals(404, send("DELETE", "/api/conversations?session=one", "").statusCode());
+    assertEquals(400, send("DELETE", "/api/conversations?session=..", "").statusCode());
+    assertEquals(405, send("PUT", "/api/conversations", "{}").statusCode());
+  }
+
+  @Test
+  void aConversationWithAnAnswerRunningCannotBeDeleted() throws Exception {
+    try (BufferedReader in = slowAnswer()) {
+      assertEquals(409, send("DELETE", "/api/conversations?session=s", "").statusCode());
+      fake.released.countDown();
+      rest(in);
+    }
+    assertEquals(200, send("DELETE", "/api/conversations?session=s", "").statusCode());
+  }
+
+  @Test
   void aSessionRunsOneAnswerAtATime() throws Exception {
     try (BufferedReader in = slowAnswer()) {
       assertEquals(409, send("POST", "/api/chat", "{\"session\":\"s\",\"text\":\"again\"}").statusCode());

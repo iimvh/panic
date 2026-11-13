@@ -80,6 +80,10 @@ final class Api {
       case "/api/state" -> only(ex, method, "GET", () -> Http.json(ex, 200, state()));
       case "/api/models" -> only(ex, method, "GET", () -> models(ex, signal));
       case "/api/history" -> only(ex, method, "GET", () -> history(ex));
+      case "/api/conversations" -> {
+        if (method.equals("DELETE")) only(ex, method, "DELETE", () -> deleteConversation(ex));
+        else only(ex, method, "GET", () -> conversations(ex));
+      }
       case "/api/trace" -> only(ex, method, "GET", () -> trace(ex));
       case "/api/chat" -> only(ex, method, "POST", () -> chat(ex, signal));
       case "/api/stream" -> only(ex, method, "GET", () -> follow(ex, signal));
@@ -154,6 +158,36 @@ final class Api {
       if (m.free() == null) o.putNull("free"); else o.put("free", m.free());
     }
     Http.json(ex, 200, out);
+  }
+
+  /**
+   * The conversations a page can open (their ids are session ids), newest first: {@code [{id, title,
+   * updatedAt}]}. Sub-agents' conversations are not listed (see {@link Conversations#list}).
+   */
+  private void conversations(HttpExchange ex) throws IOException {
+    ArrayNode out = Json.MAPPER.createArrayNode();
+    for (Conversations.Info i : ctx.get(Conversations.KEY).list()) {
+      if (!SESSION.matcher(i.id()).matches()) continue;
+      out.addObject().put("id", i.id()).put("title", i.title()).put("updatedAt", i.updatedAt());
+    }
+    Http.json(ex, 200, out);
+  }
+
+  /**
+   * Deletes a conversation with what works for it (its plan and traces go too). {@code 409} while an answer is
+   * running in it, {@code 404} when there is nothing to delete.
+   */
+  private void deleteConversation(HttpExchange ex) throws IOException {
+    String session = session(Http.query(ex).get("session"));
+    if (runs.containsKey(session)) {
+      Http.error(ex, 409, "an answer is running in this conversation; stop it first");
+      return;
+    }
+    if (!ctx.get(Conversations.KEY).delete(session)) {
+      Http.error(ex, 404, "no such conversation");
+      return;
+    }
+    Http.json(ex, 200, Json.object().put("ok", true));
   }
 
   /**

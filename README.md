@@ -343,6 +343,8 @@ The API is small and uses only plain JSON and SSE:
 | `GET /api/state` | Provider, model, connection, providers and the commands available now |
 | `GET /api/models?filter=` | Models of the connected provider (`free`, or part of an id) |
 | `GET /api/history?session=` | A session's conversation |
+| `GET /api/conversations` | The conversations, newest first (`id`, `title`, `updatedAt`) |
+| `DELETE /api/conversations?session=` | Deletes a conversation with its sub-agents' conversations, plan and traces (`409` while an answer runs) |
 | `POST /api/chat` `{session, text}` | SSE: `delta`… then `done`, `unavailable`, `error` or `cancelled` |
 | `POST /api/command` `{session, line}` | SSE: command output as `delta`… then `done`, `unknown`, `usage` or `error` |
 | `PUT /api/settings` `{provider?, model?}` | Switches provider or model and returns the new state |

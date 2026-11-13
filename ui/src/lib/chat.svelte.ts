@@ -1,5 +1,5 @@
 import { ApiError, getHistory, getState, postApproval, putSettings, stream, type State } from './api';
-import { appendText, askApproval, createBatcher, duration, meta, review, toolStep, type Approval, type Part } from './reply';
+import { appendText, askApproval, createBatcher, duration, fromHistory, meta, review, toolStep, type Approval, type Part } from './reply';
 import { sessionId } from './session';
 
 export type Message = {
@@ -34,13 +34,7 @@ class Chat {
 		try {
 			const [state, history] = await Promise.all([getState(), getHistory(this.session)]);
 			this.state = state;
-			this.messages = history
-				.filter((m) => m.role !== 'system')
-				.map((m) =>
-					m.role === 'assistant'
-						? { id: nextId++, role: 'assistant', text: m.content, parts: [{ kind: 'text', text: m.content }] }
-						: { id: nextId++, role: 'user', text: m.content }
-				);
+			this.messages = fromHistory(history, () => nextId++);
 			this.offline = null;
 		} catch (e) {
 			this.offline = errorText(e);

@@ -1,3 +1,4 @@
+import type { HistoryMessage } from './api';
 import type { Message } from './chat.svelte';
 
 /** One tool call of the bot, as the `tool` server-sent events describe it. */
@@ -74,6 +75,43 @@ export function toolStep(m: Message, d: Record<string, unknown>) {
 export function review(m: Message, d: Record<string, unknown>) {
 	m.parts ??= [];
 	m.parts.push({ kind: 'review', attempt: Number(d.attempt ?? 0), pass: d.pass === true, reason: String(d.reason ?? '') });
+}
+
+/**
+ * Folds stored messages into what the page shows: each question, then one answer holding the text, tool
+ * calls, their results and review rejections of that turn, in order. `id` numbers the messages.
+ */
+export function fromHistory(history: HistoryMessage[], id: () => number): Message[] {
+	const out: Message[] = [];
+	let answer: Message | null = null;
+	const reply = () => {
+		if (!answer) {
+			answer = { id: id(), role: 'assistant', text: '', parts: [] };
+			out.push(answer);
+		}
+		return answer;
+	};
+	let attempt = 0;
+	for (const m of history) {
+		if (m.role === 'user') {
+			out.push({ id: id(), role: 'user', text: m.content });
+			answer = null;
+			attempt = 0;
+		} else if (m.role === 'assistant') {
+			const a = reply();
+			if (m.content) appendText(a, m.content);
+			for (const c of m.toolCalls ?? []) toolStep(a, { ...c, status: 'running' });
+		} else if (m.role === 'tool') {
+			const a = reply();
+			const call = (a.parts ?? []).find((p) => p.kind === 'tool' && p.step.id === m.toolCallId && p.step.status === 'running');
+			const name = call?.kind === 'tool' ? call.step.name : '';
+			const args = call?.kind === 'tool' ? call.step.arguments : '';
+			toolStep(a, { id: m.toolCallId, name, arguments: args, status: m.status, content: m.content });
+		} else if (m.role === 'review') {
+			review(reply(), { attempt: ++attempt, pass: false, reason: m.reason });
+		}
+	}
+	return out;
 }
 
 /** What a streaming answer is doing right now, for the status line. */

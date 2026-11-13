@@ -19,7 +19,7 @@ that left and cancels its answer.
 | --- | --- |
 | `GET /api/state` | hooks `Llm.CONFIG`, `Llm.CURRENT`, `Providers.STATUS`; `Commands.list` |
 | `GET /api/models?filter=` | hook `Llm.CURRENT` |
-| `GET /api/history?session=` | service `Conversations.KEY` (questions and answers only; tool messages are left out, and so are turns already compacted into the conversation summary) |
+| `GET /api/history?session=` | service `Conversations.KEY`: `user {content}`, `assistant {content, toolCalls[]}`, `tool {toolCallId, status: ok/error, content}` (content cut like `tool` events), `review {reason}` for a rejection sent back to the model (`Chat.REVIEW_FEEDBACK_PREFIX`; errors are told by `Chat.TOOL_ERROR_PREFIX`). Turns already compacted into the summary are left out |
 | `POST /api/chat {session, text}` → SSE `delta`, `tool`, `review`, `done`, ... | `Chat.ask`, events in the order they happen (`tool`: `{id, name, arguments, status: running/ok/error, content?}` from `onStep`; `review`: `{attempt, pass, reason}` from `onReview`; `done` adds `stop`, `toolCalls` and `review` when the answer was reviewed) |
 | `POST /api/command {session, line}` → SSE | `Commands.run` |
 | `POST /api/approve {session, id, allow}` | answers an SSE `approve` (`404` when it is unknown, already answered or expired) |

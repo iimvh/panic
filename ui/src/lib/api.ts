@@ -10,7 +10,12 @@ export type State = {
 	commands: CommandInfo[];
 };
 export type Model = { id: string; name: string; contextLength: number; free: boolean | null };
-export type HistoryMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+/** One stored message: questions, answers with their tool calls, tool results and reviewer rejections. */
+export type HistoryMessage =
+	| { role: 'user'; content: string }
+	| { role: 'assistant'; content: string; toolCalls?: { id: string; name: string; arguments: string }[] }
+	| { role: 'tool'; toolCallId: string; status: 'ok' | 'error'; content: string }
+	| { role: 'review'; reason: string };
 
 export class ApiError extends Error {
 	constructor(

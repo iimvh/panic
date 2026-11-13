@@ -229,6 +229,11 @@ class WebPluginTest {
     assertEquals(1, rejected.path("attempt").asInt());
     assertTrue(ev.get(5).data().path("pass").asBoolean());
     assertEquals("fine", ev.get(6).data().path("review").asText());
+
+    JsonNode history = Json.parseOrNull(get("/api/history?session=r").body());
+    assertEquals(List.of("user", "assistant", "review", "assistant"),
+        Json.MAPPER.convertValue(history.findValuesAsText("role"), List.class), history.toString());
+    assertEquals("no tests", history.path(2).path("reason").asText().lines().findFirst().orElse(""));
   }
 
   /** Offers {@code echo} with risk write, so every call of it asks the browser. */
@@ -312,7 +317,7 @@ class WebPluginTest {
   }
 
   @Test
-  void toolCallsAreStreamedAndHiddenFromHistory() throws Exception {
+  void toolCallsAreStreamedAndKeptInHistory() throws Exception {
     fake.useTool = true;
     root.plugin("echo", ctx -> {
       Tools.register(ctx, new Tool() {
@@ -343,8 +348,15 @@ class WebPluginTest {
     assertEquals("done", ev.get(4).data().path("stop").asText());
 
     JsonNode history = Json.parseOrNull(get("/api/history?session=t").body());
-    assertEquals(2, history.size(), "only the question and the answer: " + history);
-    assertEquals("Hello m1", history.path(1).path("content").asText());
+    assertEquals(List.of("user", "assistant", "tool", "assistant"),
+        Json.MAPPER.convertValue(history.findValuesAsText("role"), List.class), history.toString());
+    JsonNode call = history.path(1).path("toolCalls").path(0);
+    assertEquals("t1", call.path("id").asText());
+    assertEquals("echo", call.path("name").asText());
+    assertEquals("t1", history.path(2).path("toolCallId").asText());
+    assertEquals("ok", history.path(2).path("status").asText());
+    assertEquals("pong", history.path(2).path("content").asText());
+    assertEquals("Hello m1", history.path(3).path("content").asText());
   }
 
   @Test

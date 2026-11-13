@@ -36,7 +36,7 @@ import panic.llm.LlmException;
 import panic.llm.Message;
 import panic.llm.ModelInfo;
 import panic.llm.Providers;
-import panic.llm.Role;
+import panic.llm.ToolCall;
 import panic.tools.Tools;
 
 /**
@@ -145,13 +145,40 @@ final class Api {
     Http.json(ex, 200, out);
   }
 
+  /**
+   * The stored conversation, as the page shows it: questions, answers with their tool calls, tool results
+   * (cut like {@code tool} events, with {@code status} ok/error) and reviewer rejections ({@code role: review}).
+   */
   private void history(HttpExchange ex) throws IOException {
     String session = session(Http.query(ex).get("session"));
     ArrayNode out = Json.MAPPER.createArrayNode();
     for (Message m : ctx.get(Conversations.KEY).get(session).recent(0)) {
-      // tool traffic is for the model; the page shows the questions and the answers
-      if (m.role() == Role.TOOL || m.content().isBlank()) continue;
-      out.addObject().put("role", m.role().wire()).put("content", m.content());
+      switch (m.role()) {
+        case USER -> {
+          if (m.content().startsWith(Chat.REVIEW_FEEDBACK_PREFIX)) {
+            String reason = m.content().substring(Chat.REVIEW_FEEDBACK_PREFIX.length());
+            int nl = reason.indexOf('\n');
+            out.addObject().put("role", "review").put("reason", nl < 0 ? reason : reason.substring(0, nl));
+          } else {
+            out.addObject().put("role", "user").put("content", m.content());
+          }
+        }
+        case ASSISTANT -> {
+          if (m.content().isBlank() && m.toolCalls().isEmpty()) continue;
+          ObjectNode o = out.addObject().put("role", "assistant").put("content", m.content());
+          ArrayNode calls = o.putArray("toolCalls");
+          for (ToolCall c : m.toolCalls()) {
+            calls.addObject().put("id", c.id()).put("name", c.name()).put("arguments", c.arguments());
+          }
+        }
+        case TOOL -> {
+          boolean error = m.content().startsWith(Chat.TOOL_ERROR_PREFIX);
+          String content = error ? m.content().substring(Chat.TOOL_ERROR_PREFIX.length()) : m.content();
+          out.addObject().put("role", "tool").put("toolCallId", m.toolCallId())
+              .put("status", error ? "error" : "ok").put("content", cut(content));
+        }
+        default -> { }
+      }
     }
     Http.json(ex, 200, out);
   }
@@ -197,9 +224,11 @@ final class Api {
     ObjectNode o = Json.object().put("id", step.call().id()).put("name", step.call().name())
         .put("arguments", step.call().arguments());
     if (!step.done()) return o.put("status", "running");
-    String content = step.result().content();
-    if (content.length() > MAX_STEP_CONTENT) content = content.substring(0, MAX_STEP_CONTENT) + "…";
-    return o.put("status", step.result().isError() ? "error" : "ok").put("content", content);
+    return o.put("status", step.result().isError() ? "error" : "ok").put("content", cut(step.result().content()));
+  }
+
+  private static String cut(String content) {
+    return content.length() > MAX_STEP_CONTENT ? content.substring(0, MAX_STEP_CONTENT) + "…" : content;
   }
 
   private void command(HttpExchange ex, Signal signal) throws IOException {

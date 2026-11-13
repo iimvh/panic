@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from './chat.svelte';
-import { activity, appendText, askApproval, createBatcher, duration, meta, review, toolStep, type Part } from './reply';
+import { activity, appendText, askApproval, createBatcher, duration, fromHistory, meta, review, toolStep, type Part } from './reply';
 
 const steps = (m: Message) => (m.parts ?? []).flatMap((p) => (p.kind === 'tool' ? [p.step] : []));
 const kinds = (m: Message) => (m.parts ?? []).map((p: Part) => p.kind);
@@ -122,5 +122,33 @@ describe('askApproval', () => {
 
 		toolStep(m, { id: 'a', name: 'write_file', status: 'error', content: 'write_file: denied by the user' });
 		expect(m.approval).toBeUndefined();
+	});
+});
+
+describe('fromHistory', () => {
+	it('folds a turn into one answer with its tool calls and reviews', () => {
+		let n = 0;
+		const out = fromHistory(
+			[
+				{ role: 'user', content: 'q' },
+				{ role: 'assistant', content: 'Let me look.', toolCalls: [{ id: 'a', name: 'read_file', arguments: '{}' }, { id: 'b', name: 'nope', arguments: '{}' }] },
+				{ role: 'tool', toolCallId: 'a', status: 'ok', content: 'text' },
+				{ role: 'tool', toolCallId: 'b', status: 'error', content: 'unknown tool' },
+				{ role: 'assistant', content: 'first' },
+				{ role: 'review', reason: 'no tests' },
+				{ role: 'assistant', content: 'second' },
+				{ role: 'user', content: 'q2' },
+				{ role: 'assistant', content: 'a2' }
+			],
+			() => ++n
+		);
+		expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+		expect(kinds(out[1])).toEqual(['text', 'tool', 'tool', 'text', 'review', 'text']);
+		expect(steps(out[1]).map((t) => [t.name, t.status, t.content])).toEqual([
+			['read_file', 'ok', 'text'],
+			['nope', 'error', 'unknown tool']
+		]);
+		expect(out[1].parts?.[3]).toEqual({ kind: 'text', text: 'first' });
+		expect(out.map((m) => m.id)).toEqual([1, 2, 3, 4]);
 	});
 });

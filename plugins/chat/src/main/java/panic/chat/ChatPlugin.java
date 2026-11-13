@@ -178,7 +178,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
             break;
           }
           reviews++;
-          add(Message.user("A review of your answer rejected it: " + verdict.reason()
+          add(Message.user(Chat.REVIEW_FEEDBACK_PREFIX + verdict.reason()
               + "\nFix what is missing (use tools if needed), then give your final answer again."));
           continue;
         }
@@ -191,7 +191,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         // every call gets a result, even when the turn stops here, so the history stays valid
         for (ToolCall call : last.toolCalls()) {
           if (!Chat.DONE.equals(stop)) {
-            add(Message.tool(call.id(), "error: not run, the turn was stopped (" + stop + ")"));
+            add(Message.tool(call.id(), Chat.TOOL_ERROR_PREFIX + "not run, the turn was stopped (" + stop + ")"));
           } else {
             stop = step(call);
           }
@@ -379,7 +379,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         toolCalls++;
         result = truncate(runTool(call));
       }
-      add(Message.tool(call.id(), result.isError() ? "error: " + result.content() : result.content()));
+      add(Message.tool(call.id(), result.isError() ? Chat.TOOL_ERROR_PREFIX + result.content() : result.content()));
       report(new Chat.Step(ask.conversationId(), call, result));
       return stop;
     }

@@ -69,6 +69,15 @@ public final class Chat {
   public static final String REJECTED = "rejected";
 
   /**
+   * Starts the content of a {@code TOOL} message whose call failed (unknown tool, bad arguments, denied, not
+   * run...), so a reader of the stored conversation can tell failures from results.
+   */
+  public static final String TOOL_ERROR_PREFIX = "error: ";
+
+  /** Starts the user message that sends a reviewer's rejection back to the model (stored with the turn). */
+  public static final String REVIEW_FEEDBACK_PREFIX = "A review of your answer rejected it: ";
+
+  /**
    * The answer. {@code text} is the bot's last message; {@code usage} adds up every model call of the turn
    * (reviews included); {@code stop} says why it ended ({@link #DONE}, {@link #MAX_STEPS}, {@link #BUDGET},
    * {@link #LOOP}, {@link #REJECTED}). {@code review} is the reason of the last verdict, null when nobody

@@ -303,7 +303,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         signal.throwIfCancelled();
       }
       if (verdict.isEmpty()) {
-        s.attr("verdict", "none").end();
+        s.discard(); // nobody judged: no review happened
         return null;
       }
       Usage cost = verdict.get().usage();

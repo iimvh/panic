@@ -50,6 +50,11 @@ class TraceTest {
     s.fail(new IllegalStateException("late"));
     assertEquals(1, spans.size());
     assertEquals("abc", spans.get(0).traceId());
+
+    OpenSpan dropped = Trace.open(root, "abc", null, "nothing");
+    dropped.discard();
+    dropped.end();
+    assertEquals(1, spans.size(), "a discarded span is never emitted");
   }
 
   @Test

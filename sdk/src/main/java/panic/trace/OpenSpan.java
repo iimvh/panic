@@ -7,7 +7,7 @@ import java.util.Map;
 
 /**
  * A span still running. Created by {@link Trace#open}; emitted on {@link Trace#SPAN} by the first call to
- * {@link #end()} or {@link #fail(Throwable)}, later calls do nothing. Not thread-safe: it belongs to the
+ * {@link #end()} or one of the {@code fail} methods, later calls do nothing; {@link #discard()} ends it unseen. Not thread-safe: it belongs to the
  * thread doing the work, which is where the caller sets attributes and ends it.
  */
 public final class OpenSpan {
@@ -61,6 +61,11 @@ public final class OpenSpan {
   /** Ends the span as OK. */
   public void end() {
     finish(Span.Status.OK, null);
+  }
+
+  /** Ends the span without emitting it: the work turned out not to be worth a span (nobody answered...). */
+  public void discard() {
+    ended = true;
   }
 
   /** Ends the span as ERROR with this message (a failure reported as a result, not thrown). */

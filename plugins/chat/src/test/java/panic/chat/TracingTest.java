@@ -156,6 +156,14 @@ class TracingTest {
   }
 
   @Test
+  void withoutAReviewerThereIsNoReviewSpan() {
+    chat(ChatConfig.DEFAULT);
+    llm.then(r -> answer("hello"));
+    ask("hi", null, new CancelToken());
+    assertEquals(List.of("llm", "turn"), spans.stream().map(Span::name).toList());
+  }
+
+  @Test
   void compactionIsASpan() {
     chat(new ChatConfig(null, 0, true, 0, 0, 0, 0, 0, 400, true));
     // no reported usage on answers, so the token estimate is not corrected (as in ContextPluginTest)

@@ -105,7 +105,7 @@ The trace id is `Ask.traceId` when the asker gives one (web does, to tell the UI
 | `turn` | none (root) | `conversationId`, `question` (first 200 chars), `questionHash` (`Chat.questionHash`), `model`, `stop`, `steps`, `toolCalls`, `promptTokens`, `completionTokens` (whole turn), `saved` |
 | `llm` | `turn` | `step`, `messages`, `model`, `finishReason`, `promptTokens`, `completionTokens`, `toolCalls`, `firstTokenMicros` (first text or tool-call piece) |
 | `tool` | `turn` | `tool`, `callId`, `approvalMicros` (until the tool started), `outputChars`, `truncated`, `refused` (loop detection), `timedOut`. An error result is an `ERROR` span |
-| `review` | `turn` | `attempt`, `verdict` (`pass` / `fail` / `none`), `pass`, `reason`, `promptTokens`, `completionTokens` |
+| `review` | `turn` | `attempt`, `verdict` (`pass` / `fail`), `pass`, `reason`, `promptTokens`, `completionTokens`. Only when a reviewer judged (or failed) |
 | `compaction` | `turn` | `messages` (summarised), `kept`, `applied`, `model`, tokens. `ERROR` when the model gave no summary |
 
 A span ends `CANCELLED` when the turn was cancelled, `ERROR` when its work threw.

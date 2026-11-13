@@ -16,6 +16,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import panic.command.Commands;
 import panic.command.Hooks;
@@ -141,6 +142,8 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private String stop = Chat.DONE;
     private String model;
     private boolean saved;
+    /** Guards the asker's callbacks while tool calls run in parallel. */
+    private final Object callbacks = new Object();
     /** The root span of this turn's trace; open from {@link #run()} to its end. */
     private OpenSpan span;
 
@@ -216,14 +219,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         } else if (maxTokens() > 0 && usage.totalTokens() >= maxTokens()) {
           stop = Chat.BUDGET;
         }
-        // every call gets a result, even when the turn stops here, so the history stays valid
-        for (ToolCall call : last.toolCalls()) {
-          if (!Chat.DONE.equals(stop)) {
-            add(Message.tool(call.id(), Chat.TOOL_ERROR_PREFIX + "not run, the turn was stopped (" + stop + ")"));
-          } else {
-            stop = step(call);
-          }
-        }
+        stop = runCalls(last.toolCalls());
         if (!Chat.DONE.equals(stop)) break;
       }
 
@@ -485,31 +481,111 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       return text.isEmpty() ? null : Message.system(text);
     }
 
-    private void count(Usage u) {
+    /** Synchronized: calls running in parallel add their own usage. */
+    private synchronized void count(Usage u) {
       usage = new Usage(usage.promptTokens() + u.promptTokens(), usage.completionTokens() + u.completionTokens());
     }
 
-    /** Runs one tool call and records its result. Returns {@link Chat#LOOP} when the model is going round in circles. */
-    private String step(ToolCall call) {
-      String key = call.name() + " " + canonical(call.arguments());
-      repeats = key.equals(lastCall) ? repeats + 1 : 1;
-      lastCall = key;
+    /** A tool call of the model's reply, as planned before any runs: refused ({@code refusal}) or to run. */
+    private record Planned(ToolCall call, ToolResult refusal) {
+    }
 
-      report(new Chat.Step(ask.conversationId(), call, null));
-      OpenSpan s = span.child("tool").attr("tool", call.name()).attr("callId", call.id());
-      ToolResult result;
-      String next = Chat.DONE;
-      try {
+    /**
+     * Runs the calls of one model reply and adds their results in call order; returns how the turn goes on
+     * ({@link Chat#DONE}) or why it stops. Every call gets a result, even when the turn stops here, so the
+     * history stays valid: once the turn is stopped (a limit reached before the calls, or a call that shows a
+     * loop) the remaining calls get a "not run" result.
+     *
+     * Repeats are counted in call order first. Then the calls run one after the other, or up to
+     * {@code parallelTools} at once on tasks of this plugin, so disposal cancels and awaits them like the
+     * turn itself. Their steps are reported one at a time, in the order they start and end.
+     */
+    private String runCalls(List<ToolCall> calls) {
+      String next = stop;
+      List<Planned> planned = new ArrayList<>();
+      List<ToolCall> notRun = new ArrayList<>();
+      for (ToolCall call : calls) {
+        if (!Chat.DONE.equals(next)) {
+          notRun.add(call);
+          continue;
+        }
+        String key = call.name() + " " + canonical(call.arguments());
+        repeats = key.equals(lastCall) ? repeats + 1 : 1;
+        lastCall = key;
         if (ask.delegate() != null && !ask.delegate().allows(call.name())) {
-          result = ToolResult.error(call.name() + " is not available to this agent");
-          s.attr("refused", true);
+          planned.add(new Planned(call, ToolResult.error(call.name() + " is not available to this agent")));
         } else if (repeats > cfg.maxRepeats()) {
-          result = ToolResult.error("the same call was made " + repeats + " times in a row; change the arguments "
-              + "or answer with what you have");
-          s.attr("refused", true);
+          planned.add(new Planned(call, ToolResult.error("the same call was made " + repeats + " times in a row; "
+              + "change the arguments or answer with what you have")));
           if (repeats > cfg.maxRepeats() + 1) next = Chat.LOOP;
         } else {
           toolCalls++;
+          planned.add(new Planned(call, null));
+        }
+      }
+
+      ToolResult[] results = new ToolResult[planned.size()];
+      long running = planned.stream().filter(p -> p.refusal() == null).count();
+      if (cfg.parallelTools() <= 1 || running <= 1) {
+        for (int i = 0; i < planned.size(); i++) results[i] = step(planned.get(i));
+      } else {
+        runParallel(planned, results, (int) Math.min(cfg.parallelTools(), running));
+      }
+      for (int i = 0; i < planned.size(); i++) {
+        ToolResult r = results[i];
+        add(Message.tool(planned.get(i).call().id(), r.isError() ? Chat.TOOL_ERROR_PREFIX + r.content() : r.content()));
+      }
+      for (ToolCall call : notRun) {
+        add(Message.tool(call.id(), Chat.TOOL_ERROR_PREFIX + "not run, the turn was stopped (" + next + ")"));
+      }
+      return next;
+    }
+
+    /**
+     * Runs {@code planned} on {@code workers} tasks that take the next call until none is left. Waits for all of
+     * them; the first failure (a cancelled turn) is thrown once they are done, and an interrupted wait cancels
+     * them before it returns.
+     */
+    private void runParallel(List<Planned> planned, ToolResult[] results, int workers) {
+      AtomicInteger nextCall = new AtomicInteger();
+      List<Task<Void>> tasks = new ArrayList<>();
+      try {
+        for (int w = 0; w < workers; w++) {
+          tasks.add(ctx.spawn("tool-call", t -> {
+            int i;
+            while ((i = nextCall.getAndIncrement()) < planned.size()) results[i] = step(planned.get(i));
+            return null;
+          }));
+        }
+        RuntimeException failure = null;
+        for (Task<Void> task : tasks) {
+          try {
+            task.await();
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            signal.cancel();
+            throw new CancelledException("interrupted while tools were running");
+          } catch (RuntimeException e) {
+            if (failure == null) failure = e;
+          }
+        }
+        if (failure != null) throw failure;
+      } finally {
+        for (Task<Void> task : tasks) task.dispose(); // cancels and awaits what is still running
+      }
+    }
+
+    /** Runs one planned call (or reports its refusal) as a {@code tool} span; returns its result for the model. */
+    private ToolResult step(Planned planned) {
+      ToolCall call = planned.call();
+      report(new Chat.Step(ask.conversationId(), call, null));
+      OpenSpan s = span.child("tool").attr("tool", call.name()).attr("callId", call.id());
+      ToolResult result;
+      try {
+        if (planned.refusal() != null) {
+          result = planned.refusal();
+          s.attr("refused", true);
+        } else {
           ToolResult raw = runTool(call, s);
           count(raw.usage());
           if (raw.usage().totalTokens() > 0) {
@@ -524,9 +600,8 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       }
       if (result.isError()) s.fail(firstLine(result.content()));
       else s.end();
-      add(Message.tool(call.id(), result.isError() ? Chat.TOOL_ERROR_PREFIX + result.content() : result.content()));
       report(new Chat.Step(ask.conversationId(), call, result));
-      return next;
+      return result;
     }
 
     private static String firstLine(String text) {
@@ -590,16 +665,21 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
      * under the same call.
      */
     private void progress(ToolCall call, panic.tools.ToolProgress p) {
-      if (p.isText()) {
-        ask.onAgentDelta().accept(new Chat.AgentDelta(call.id(), p.agent(), p.text()));
-      } else {
-        ask.onStep().accept(new Chat.Step(ask.conversationId(), p.call(), p.result(), call.id(), p.agent()));
+      synchronized (callbacks) {
+        if (p.isText()) {
+          ask.onAgentDelta().accept(new Chat.AgentDelta(call.id(), p.agent(), p.text()));
+        } else {
+          ask.onStep().accept(new Chat.Step(ask.conversationId(), p.call(), p.result(), call.id(), p.agent()));
+        }
       }
     }
 
+    /** One at a time, also when calls run in parallel: an asker's callbacks need not be thread-safe. */
     private void report(Chat.Step step) {
-      ask.onStep().accept(step);
-      ctx.emit(Chat.STEP, step);
+      synchronized (callbacks) {
+        ask.onStep().accept(step);
+        ctx.emit(Chat.STEP, step);
+      }
     }
 
     private void add(Message m) {

@@ -7,7 +7,7 @@ Conversation history and the chat bot, an agent loop that calls tools.
 | Name | Config | Requires | Provides / registers |
 | --- | --- | --- | --- |
 | `conversations` | `ConversationsConfig { dir = ".panic/conversations", persist = true }` | none | service `Conversations.KEY` (on disk, or in memory with `persist: false`); command `reset` |
-| `chat` | `ChatConfig { systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats, contextTokens, compact, maxReviews }` | `Llm.KEY`, `Conversations.KEY` | hook `Chat.ASK`; events `Chat.TURN`, `Chat.STEP`, `Chat.REVIEWED`, `Trace.SPAN`; command `ask`. Collects hook `Chat.CONTEXT`, asks hook `Chat.REVIEW` |
+| `chat` | `ChatConfig { systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats, contextTokens, compact, maxReviews, parallelTools }` | `Llm.KEY`, `Conversations.KEY` | hook `Chat.ASK`; events `Chat.TURN`, `Chat.STEP`, `Chat.REVIEWED`, `Trace.SPAN`; command `ask`. Collects hook `Chat.CONTEXT`, asks hook `Chat.REVIEW` |
 
 `conversations` does not depend on the LLM, so history survives a provider or model switch (which restarts
 `chat`).
@@ -53,6 +53,13 @@ cut at `maxToolOutput` characters (default 16000). When a turn stops early, the 
 error result, so the saved history stays valid. The whole turn (user, assistant tool calls, tool results,
 answer) is appended at once. A cancelled turn is not saved. `tools: false` turns tools off for models that do
 not support them.
+
+**Parallel calls.** When the model asks for several tools in one reply, they run one after the other by default.
+With `parallelTools` above 1, up to that many run at once (on tasks of the chat plugin, so cancelling the ask or
+disposing chat cancels and awaits all of them). Their results go back to the model in the order it made the
+calls. Repeats are counted in that order before any call runs, so loop detection is unchanged. `onStep` hears
+the steps one at a time, in the order they start and end. Calls that may ask the user (writes, exec) are asked
+at the same time too; front-ends answer them one by one.
 
 A tool's own token spending (`ToolResult.usage`, a sub-agent's) is added to the turn's `usage` and counts
 toward `maxTokens`. While a tool runs, what it reports (`ToolContext.progress`) reaches the asker: a sub-agent's

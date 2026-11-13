@@ -16,7 +16,8 @@
     "toolTimeoutSeconds": 60,
     "contextTokens": 32000,
     "compact": true,
-    "maxReviews": 1
+    "maxReviews": 1,
+    "parallelTools": 1
   },
   "conversations": { "dir": ".panic/conversations", "persist": true },
   "todo": { "dir": ".panic/todo", "maxItems": 50 },

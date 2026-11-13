@@ -451,4 +451,116 @@ class AgentLoopTest {
         [m · 17 tokens · 2 tools]
         """, out.toString());
   }
+
+  private static ChatConfig parallel(int parallelTools, int timeoutSeconds) {
+    return new ChatConfig(null, 0, true, 0, 0, timeoutSeconds, 0, 0, null, null, null, parallelTools);
+  }
+
+  /**
+   * {@code meet {name}}: counts down {@code arrived}, then waits (at most 5s) for everyone to arrive, so it
+   * only answers "met" when the calls run at the same time. {@code first} answers last.
+   */
+  static Tool meeting(CountDownLatch arrived) {
+    return new Tool() {
+      @Override
+      public ToolSpec spec() {
+        return new ToolSpec("meet", "", Json.parseOrNull(
+            "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}}}"));
+      }
+
+      @Override
+      public Risk risk() {
+        return Risk.READ;
+      }
+
+      @Override
+      public ToolResult call(JsonNode args, ToolContext ctx) {
+        arrived.countDown();
+        try {
+          boolean met = arrived.await(5, java.util.concurrent.TimeUnit.SECONDS);
+          if (args.path("name").asText().equals("first")) Thread.sleep(100);
+          return ToolResult.ok(args.path("name").asText() + (met ? " met" : " alone"));
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          return ToolResult.error("interrupted");
+        }
+      }
+    };
+  }
+
+  @Test
+  void callsRunInParallelAndAnswerInTheirOrder() {
+    tools(meeting(new CountDownLatch(3)), ECHO);
+    chat(parallel(3, 0));
+    llm.then(r -> calls(call("a", "meet", "{\"name\":\"first\"}"), call("b", "meet", "{\"name\":\"second\"}"),
+            call("c", "echo", "{\"text\":\"x\"}"), call("d", "meet", "{\"name\":\"third\"}")))
+        .then(r -> answer("done"));
+    Chat.Reply reply = assertTimeoutPreemptively(Duration.ofSeconds(10), () -> ask("go"));
+    assertEquals(4, reply.toolCalls());
+    assertEquals(List.of(Message.tool("a", "first met"), Message.tool("b", "second met"), Message.tool("c", "X"),
+        Message.tool("d", "third met")), toolMessages(llm.requests.get(1)));
+    assertEquals(8, steps.size(), "a start and an end for each call");
+    assertEquals(List.of("a", "b", "c", "d"),
+        steps.stream().filter(s -> !s.done()).map(s -> s.call().id()).sorted().toList());
+  }
+
+  @Test
+  void oneAtATimeByDefault() {
+    tools(meeting(new CountDownLatch(2)));
+    chat(ChatConfig.DEFAULT);
+    llm.then(r -> calls(call("a", "meet", "{\"name\":\"x\"}"), call("b", "meet", "{\"name\":\"y\"}")))
+        .then(r -> answer("done"));
+    ask("go");
+    // the first call waits for a second one that only starts after it: it meets nobody
+    assertEquals(Message.tool("a", "x alone"), toolMessages(llm.requests.get(1)).get(0));
+  }
+
+  @Test
+  void loopDetectionStillCountsInCallOrder() {
+    tools(ECHO);
+    chat(new ChatConfig(null, 0, true, 0, 0, 0, 0, 1, null, null, null, 4));
+    String same = "{\"text\":\"hi\"}";
+    llm.then(r -> calls(call("a", "echo", same), call("b", "echo", same), call("c", "echo", same),
+        call("d", "echo", same))).then(r -> answer("never"));
+    Chat.Reply reply = ask("go");
+    assertEquals(Chat.LOOP, reply.stop());
+    assertEquals(1, reply.toolCalls());
+  }
+
+  @Test
+  void aTimeoutInOneParallelCallLeavesTheOthers() {
+    tools(waiting(new CountDownLatch(1)), ECHO);
+    chat(parallel(2, 1));
+    llm.then(r -> calls(call("a", "wait", "{}"), call("b", "echo", "{\"text\":\"ok\"}"))).then(r -> answer("done"));
+    assertTimeoutPreemptively(Duration.ofSeconds(10), () -> ask("go"));
+    assertEquals(List.of(Message.tool("a", "error: wait timed out after 1s"), Message.tool("b", "OK")),
+        toolMessages(llm.requests.get(1)));
+  }
+
+  @Test
+  void cancellingTheAskCancelsEveryParallelCall() throws Exception {
+    CountDownLatch started = new CountDownLatch(2);
+    tools(waiting(started));
+    chat(parallel(2, 0));
+    llm.then(r -> calls(call("a", "wait", "{}"), call("b", "wait", "{\"x\":1}"))).then(r -> answer("x"));
+    CancelToken token = new CancelToken();
+    Task<Optional<Chat.Reply>> pending = root.spawn("asker",
+        signal -> Chat.ask(root, new Chat.Ask("c", "go", token, d -> { })));
+    started.await();
+    token.cancel();
+    assertTimeoutPreemptively(Duration.ofSeconds(10), () -> assertThrows(CancelledException.class, pending::await));
+  }
+
+  @Test
+  void disposingChatCancelsAndAwaitsParallelCalls() throws Exception {
+    CountDownLatch started = new CountDownLatch(2);
+    tools(waiting(started));
+    ConfigHandle<ChatConfig> chat = chat(parallel(2, 0));
+    llm.then(r -> calls(call("a", "wait", "{}"), call("b", "wait", "{\"x\":1}"))).then(r -> answer("x"));
+    Task<Optional<Chat.Reply>> pending = root.spawn("asker",
+        signal -> Chat.ask(root, new Chat.Ask("c", "go", new CancelToken(), d -> { })));
+    started.await();
+    assertTimeoutPreemptively(Duration.ofSeconds(10), () -> chat.update(parallel(3, 0)));
+    assertThrows(CancelledException.class, pending::await);
+  }
 }

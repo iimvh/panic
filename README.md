@@ -88,6 +88,7 @@ export OPENROUTER_API_KEY=sk-or-...   # and/or MISTRAL_API_KEY
 | `todo.dir`, `todo.maxItems` | Where the agent's task lists are saved (default `.panic/todo`) and how many tasks one list may hold. |
 | `checks.checks`, `checks.dir` | Commands the agent may run to verify its work (`check` tool), by name, e.g. `"test": {"command": ["./gradlew", "test"]}`. Asked before each run unless `permissions.tools.check` is `allow`. |
 | `chat.maxReviews` | How many times an answer rejected by the reviewer goes back to the model (default 1, `0` = no review). Answers are reviewed only when the conversation has acceptance criteria. |
+| `chat.parallelTools` | How many tool calls of one model reply run at once (default 1, one after the other). Sub-agents asked together run in parallel this way. |
 | `web.enabled`, `web.host`, `web.port` | Start the web UI with the REPL, and where it listens. `--web` and `--serve` turn it on regardless. |
 | `settings`, `conversations`, `cli`, ... | Any plugin can be turned off with `false`, for example `"settings": false` removes the `/provider` and `/model` commands. |
 

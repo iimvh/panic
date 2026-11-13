@@ -17,10 +17,13 @@ package panic.chat;
  * Review: when a reviewer answers {@link Chat#REVIEW} and rejects a final answer, the reason goes back to the
  * model at most {@code maxReviews} times (null = 1, 0 = answers are never reviewed); after that the turn stops
  * with {@link Chat#REJECTED}.
+ *
+ * Parallel tools: the calls of one model reply run up to {@code parallelTools} at once (missing or below 1 = 1,
+ * one after the other). Their results still go back to the model in the order it made the calls.
  */
 public record ChatConfig(String systemPrompt, int maxHistory, Boolean tools, int maxSteps, int maxTokens,
     int toolTimeoutSeconds, int maxToolOutput, int maxRepeats, Integer contextTokens, Boolean compact,
-    Integer maxReviews) {
+    Integer maxReviews, int parallelTools) {
 
   public static final ChatConfig DEFAULT = new ChatConfig("You are Panic, a helpful assistant.", 40);
 
@@ -39,6 +42,14 @@ public record ChatConfig(String systemPrompt, int maxHistory, Boolean tools, int
     if (compact == null) compact = Boolean.TRUE;
     if (maxReviews == null) maxReviews = 1;
     if (maxReviews < 0) maxReviews = 0;
+    if (parallelTools <= 0) parallelTools = 1;
+  }
+
+  public ChatConfig(String systemPrompt, int maxHistory, Boolean tools, int maxSteps, int maxTokens,
+      int toolTimeoutSeconds, int maxToolOutput, int maxRepeats, Integer contextTokens, Boolean compact,
+      Integer maxReviews) {
+    this(systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats,
+        contextTokens, compact, maxReviews, 1);
   }
 
   public ChatConfig(String systemPrompt, int maxHistory, Boolean tools, int maxSteps, int maxTokens,

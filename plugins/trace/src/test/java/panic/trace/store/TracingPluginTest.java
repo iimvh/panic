@@ -92,6 +92,19 @@ class TracingPluginTest {
     };
   }
 
+  /** Waits until the writer's cleaning at start has made {@code file} hold {@code lines} lines (or removed it). */
+  private static void awaitLines(Path file, int lines) throws Exception {
+    long until = System.nanoTime() + 5_000_000_000L;
+    while (count(file) != lines) {
+      if (System.nanoTime() > until) assertEquals(lines, count(file), file + " was not cleaned");
+      Thread.sleep(10);
+    }
+  }
+
+  private static int count(Path file) throws Exception {
+    return Files.exists(file) ? Files.readAllLines(file).size() : 0;
+  }
+
   private Path file(String conversation) {
     return dir.resolve(conversation + ".jsonl");
   }
@@ -169,9 +182,8 @@ class TracingPluginTest {
 
     tracing();
     assertEquals(1, root.bail(Trace.LIST, new Trace.ListQuery("c", 0)).orElseThrow().roots().size());
+    awaitLines(file("c"), 2); // rewritten clean at start
     assertFalse(warnings.isEmpty(), "the damage is reported");
-    root.dispose();
-    assertEquals(2, Files.readAllLines(file("c")).size(), "the file was rewritten clean at start");
   }
 
   @Test
@@ -186,8 +198,8 @@ class TracingPluginTest {
     tracing(new TracingConfig(dir.toString(), 7, null));
     List<Span> roots = root.bail(Trace.LIST, new Trace.ListQuery("c", 0)).orElseThrow().roots();
     assertEquals(List.of("recent"), roots.stream().map(Span::traceId).toList());
-    root.dispose();
-    assertEquals(2, Files.readAllLines(file("c")).size());
+    awaitLines(file("c"), 2);
+    awaitLines(file("gone"), 0);
     assertFalse(Files.exists(file("gone")), "a file left empty is deleted");
   }
 
@@ -239,6 +251,16 @@ class TracingPluginTest {
     h.dispose();
     assertTrue(Files.exists(other.resolve("c.jsonl")));
     assertFalse(Files.exists(file("c")));
+  }
+
+  @Test
+  void whatIsQueuedIsWrittenEvenWhenDisposedAtOnce() throws Exception {
+    for (int i = 0; i < 20; i++) {
+      ConfigHandle<TracingConfig> h = tracing(new TracingConfig(dir.resolve("r" + i).toString(), 0, null));
+      turn("c", "t" + i, TraceStore.nowMicros(), "q");
+      h.dispose();
+      assertEquals(2, count(dir.resolve("r" + i).resolve("c.jsonl")), "round " + i);
+    }
   }
 
   @Test

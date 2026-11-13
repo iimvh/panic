@@ -3,14 +3,17 @@ package panic.trace.store;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
-import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -25,6 +28,9 @@ import panic.trace.Span;
  * its root has ended, so a crash leaves at most a torn last line. Reading skips damaged lines and spans whose
  * trace has no root, with a warning. Failures are reported through {@code warn}, never thrown: tracing must not
  * break anything.
+ *
+ * Files are read and written with plain streams, not channels: the writer task is interrupted when the plugin
+ * stops, and an interrupt must not abort (and lose) a write in progress, as it would close a channel.
  */
 final class TraceFile {
 
@@ -53,9 +59,11 @@ final class TraceFile {
 
   static Read read(Path file, Consumer<String> warn) {
     String text;
-    try {
-      text = Files.readString(file, StandardCharsets.UTF_8);
-    } catch (NoSuchFileException e) {
+    try (InputStream in = new FileInputStream(file.toFile())) {
+      text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+    } catch (FileNotFoundException e) {
+      if (!Files.exists(file)) return new Read(List.of(), false);
+      warn.accept("[tracing] cannot read " + file + ": " + e);
       return new Read(List.of(), false);
     } catch (IOException e) {
       warn.accept("[tracing] cannot read " + file + ": " + e);
@@ -93,8 +101,7 @@ final class TraceFile {
 
   static void append(Path file, Recorded trace, Consumer<String> warn) {
     try {
-      Files.writeString(file, lines(List.of(trace)), StandardCharsets.UTF_8, StandardOpenOption.CREATE,
-          StandardOpenOption.APPEND, StandardOpenOption.WRITE);
+      write(file, lines(List.of(trace)), true);
     } catch (IOException e) {
       warn.accept("[tracing] cannot append to " + file + ": " + e);
     }
@@ -108,7 +115,7 @@ final class TraceFile {
         return;
       }
       Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-      Files.writeString(tmp, lines(traces), StandardCharsets.UTF_8);
+      write(tmp, lines(traces), false);
       try {
         Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
       } catch (AtomicMoveNotSupportedException e) {
@@ -116,6 +123,12 @@ final class TraceFile {
       }
     } catch (IOException e) {
       warn.accept("[tracing] cannot rewrite " + file + ": " + e);
+    }
+  }
+
+  private static void write(Path file, String text, boolean append) throws IOException {
+    try (OutputStream out = new FileOutputStream(file.toFile(), append)) {
+      out.write(text.getBytes(StandardCharsets.UTF_8));
     }
   }
 

@@ -25,8 +25,8 @@ import panic.trace.Trace;
  *
  * Answers {@link Trace#GET} and {@link Trace#LIST}. At start the writer first cleans the directory: traces past
  * {@code keepDays} or beyond {@code maxTraces} per conversation are dropped, damaged lines repaired. Requires
- * nothing; when disposed it stops listening, then writes what is still queued before returning. One process per
- * directory, as for conversations.
+ * nothing; when disposed it stops listening, stops the writer, then writes what is still queued (even if the
+ * writer never got to start) before returning. One process per directory, as for conversations.
  *
  * Commands: {@code traces [count]}, {@code trace <id>}, {@code stats}, over the session's conversation.
  */
@@ -47,16 +47,22 @@ public final class TracingPlugin implements ConfigPlugin<TracingConfig> {
     TraceStore store = new TraceStore(dir, cfg.maxTraces(), cfg.keepDays() * 86_400L * 1_000_000L, warn);
     BlockingQueue<Recorded> pending = new LinkedBlockingQueue<>();
 
-    // Created before the listener, so it is disposed after it: nothing is queued once it drains.
+    // Disposal runs in reverse: the listener goes first, then the writer, then this flush of what is left.
     if (dir != null) {
+      ctx.effect("flush", s -> () -> {
+        for (Recorded t; (t = pending.poll()) != null; ) write(store, t);
+      });
       ctx.spawn("writer", signal -> {
         clean(store);
-        try {
-          while (true) write(store, pending.take());
-        } catch (InterruptedException e) {
-          for (Recorded t; (t = pending.poll()) != null; ) write(store, t);
+        while (true) {
+          Recorded t;
+          try {
+            t = pending.take();
+          } catch (InterruptedException e) {
+            return null; // stopping: the flush writes the rest
+          }
+          write(store, t);
         }
-        return null;
       });
     }
 

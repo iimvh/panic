@@ -23,7 +23,7 @@ sdk contract).
 - `keepDays`: traces older than this are deleted when the plugin starts. Default 30, `0` keeps them all.
 - `maxTraces`: the most traces kept per conversation, in memory and on disk. Oldest go first. Default 500.
 
-Leave the plugin out (`"plugins": { "tracing": false }`) to keep no traces. Nothing else changes.
+Turn it off with `"tracing": false` to keep no traces. Nothing else changes: chat still emits spans, nobody keeps them.
 
 ## How it works
 

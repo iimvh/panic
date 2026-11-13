@@ -1,5 +1,5 @@
 import { ApiError, getHistory, getState, postApproval, putSettings, stream, type State } from './api';
-import { askApproval, meta, toolStep, type Approval, type ToolStep } from './reply';
+import { appendText, askApproval, createBatcher, duration, meta, review, toolStep, type Approval, type Part } from './reply';
 import { sessionId } from './session';
 
 export type Message = {
@@ -8,8 +8,10 @@ export type Message = {
 	text: string;
 	/** model · tokens, "stopped", ... */
 	meta?: string;
-	/** Tools the bot called while answering, in order. */
-	tools?: ToolStep[];
+	/** An answer's text, tool calls and reviews in the order they happened (assistant only). */
+	parts?: Part[];
+	/** When the answer was asked (ms since epoch), for the elapsed time while it streams. */
+	startedAt?: number;
 	/** A tool call waiting for the user to allow or deny it. */
 	approval?: Approval;
 	error?: boolean;
@@ -34,7 +36,11 @@ class Chat {
 			this.state = state;
 			this.messages = history
 				.filter((m) => m.role !== 'system')
-				.map((m) => ({ id: nextId++, role: m.role as 'user' | 'assistant', text: m.content }));
+				.map((m) =>
+					m.role === 'assistant'
+						? { id: nextId++, role: 'assistant', text: m.content, parts: [{ kind: 'text', text: m.content }] }
+						: { id: nextId++, role: 'user', text: m.content }
+				);
 			this.offline = null;
 		} catch (e) {
 			this.offline = errorText(e);
@@ -89,21 +95,24 @@ class Chat {
 
 	async #ask(text: string) {
 		this.messages.push({ id: nextId++, role: 'user', text });
-		const reply = this.#push({ id: nextId++, role: 'assistant', text: '', streaming: true });
+		const reply = this.#push({ id: nextId++, role: 'assistant', text: '', parts: [], streaming: true, startedAt: Date.now() });
+		// many deltas per frame: render them once per frame; anything else first flushes the text before it
+		const text$ = createBatcher((t) => appendText(reply, t), frame);
 		await this.#run(reply, () =>
 			stream('/api/chat', { session: this.session, text }, ({ event, data }) => {
 				const d = data as Record<string, unknown>;
-				if (event === 'delta') reply.text += String(d.text ?? '');
-				else if (event === 'tool') toolStep(reply, d);
+				if (event === 'delta') return text$.push(String(d.text ?? ''));
+				text$.flush();
+				if (event === 'tool') toolStep(reply, d);
+				else if (event === 'review') review(reply, d);
 				else if (event === 'approve') askApproval(reply, d);
 				else if (event === 'done') reply.meta = meta(d);
-				else if (event === 'unavailable') {
-					reply.error = true;
-					reply.text = 'No LLM is connected. Open Settings to pick a provider with an API key.';
-				} else if (event === 'error') fail(reply, String(d.message));
+				else if (event === 'unavailable') fail(reply, 'No LLM is connected. Open Settings to pick a provider with an API key.');
+				else if (event === 'error') fail(reply, String(d.message));
 				else if (event === 'cancelled') reply.meta = 'stopped';
-			}, this.#abort?.signal)
+			}, this.#abort?.signal).finally(() => text$.flush())
 		);
+		reply.meta = [reply.meta, duration(Date.now() - (reply.startedAt ?? Date.now()))].filter(Boolean).join(' · ');
 		if (!this.state?.connected) void this.refresh();
 	}
 
@@ -149,9 +158,17 @@ class Chat {
 	}
 }
 
+/** An answer shows the error where it happened, after what was streamed; a command appends it to its output. */
 function fail(m: Message, text: string) {
 	m.error = true;
-	m.text = m.text ? `${m.text}\n\n${text}` : text;
+	if (m.parts) m.parts.push({ kind: 'error', text });
+	else m.text = m.text ? `${m.text}\n\n${text}` : text;
+}
+
+/** Next animation frame; a timer where there is none (tests, a hidden tab still gets its text at the end). */
+function frame(run: () => void) {
+	if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+	else setTimeout(run, 16);
 }
 
 function errorText(e: unknown): string {

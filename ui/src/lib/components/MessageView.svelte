@@ -1,11 +1,21 @@
 <script lang="ts">
 	import type { Message } from '$lib/chat.svelte';
-	import { renderMarkdown } from '$lib/markdown';
+	import { activity, duration } from '$lib/reply';
 	import ApprovalCard from './ApprovalCard.svelte';
+	import TextPart from './TextPart.svelte';
 
 	let { message }: { message: Message } = $props();
 
-	const html = $derived(message.role === 'assistant' && !message.error ? renderMarkdown(message.text) : '');
+	const parts = $derived(message.parts ?? []);
+	const status = $derived(message.streaming ? activity(message) : '');
+
+	let now = $state(Date.now());
+	$effect(() => {
+		if (!message.streaming) return;
+		now = Date.now();
+		const timer = setInterval(() => (now = Date.now()), 1000);
+		return () => clearInterval(timer);
+	});
 
 	async function onclick(e: MouseEvent) {
 		const button = (e.target as HTMLElement).closest('[data-copy]') as HTMLButtonElement | null;
@@ -33,25 +43,31 @@
 	{:else}
 		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 		<div class="answer" {onclick}>
-			{#if message.tools?.length}
-				<ul class="tools">
-					{#each message.tools as tool, i (i)}
-						<li class={tool.status} title={tool.content ?? tool.arguments}>
-							<span class="name">{tool.name}</span>
-							<span class="args">{tool.arguments}</span>
-							<span class="status">{tool.status === 'running' ? '…' : tool.status}</span>
-						</li>
-					{/each}
-				</ul>
-			{/if}
+			{#each parts as part, i (i)}
+				{#if part.kind === 'text'}
+					<TextPart text={part.text} live={message.streaming && i === parts.length - 1} />
+				{:else if part.kind === 'tool'}
+					{@const tool = part.step}
+					<div class="tool {tool.status}" title={tool.content ?? tool.arguments}>
+						<span class="name">{tool.name}</span>
+						<span class="args">{tool.arguments}</span>
+						<span class="status">{tool.status === 'running' ? '…' : tool.status}</span>
+					</div>
+				{:else if part.kind === 'review'}
+					<div class="review" class:rejected={!part.pass}>
+						{part.pass ? 'Review passed' : `Review rejected the answer: ${part.reason}`}
+					</div>
+				{:else}
+					<p class="err">{part.text}</p>
+				{/if}
+			{/each}
 			<ApprovalCard {message} />
-			{#if message.error}
-				<p class="err">{message.text}</p>
-			{:else if message.text}
-				<div class="md">{@html html}</div>
-			{/if}
-			{#if message.streaming && !message.text}
-				<span class="typing" aria-label="Thinking"><i></i><i></i><i></i></span>
+			{#if message.streaming}
+				<div class="progress" aria-live="polite">
+					<span class="typing" aria-hidden="true"><i></i><i></i><i></i></span>
+					{status}
+					{#if message.startedAt}<span class="time">{duration(now - message.startedAt)}</span>{/if}
+				</div>
 			{/if}
 			{#if message.meta && !message.streaming}<div class="meta">{message.meta}</div>{/if}
 		</div>
@@ -80,38 +96,61 @@
 		width: 100%;
 		overflow-wrap: anywhere;
 	}
-	.tools {
-		list-style: none;
-		margin: 0 0 8px;
-		padding: 0;
-		display: grid;
-		gap: 4px;
-	}
-	.tools li {
+	.tool {
 		display: flex;
 		gap: 8px;
 		align-items: baseline;
 		min-width: 0;
+		margin: 4px 0;
 		font: 12px var(--mono);
 		color: var(--muted);
 		border-left: 2px solid var(--border);
 		padding-left: 8px;
 	}
-	.tools .name {
+	.tool + :global(.md),
+	.review + :global(.md) {
+		margin-top: 8px;
+	}
+	.tool .name {
 		color: var(--text);
 	}
-	.tools .args {
+	.tool .args {
 		flex: 1;
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.tools .error {
+	.tool.running {
+		border-left-color: var(--accent);
+	}
+	.tool.error {
 		border-left-color: var(--danger);
 	}
-	.tools .error .status {
+	.tool.error .status {
 		color: var(--danger);
+	}
+	.review {
+		margin: 8px 0;
+		padding: 4px 8px;
+		font-size: 13px;
+		color: var(--muted);
+		border-radius: 6px;
+		background: var(--surface);
+	}
+	.review.rejected {
+		color: var(--text);
+		background: color-mix(in srgb, var(--warn) 14%, var(--surface));
+	}
+	.progress {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 13px;
+		color: var(--muted);
+	}
+	.progress .time {
+		font-variant-numeric: tabular-nums;
 	}
 	.meta {
 		margin-top: 6px;
@@ -119,7 +158,7 @@
 		color: var(--muted);
 	}
 	.err {
-		margin: 0;
+		margin: 8px 0 0;
 		color: var(--danger);
 		white-space: pre-wrap;
 	}

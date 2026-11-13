@@ -9,6 +9,17 @@ export type ToolStep = {
 	content?: string;
 };
 
+/**
+ * One piece of an answer, in the order it happened: text the model wrote, a tool call, a reviewer's verdict,
+ * or an error that ended the stream. Text after a tool call starts a new text part, so a turn with several
+ * model calls reads as "text, tool, tool, text" instead of one merged blob.
+ */
+export type Part =
+	| { kind: 'text'; text: string }
+	| { kind: 'tool'; step: ToolStep }
+	| { kind: 'review'; attempt: number; pass: boolean; reason: string }
+	| { kind: 'error'; text: string };
+
 /** A tool call waiting for the user's approval, as the `approve` server-sent event describes it. */
 export type Approval = {
 	id: string;
@@ -21,6 +32,16 @@ export type Approval = {
 	/** The answer is being sent. */
 	answering?: boolean;
 };
+
+/** Appends streamed text: to the last part when it is text, else as a new text part. */
+export function appendText(m: Message, delta: string) {
+	if (!delta) return;
+	m.text += delta;
+	m.parts ??= [];
+	const last = m.parts.at(-1);
+	if (last?.kind === 'text') last.text += delta;
+	else m.parts.push({ kind: 'text', text: delta });
+}
 
 /** Shows the question; the call's finished `tool` step (or the end of the stream) clears it. */
 export function askApproval(m: Message, d: Record<string, unknown>) {
@@ -42,11 +63,62 @@ export function toolStep(m: Message, d: Record<string, unknown>) {
 		status: d.status === 'ok' || d.status === 'error' ? d.status : 'running',
 		content: d.content === undefined ? undefined : String(d.content)
 	};
-	m.tools ??= [];
-	const i = m.tools.findIndex((t) => t.id === step.id && t.status === 'running');
-	if (step.status !== 'running' && i >= 0) m.tools[i] = step;
-	else m.tools.push(step);
+	m.parts ??= [];
+	const i = m.parts.findIndex((p) => p.kind === 'tool' && p.step.id === step.id && p.step.status === 'running');
+	if (step.status !== 'running' && i >= 0) m.parts[i] = { kind: 'tool', step };
+	else m.parts.push({ kind: 'tool', step });
 	if (step.status !== 'running' && m.approval?.callId === step.id) m.approval = undefined;
+}
+
+/** A reviewer's verdict on the answer so far; a rejection is followed by another attempt. */
+export function review(m: Message, d: Record<string, unknown>) {
+	m.parts ??= [];
+	m.parts.push({ kind: 'review', attempt: Number(d.attempt ?? 0), pass: d.pass === true, reason: String(d.reason ?? '') });
+}
+
+/** What a streaming answer is doing right now, for the status line. */
+export function activity(m: Message): string {
+	if (m.approval) return 'Waiting for approval';
+	const last = m.parts?.at(-1);
+	if (last?.kind === 'tool' && last.step.status === 'running') return `Running ${last.step.name}…`;
+	if (last?.kind === 'text') return 'Writing…';
+	if (last?.kind === 'review' && !last.pass) return 'Trying again…';
+	return 'Thinking…';
+}
+
+/** "4s", "1m 05s". */
+export function duration(ms: number): string {
+	const s = Math.max(0, Math.floor(ms / 1000));
+	if (s < 60) return `${s}s`;
+	return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+}
+
+/**
+ * Collects streamed text and hands it to `apply` at most once per `schedule` tick (an animation frame in
+ * the page), so a fast stream re-renders once per frame, not once per token. Call `flush()` before handling
+ * any other event and at the end of the stream, so the order of text and tool calls is kept.
+ */
+export function createBatcher(apply: (text: string) => void, schedule: (run: () => void) => void) {
+	let pending = '';
+	let scheduled = false;
+	function flush() {
+		if (!pending) return;
+		const text = pending;
+		pending = '';
+		apply(text);
+	}
+	return {
+		push(text: string) {
+			pending += text;
+			if (scheduled) return;
+			scheduled = true;
+			schedule(() => {
+				scheduled = false;
+				flush();
+			});
+		},
+		flush
+	};
 }
 
 export function meta(d: Record<string, unknown>): string {

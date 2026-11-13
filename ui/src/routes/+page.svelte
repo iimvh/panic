@@ -8,7 +8,8 @@
 
 	let settingsOpen = $state(false);
 	let scroller: HTMLElement;
-	let stick = true; // follow the answer while the user is at the bottom
+	let thread: HTMLElement;
+	let stick = $state(true); // follow the answer while the user is at the bottom
 
 	onMount(() => {
 		void chat.load();
@@ -23,12 +24,24 @@
 		stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
 	}
 
+	function toBottom() {
+		scroller?.scrollTo({ top: scroller.scrollHeight });
+	}
+
 	$effect(() => {
-		// re-run on every new message and every streamed piece
-		const last = chat.messages.at(-1);
+		// once per layout change (streamed text, tool rows, approval cards...), not once per token
+		const watch = new ResizeObserver(() => {
+			if (stick) toBottom();
+		});
+		watch.observe(thread);
+		return () => watch.disconnect();
+	});
+
+	$effect(() => {
+		// a new message of the user's brings the view back to the bottom
 		void chat.messages.length;
-		void last?.text;
-		if (stick) tick().then(() => scroller?.scrollTo({ top: scroller.scrollHeight }));
+		stick = true;
+		tick().then(toBottom);
 	});
 
 	const starters = ['Explain virtual threads in Java', 'Write a haiku about deadlines', '/help', '/models free'];
@@ -50,7 +63,7 @@
 	{/if}
 
 	<main bind:this={scroller} {onscroll}>
-		<div class="thread">
+		<div class="thread" bind:this={thread}>
 			{#if chat.messages.length === 0}
 				<div class="empty">
 					<img src="/favicon.svg" alt="" width="44" height="44" />
@@ -69,6 +82,10 @@
 		</div>
 	</main>
 
+	{#if !stick && chat.busy}
+		<button class="btn jump" onclick={() => ((stick = true), toBottom())}>↓ Jump to latest</button>
+	{/if}
+
 	<Composer />
 
 	{#if settingsOpen}
@@ -85,6 +102,14 @@
 	main {
 		flex: 1;
 		overflow-y: auto;
+	}
+	.jump {
+		position: fixed;
+		left: 50%;
+		bottom: 110px;
+		transform: translateX(-50%);
+		border-radius: 999px;
+		box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
 	}
 	.thread {
 		max-width: 760px;

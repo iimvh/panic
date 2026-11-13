@@ -13,9 +13,14 @@ package panic.chat;
  * less = no limit, only {@code maxHistory} applies) by leaving out the oldest turns. With {@code compact}
  * (null = true) the turns left out are first summarised by the model into one summary kept with the
  * conversation.
+ *
+ * Review: when a reviewer answers {@link Chat#REVIEW} and rejects a final answer, the reason goes back to the
+ * model at most {@code maxReviews} times (null = 1, 0 = answers are never reviewed); after that the turn stops
+ * with {@link Chat#REJECTED}.
  */
 public record ChatConfig(String systemPrompt, int maxHistory, Boolean tools, int maxSteps, int maxTokens,
-    int toolTimeoutSeconds, int maxToolOutput, int maxRepeats, Integer contextTokens, Boolean compact) {
+    int toolTimeoutSeconds, int maxToolOutput, int maxRepeats, Integer contextTokens, Boolean compact,
+    Integer maxReviews) {
 
   public static final ChatConfig DEFAULT = new ChatConfig("You are Panic, a helpful assistant.", 40);
 
@@ -32,6 +37,14 @@ public record ChatConfig(String systemPrompt, int maxHistory, Boolean tools, int
     if (contextTokens == null) contextTokens = DEFAULT_CONTEXT_TOKENS;
     if (contextTokens < 0) contextTokens = 0;
     if (compact == null) compact = Boolean.TRUE;
+    if (maxReviews == null) maxReviews = 1;
+    if (maxReviews < 0) maxReviews = 0;
+  }
+
+  public ChatConfig(String systemPrompt, int maxHistory, Boolean tools, int maxSteps, int maxTokens,
+      int toolTimeoutSeconds, int maxToolOutput, int maxRepeats, Integer contextTokens, Boolean compact) {
+    this(systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats,
+        contextTokens, compact, null);
   }
 
   public ChatConfig(String systemPrompt, int maxHistory) {

@@ -5,11 +5,13 @@ import context.EventKey;
 import context.HookKey;
 import core.Disposable;
 import core.Signal;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import panic.command.Hooks;
+import panic.llm.Message;
 import panic.llm.ToolCall;
 import panic.llm.Usage;
 import panic.tools.ToolResult;
@@ -55,17 +57,53 @@ public final class Chat {
   public static final String MAX_STEPS = "max_steps";
   public static final String BUDGET = "budget";
   public static final String LOOP = "loop";
+  /** The reviewer still rejected the answer once {@code maxReviews} retries were used; see {@link Reply#review}. */
+  public static final String REJECTED = "rejected";
 
   /**
-   * The answer. {@code text} is the bot's last message; {@code usage} adds up every model call of the turn;
-   * {@code stop} says why it ended ({@link #DONE}, {@link #MAX_STEPS}, {@link #BUDGET}, {@link #LOOP}).
+   * The answer. {@code text} is the bot's last message; {@code usage} adds up every model call of the turn
+   * (reviews included); {@code stop} says why it ended ({@link #DONE}, {@link #MAX_STEPS}, {@link #BUDGET},
+   * {@link #LOOP}, {@link #REJECTED}). {@code review} is the reason of the last verdict, null when nobody
+   * reviewed the answer.
    */
   public record Reply(String text, String model, String finishReason, Usage usage, String stop, int steps,
-      int toolCalls) {
+      int toolCalls, String review) {
+
+    public Reply(String text, String model, String finishReason, Usage usage, String stop, int steps,
+        int toolCalls) {
+      this(text, model, finishReason, usage, stop, steps, toolCalls, null);
+    }
 
     public Reply(String text, String model, String finishReason, Usage usage) {
       this(text, model, finishReason, usage, DONE, 1, 0);
     }
+  }
+
+  /**
+   * A final answer to judge, put to {@link #REVIEW}. {@code turn} is the whole turn so far (the question, tool
+   * calls and results, the answer); {@code attempt} counts from 1. A blocking reviewer must honour {@code signal}.
+   */
+  public record Review(String conversationId, String question, List<Message> turn, String answer, int attempt,
+      Signal signal) {
+    public Review {
+      Objects.requireNonNull(conversationId, "conversationId");
+      Objects.requireNonNull(question, "question");
+      Objects.requireNonNull(answer, "answer");
+      Objects.requireNonNull(signal, "signal");
+      turn = List.copyOf(turn);
+    }
+  }
+
+  /** A reviewer's judgement: {@code reason} says what is missing (or why it passes); {@code usage} is its cost. */
+  public record Verdict(boolean pass, String reason, Usage usage) {
+    public Verdict {
+      reason = reason == null || reason.isBlank() ? (pass ? "accepted" : "rejected without a reason") : reason.strip();
+      if (usage == null) usage = Usage.NONE;
+    }
+  }
+
+  /** Emitted after each review of an answer (auditing...). */
+  public record Reviewed(String conversationId, int attempt, Verdict verdict) {
   }
 
   /** Emitted after every completed exchange. */
@@ -92,6 +130,14 @@ public final class Chat {
 
   public static final HookKey<Ask, Reply> ASK = HookKey.of("chat.ask", Ask.class, Reply.class);
   public static final EventKey<Turn> TURN = EventKey.of("chat.turn", Turn.class);
+  /**
+   * Asked when the model gives a final answer: may it stand? No answer (no reviewer, or nothing to check the
+   * answer against) accepts it. A rejection sends the reason back to the model for another attempt, at most
+   * {@code chat.maxReviews} times.
+   */
+  public static final HookKey<Review, Verdict> REVIEW = HookKey.of("chat.review", Review.class, Verdict.class);
+  public static final EventKey<Reviewed> REVIEWED = EventKey.of("chat.reviewed", Reviewed.class);
+
   /** Emitted when a tool call of the bot starts and when it finishes (logging, auditing...). */
   public static final EventKey<Step> STEP = EventKey.of("chat.step", Step.class);
 

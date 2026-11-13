@@ -14,9 +14,11 @@ import core.Disposable;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import panic.command.Commands;
+import panic.command.Hooks;
 import panic.command.Out;
 import panic.llm.CancelToken;
 import panic.llm.ChatRequest;
@@ -43,6 +45,10 @@ import panic.tools.Tools;
  * fit come after the prompt. When turns no longer fit, they are summarised by the model once into the
  * conversation's summary (see {@link Conversation#compact}), down to half the budget so that this does not
  * happen on every ask.
+ *
+ * A final answer is put to {@link Chat#REVIEW} when someone answers it (the reviewer of {@code plugins/verify}
+ * does when the conversation has acceptance criteria). A rejection is streamed to the asker and sent back to the
+ * model as a user message, at most {@link ChatConfig#maxReviews} times; a reviewer that fails accepts.
  *
  * Runs only while both services exist; tools are optional and found through hooks, so none are required. A
  * reply in flight when the plugin is disposed (LLM switched, config changed, app stopping) is cancelled, its
@@ -78,6 +84,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       if (r.toolCalls() > 0) meta.append(" · ").append(r.toolCalls()).append(r.toolCalls() == 1 ? " tool" : " tools");
       if (!Chat.DONE.equals(r.stop())) {
         meta.append(" · stopped: ").append(r.stop());
+        if (Chat.REJECTED.equals(r.stop())) meta.append(" (").append(r.review()).append(')');
       } else if (r.finishReason() != null && !"stop".equals(r.finishReason())) {
         meta.append(" · ").append(r.finishReason());
       }
@@ -119,6 +126,8 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private int toolCalls;
     private String lastCall;
     private int repeats;
+    private int reviews;
+    private String review;
 
     Turn(Context ctx, ChatConfig cfg, Llm llm, Conversations conversations, Tokens tokens, Chat.Ask ask) {
       this.ctx = ctx;
@@ -161,7 +170,19 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         tokens.observe(Tokens.raw(request), last.usage().promptTokens());
         count(last.usage());
         add(last.message());
-        if (!last.hasToolCalls()) break;
+        if (!last.hasToolCalls()) {
+          Chat.Verdict verdict = review(last.text());
+          if (verdict == null || verdict.pass()) break;
+          if (reviews >= cfg.maxReviews() || steps >= cfg.maxSteps()) {
+            stop = Chat.REJECTED;
+            break;
+          }
+          reviews++;
+          ask.onDelta().accept("\n\n[review: " + verdict.reason() + "]\n\n");
+          add(Message.user("A review of your answer rejected it: " + verdict.reason()
+              + "\nFix what is missing (use tools if needed), then give your final answer again."));
+          continue;
+        }
 
         if (steps >= cfg.maxSteps()) {
           stop = Chat.MAX_STEPS;
@@ -182,9 +203,33 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       signal.throwIfCancelled();
       conversation.append(added.toArray(Message[]::new));
       Chat.Reply reply = new Chat.Reply(last.text(), last.model(), last.finishReason(), usage, stop, steps,
-          toolCalls);
+          toolCalls, review);
       ctx.emit(Chat.TURN, new Chat.Turn(ask.conversationId(), ask.text(), reply));
       return reply;
+    }
+
+    /**
+     * Puts the final {@code answer} to {@link Chat#REVIEW}. Null when reviews are off or nobody judged it; a
+     * reviewer that fails counts as no verdict, so a broken reviewer never blocks an answer. Cancellation is thrown.
+     */
+    private Chat.Verdict review(String answer) {
+      if (cfg.maxReviews() == 0) return null;
+      int attempt = reviews + 1;
+      Optional<Chat.Verdict> verdict;
+      try {
+        verdict = Hooks.bail(ctx, Chat.REVIEW,
+            new Chat.Review(ask.conversationId(), ask.text(), added, answer, attempt, signal));
+      } catch (RuntimeException e) {
+        signal.throwIfCancelled();
+        if (e instanceof CancelledException c) throw c;
+        return null;
+      }
+      signal.throwIfCancelled();
+      if (verdict.isEmpty()) return null;
+      count(verdict.get().usage());
+      review = verdict.get().reason();
+      ctx.emit(Chat.REVIEWED, new Chat.Reviewed(ask.conversationId(), attempt, verdict.get()));
+      return verdict.get();
     }
 
     /**

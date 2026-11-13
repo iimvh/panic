@@ -56,7 +56,10 @@ export function meta(d: Record<string, unknown>): string {
 	if (tokens > 0) parts.push(`${tokens} tokens`);
 	const calls = Number(d.toolCalls ?? 0);
 	if (calls > 0) parts.push(calls === 1 ? '1 tool' : `${calls} tools`);
-	if (d.stop && d.stop !== 'done') parts.push(`stopped: ${String(d.stop).replace('_', ' ')}`);
+	if (d.stop && d.stop !== 'done') {
+		const why = d.stop === 'rejected' && d.review ? ` (${String(d.review)})` : '';
+		parts.push(`stopped: ${String(d.stop).replace('_', ' ')}${why}`);
+	}
 	else if (d.finishReason && d.finishReason !== 'stop') parts.push(String(d.finishReason));
 	return parts.filter(Boolean).join(' · ');
 }

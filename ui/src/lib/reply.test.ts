@@ -29,6 +29,7 @@ describe('meta', () => {
 			.toBe('m · 5 tokens · 2 tools');
 		expect(meta({ model: 'm', toolCalls: 1, stop: 'max_steps', finishReason: 'tool_calls' })).toBe('m · 1 tool · stopped: max steps');
 		expect(meta({ model: 'm', finishReason: 'length' })).toBe('m · length');
+		expect(meta({ model: 'm', stop: 'rejected', review: 'no tests run' })).toBe('m · stopped: rejected (no tests run)');
 	});
 });
 

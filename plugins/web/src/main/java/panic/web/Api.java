@@ -177,6 +177,7 @@ final class Api {
       Chat.Reply r = reply.get();
       ObjectNode done = Json.object().put("model", r.model()).put("finishReason", r.finishReason())
           .put("stop", r.stop()).put("toolCalls", r.toolCalls());
+      if (r.review() != null) done.put("review", r.review());
       done.putObject("usage").put("promptTokens", r.usage().promptTokens())
           .put("completionTokens", r.usage().completionTokens());
       sse.send("done", done);

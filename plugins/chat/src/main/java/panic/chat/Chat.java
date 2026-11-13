@@ -28,20 +28,28 @@ public final class Chat {
 
   /**
    * One user message. {@code signal} cancels the reply; {@code onDelta} receives its text as it streams;
-   * {@code onStep} hears each tool call when it starts and when it finishes.
+   * {@code onStep} hears each tool call when it starts and when it finishes; {@code onReview} hears every
+   * verdict on a final answer (passed or not), before a rejected answer is attempted again. The callbacks
+   * are called in the order things happen, on the turn's thread.
    */
   public record Ask(String conversationId, String text, Signal signal, Consumer<String> onDelta,
-      Consumer<Step> onStep) {
+      Consumer<Step> onStep, Consumer<Reviewed> onReview) {
     public Ask {
       Objects.requireNonNull(conversationId, "conversationId");
       Objects.requireNonNull(text, "text");
       Objects.requireNonNull(signal, "signal");
       Objects.requireNonNull(onDelta, "onDelta");
       if (onStep == null) onStep = s -> { };
+      if (onReview == null) onReview = r -> { };
+    }
+
+    public Ask(String conversationId, String text, Signal signal, Consumer<String> onDelta,
+        Consumer<Step> onStep) {
+      this(conversationId, text, signal, onDelta, onStep, null);
     }
 
     public Ask(String conversationId, String text, Signal signal, Consumer<String> onDelta) {
-      this(conversationId, text, signal, onDelta, null);
+      this(conversationId, text, signal, onDelta, null, null);
     }
   }
 

@@ -70,8 +70,12 @@ class ReviewTest {
     });
   }
 
+  /** Verdicts heard through {@link Chat.Ask#onReview}, the way front-ends get them. */
+  private final List<Chat.Reviewed> heard = new CopyOnWriteArrayList<>();
+
   private Chat.Reply ask(StringBuilder streamed) {
-    return Chat.ask(root, new Chat.Ask("c", "do it", new CancelToken(), streamed::append)).orElseThrow();
+    return Chat.ask(root, new Chat.Ask("c", "do it", new CancelToken(), streamed::append, null, heard::add))
+        .orElseThrow();
   }
 
   private static Chat.Verdict reject(String why) {
@@ -101,7 +105,10 @@ class ReviewTest {
     assertEquals("ok now", reply.review());
     assertEquals(2, reply.steps());
     assertEquals(new Usage(23, 11), reply.usage(), "the review is paid by the turn");
-    assertTrue(streamed.toString().contains("[review: tests were not run]"), streamed.toString());
+    assertEquals("firstsecond", streamed.toString(), "verdicts are not mixed into the answer's text");
+    assertEquals(List.of(false, true), heard.stream().map(r -> r.verdict().pass()).toList());
+    assertEquals("tests were not run", heard.get(0).verdict().reason());
+    assertEquals(1, heard.get(0).attempt());
 
     List<Message> retry = llm.requests.get(1).messages();
     Message feedback = retry.get(retry.size() - 1);

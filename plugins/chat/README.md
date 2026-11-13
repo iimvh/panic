@@ -57,7 +57,7 @@ not support them.
 
 When the model answers without calling a tool, `chat` puts the answer to the `Chat.REVIEW` hook (the whole turn,
 the question and the attempt number). Nobody answering accepts it, so with no reviewer, or nothing to judge the
-answer against, the loop is unchanged. A rejection is streamed to the asker as `[review: reason]` and sent back
+answer against, the loop is unchanged. Every verdict goes to the asker's `Ask.onReview` (the `ask` command prints rejections as `[review: reason]`; it is never mixed into the answer's text), and a rejection is sent back
 to the model as a user message, and the loop goes on. That happens at most `maxReviews` times (default 1; `0`
 turns reviews off); after that the turn stops with `rejected`. A reviewer that throws counts as no verdict, so a
 broken reviewer never blocks an answer; cancelling the ask during a review cancels it as usual. The reviewer's
@@ -98,7 +98,7 @@ all of a plugin's sections disappear when it is disposed. Chat does not require 
 | Key | Type | Meaning |
 | --- | --- | --- |
 | `Conversations.KEY` | service `Conversations` | `get(id)` returns the history of a session (created on first use) |
-| `Chat.ASK` | hook `Ask(conversationId, text, signal, onDelta, onStep?) → Reply(text, model, finishReason, usage, stop, steps, toolCalls, review)` | Ask the bot. Use `Chat.ask(ctx, ask)`: it is empty when no LLM is connected and rethrows the handler's own exception. `onStep` hears every tool call when it starts (`result == null`) and when it ends |
+| `Chat.ASK` | hook `Ask(conversationId, text, signal, onDelta, onStep?, onReview?) → Reply(text, model, finishReason, usage, stop, steps, toolCalls, review)` | Ask the bot. Use `Chat.ask(ctx, ask)`: it is empty when no LLM is connected and rethrows the handler's own exception. `onStep` hears every tool call when it starts (`result == null`) and when it ends; `onReview` hears every `Reviewed` verdict. Callbacks run in the order things happen |
 | `Chat.REVIEW` | hook `Review(conversationId, question, turn, answer, attempt, signal) → Verdict(pass, reason, usage)` | Judges a final answer. No answer accepts it; a rejection sends `reason` back to the model |
 | `Chat.REVIEWED` | event `Reviewed(conversationId, attempt, verdict)` | Emitted after each verdict (auditing...) |
 | `Chat.TURN` | event `Turn(conversationId, question, reply)` | Emitted after every completed exchange (logging, memory, cost tracking...) |

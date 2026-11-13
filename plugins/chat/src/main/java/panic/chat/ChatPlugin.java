@@ -76,7 +76,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     Commands.command(ctx, "ask <text...>", "ask the bot (plain text does the same)", call -> {
       Printer printer = new Printer(call.out());
       Chat.Ask ask = new Chat.Ask(call.session().id(), call.arg("text"), call.signal(), printer::text,
-          printer::step);
+          printer::step, printer::review);
       Chat.Reply r = new Turn(ctx, cfg, llm, conversations, tokens, ask).run();
       printer.endLine();
       StringBuilder meta = new StringBuilder("[").append(r.model());
@@ -178,7 +178,6 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
             break;
           }
           reviews++;
-          ask.onDelta().accept("\n\n[review: " + verdict.reason() + "]\n\n");
           add(Message.user("A review of your answer rejected it: " + verdict.reason()
               + "\nFix what is missing (use tools if needed), then give your final answer again."));
           continue;
@@ -228,7 +227,9 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       if (verdict.isEmpty()) return null;
       count(verdict.get().usage());
       review = verdict.get().reason();
-      ctx.emit(Chat.REVIEWED, new Chat.Reviewed(ask.conversationId(), attempt, verdict.get()));
+      Chat.Reviewed reviewed = new Chat.Reviewed(ask.conversationId(), attempt, verdict.get());
+      ask.onReview().accept(reviewed);
+      ctx.emit(Chat.REVIEWED, reviewed);
       return verdict.get();
     }
 
@@ -467,6 +468,13 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       } else if (step.result().isError()) {
         out.println("[tool " + call.name() + ": error: " + firstLine(step.result().content()) + "]");
       }
+    }
+
+    /** Rejections only: an accepted answer needs no note. */
+    void review(Chat.Reviewed r) {
+      if (r.verdict().pass()) return;
+      endLine();
+      out.println("[review: " + r.verdict().reason() + "]");
     }
 
     void endLine() {

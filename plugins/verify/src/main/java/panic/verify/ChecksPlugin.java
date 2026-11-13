@@ -22,6 +22,7 @@ import panic.tools.Tool;
 import panic.tools.ToolContext;
 import panic.tools.ToolResult;
 import panic.tools.Tools;
+import panic.tools.Workspace;
 
 /**
  * Tool {@code check {name}}: runs one of the commands configured in {@link ChecksConfig} (tests, build, lint)
@@ -29,7 +30,8 @@ import panic.tools.Tools;
  * own claims. The model only picks a name, never the command. Risk {@code exec}, so the permission policy asks
  * by default. A failing check is an error result: the loop goes on and the model can fix and run it again.
  *
- * Requires nothing; with no checks configured it registers no tool. The process (and its children) is killed
+ * Commands run in the project of the conversation the user talks to ({@link Workspace#ROOT}), or in
+ * {@link ChecksConfig#dir} when it has none. Requires nothing; with no checks configured it registers no tool. The process (and its children) is killed
  * when its timeout passes or the call is cancelled (the caller gave up, or the plugin is disposed). The tool
  * declares the longest configured timeout as its own limit, so {@code chat.toolTimeoutSeconds} does not cut it.
  * Command: {@code checks}.
@@ -39,7 +41,7 @@ public final class ChecksPlugin implements ConfigPlugin<ChecksConfig> {
   @Override
   public Disposable apply(Context ctx, ChecksConfig cfg) {
     Path dir = Path.of(cfg.dir()).toAbsolutePath().normalize();
-    if (!cfg.checks().isEmpty()) Tools.register(ctx, new CheckTool(cfg, dir));
+    if (!cfg.checks().isEmpty()) Tools.register(ctx, new CheckTool(ctx, cfg, dir));
     Commands.command(ctx, "checks", "list the checks the agent can run", call -> {
       if (cfg.checks().isEmpty()) {
         call.out().println("no checks configured (section \"checks\" of panic.json)");
@@ -53,7 +55,7 @@ public final class ChecksPlugin implements ConfigPlugin<ChecksConfig> {
     return null;
   }
 
-  private record CheckTool(ChecksConfig cfg, Path dir) implements Tool {
+  private record CheckTool(Context host, ChecksConfig cfg, Path defaultDir) implements Tool {
     @Override
     public ToolSpec spec() {
       ObjectNode schema = Json.object().put("type", "object");
@@ -83,6 +85,7 @@ public final class ChecksPlugin implements ConfigPlugin<ChecksConfig> {
     public ToolResult call(JsonNode args, ToolContext tc) {
       String name = args.get("name").asText();
       ChecksConfig.Check check = cfg.checks().get(name);
+      Path dir = Workspace.root(host, tc.origin(), defaultDir);
       if (!Files.isDirectory(dir)) return ToolResult.error("check " + name + ": directory not found: " + dir);
       Path log;
       try {
@@ -91,7 +94,7 @@ public final class ChecksPlugin implements ConfigPlugin<ChecksConfig> {
         return ToolResult.error("check " + name + " could not start: " + e.getMessage());
       }
       try {
-        return run(name, check, log, tc);
+        return run(name, check, dir, log, tc);
       } finally {
         try {
           Files.deleteIfExists(log);
@@ -101,7 +104,7 @@ public final class ChecksPlugin implements ConfigPlugin<ChecksConfig> {
       }
     }
 
-    private ToolResult run(String name, ChecksConfig.Check check, Path log, ToolContext tc) {
+    private ToolResult run(String name, ChecksConfig.Check check, Path dir, Path log, ToolContext tc) {
       long start = System.nanoTime();
       Process p;
       try {

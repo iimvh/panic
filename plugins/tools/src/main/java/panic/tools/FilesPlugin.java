@@ -23,22 +23,24 @@ import panic.util.Json;
 import panic.llm.ToolSpec;
 
 /**
- * File tools confined to {@link FilesConfig#root}: {@code read_file} and {@code list_dir} (risk read) and
+ * File tools confined to a workspace root: {@code read_file} and {@code list_dir} (risk read) and
  * {@code write_file} (risk write, so the permission policy asks the user by default). A path is resolved
  * against the root and must stay inside it once normalized and once symlinks are followed, so {@code ../},
  * absolute paths and links pointing out are refused. A write never follows a link at the target itself. The
  * root is resolved on every call, so it may be created after the plugin starts.
  *
- * Requires nothing; changing the config re-registers the tools with the new root.
+ * The root is the project of the conversation the user talks to ({@link Workspace#ROOT}, asked with
+ * {@link ToolContext#origin()} so a sub-agent works where its parent does), or {@link FilesConfig#root} when it
+ * has none. Requires nothing; changing the config re-registers the tools with the new default root.
  */
 public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
 
   @Override
   public Disposable apply(Context ctx, FilesConfig cfg) {
     Path root = Path.of(cfg.root()).toAbsolutePath().normalize();
-    Tools.register(ctx, new ReadFile(root, cfg));
-    Tools.register(ctx, new ListDir(root, cfg));
-    Tools.register(ctx, new WriteFile(root, cfg));
+    Tools.register(ctx, new ReadFile(ctx, root, cfg));
+    Tools.register(ctx, new ListDir(ctx, root, cfg));
+    Tools.register(ctx, new WriteFile(ctx, root, cfg));
     return null;
   }
 
@@ -124,7 +126,7 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
     }
   }
 
-  private record ReadFile(Path root, FilesConfig cfg) implements Tool {
+  private record ReadFile(Context host, Path root, FilesConfig cfg) implements Tool {
 
     @Override
     public Risk risk() {
@@ -150,7 +152,7 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
 
     private ToolResult read(JsonNode args, ToolContext ctx) {
       String path = args.path("path").asText();
-      Path file = resolve(root, path);
+      Path file = resolve(Workspace.root(host, ctx.origin(), root), path);
       if (Files.isDirectory(file)) return ToolResult.error(path + " is a directory; use list_dir");
       int offset = args.path("offset").asInt(1);
       int limit = args.path("limit").asInt(Integer.MAX_VALUE);
@@ -192,7 +194,7 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
     }
   }
 
-  private record ListDir(Path root, FilesConfig cfg) implements Tool {
+  private record ListDir(Context host, Path root, FilesConfig cfg) implements Tool {
 
     @Override
     public Risk risk() {
@@ -215,7 +217,7 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
 
     private ToolResult list(JsonNode args, ToolContext ctx) {
       String path = args.path("path").asText(".");
-      Path dir = resolve(root, path.isBlank() ? "." : path);
+      Path dir = resolve(Workspace.root(host, ctx.origin(), root), path.isBlank() ? "." : path);
       if (!Files.isDirectory(dir)) return ToolResult.error(path + " is not a directory; use read_file");
       List<String> names = new ArrayList<>();
       try (Stream<Path> entries = Files.list(dir)) {
@@ -233,7 +235,7 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
     }
   }
 
-  private record WriteFile(Path root, FilesConfig cfg) implements Tool {
+  private record WriteFile(Context host, Path root, FilesConfig cfg) implements Tool {
 
     @Override
     public Risk risk() {
@@ -265,7 +267,7 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
         return ToolResult.error("content is " + bytes.length + " bytes; the most write_file takes is "
             + cfg.maxWriteBytes());
       }
-      Path file = resolveForWrite(root, path);
+      Path file = resolveForWrite(Workspace.root(host, ctx.origin(), root), path);
       ctx.signal().throwIfCancelled();
       try {
         Files.write(file, bytes, StandardOpenOption.CREATE, StandardOpenOption.WRITE,

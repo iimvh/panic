@@ -22,7 +22,8 @@ acceptance criteria of `plugins/todo`, they keep the agent from calling work don
 }
 ```
 
-`check {name}` runs the configured command for `name` in `dir` (relative to the app's working directory) and
+`check {name}` runs the configured command for `name` in the project folder of the conversation (hook
+`Workspace.ROOT`), or in `dir` (relative to the app's working directory) when it has no project, and
 returns `check <name> passed|failed (exit N, 3.2s)` and the end of its output (stdout and stderr together, last
 `maxOutput` characters: failures are usually at the end). The model only picks a name from the configured ones
 (an `enum` in the schema), never the command, which runs without a shell unless you write `sh -c`.

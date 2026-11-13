@@ -3,9 +3,24 @@
 
 	let { onsettings, onmenu }: { onsettings: () => void; onmenu: () => void } = $props();
 
-	const state = $derived(chat.state);
+	let problem = $state<string | null>(null);
+
+	/** Turning bypass on is asked again: the agent then writes, runs commands and uses the network unasked. */
+	async function toggleBypass() {
+		const on = !chat.permissions?.bypass;
+		if (
+			on &&
+			!confirm(
+				'Bypass permissions in this chat?\n\nThe agent will write files, run commands and use the network without asking you. Tools denied in the config stay denied.'
+			)
+		)
+			return;
+		problem = await chat.setBypass(on);
+	}
+
+	const info = $derived(chat.state);
 	const label = $derived(
-		state?.provider ? `${state.provider} / ${state.model || 'no model'}` : 'no provider selected'
+		info?.provider ? `${info.provider} / ${info.model || 'no model'}` : 'no provider selected'
 	);
 </script>
 
@@ -20,9 +35,24 @@
 		<span>Panic</span>
 	</div>
 	<button class="status" onclick={onsettings} title="Provider and model">
-		<span class="dot" class:on={state?.connected} class:off={chat.offline}></span>
+		<span class="dot" class:on={info?.connected} class:off={chat.offline}></span>
 		<span class="label">{chat.offline ? 'offline' : label}</span>
 	</button>
+	{#if chat.permissions}
+		<button
+			class="bypass"
+			class:on={chat.permissions.bypass}
+			aria-pressed={chat.permissions.bypass}
+			onclick={toggleBypass}
+			disabled={!!chat.offline || chat.busy}
+			title={problem ??
+				(chat.permissions.bypass
+					? 'Tools run without asking. Click to ask again.'
+					: 'Ask before tools write, run commands or use the network. Click to bypass.')}
+		>
+			{chat.permissions.bypass ? 'Bypass on' : 'Bypass off'}
+		</button>
+	{/if}
 	<div class="actions">
 		<button class="btn" onclick={() => chat.newChat()} disabled={!!chat.offline}>New chat</button>
 		<button class="btn icon" onclick={onsettings} aria-label="Settings">
@@ -88,6 +118,27 @@
 	}
 	.dot.off {
 		background: var(--danger);
+	}
+	.bypass {
+		flex: none;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		padding: 3px 10px;
+		background: none;
+		color: var(--muted);
+		font: inherit;
+		font-size: 12px;
+		cursor: pointer;
+	}
+	.bypass.on {
+		color: #fff;
+		background: var(--danger);
+		border-color: var(--danger);
+		font-weight: 600;
+	}
+	.bypass:disabled {
+		opacity: 0.6;
+		cursor: default;
 	}
 	.actions {
 		margin-left: auto;

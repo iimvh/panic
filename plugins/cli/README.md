@@ -15,6 +15,9 @@ commands turn it off).
 In the REPL it answers `Tools.APPROVE` (from `plugins/tools`) for its own session (`repl`): it prints
 `[approve] <tool> (<risk>) <arguments>` (`[approve] <agent>: <tool> …` for a sub-agent's call) and
 `allow? [y/N]`, then reads one line. `y` or `yes` allows the call. Anything else, or end of input, denies it. The
+While the session is in bypass mode (`/bypass on`, hook `Tools.BYPASS`) the policy allows those calls, so no
+`[approve]` question appears, and the prompt reads `[bypass] > ` instead of `> ` so the mode is never silent.
+One-shot mode has no approver (such calls are denied); set `permissions.bypassPermissions` for scripts. The
 REPL thread is blocked in the command that made the call, so only approvals read the terminal meanwhile. Calls
 running in parallel (`chat.parallelTools`, sub-agents) may ask at the same time: their questions are put one
 after the other, in arrival order. Each wait, for its turn and for the answer, honours the approval's signal

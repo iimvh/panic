@@ -8,11 +8,13 @@ tool calls. The loop that asks the model and feeds results back belongs to the a
 | Name | Config (`panic.json` section) | Requires | Provides / registers |
 | --- | --- | --- | --- |
 | `tools` | none | none | commands `tools`, `tool` |
-| `permissions` | `PermissionsConfig { risks = {read: allow, write: ask, exec: ask, network: ask}, tools = {}, askTimeoutSeconds = 120 }` | none | hook `Tools.POLICY` |
+| `permissions` | `PermissionsConfig { risks = {read: allow, write: ask, exec: ask, network: ask}, tools = {}, askTimeoutSeconds = 120, bypassPermissions = false }` | none | hooks `Tools.POLICY`, `Tools.BYPASS`; command `bypass` |
 | `files` | `FilesConfig { root = ".", maxBytes = 65536, maxEntries = 200, maxWriteBytes = 1048576 }` | none | tools `read_file`, `list_dir` (read), `write_file` (write) |
 | `clock` | none | none | tool `time` |
 
-`files` sees only `root`, which is resolved against the app's working directory. A path must stay inside the
+`files` sees only one root: the folder of the conversation's project (key `Workspace.ROOT`, answered by plugin
+`workspace`, asked with the conversation the user talks to, so a sub-agent works where its parent does), or
+`root` when the conversation has no project. `root` is resolved against the app's working directory. A path must stay inside the
 root after normalization and after following symlinks, so `../`, absolute paths and links that point out are
 refused. `read_file` returns at most `maxBytes` characters and tells the model which `offset` to continue
 from. Files with a NUL byte in their first 8 KiB are treated as binary and refused.
@@ -21,6 +23,17 @@ from. Files with a NUL byte in their first 8 KiB are treated as binary and refus
 directories. The deepest existing directory on the way must be inside the root once symlinks are followed. The
 target itself must not be a symlink (even one pointing inside) or a directory, and it is opened with
 `NOFOLLOW_LINKS`. Content over `maxWriteBytes` bytes is refused.
+
+## Public keys: workspaces
+
+`Workspace` holds the keys for projects (folders a conversation works in). Plugins ask them instead of requiring
+the plugin that answers (`workspace`, `folder-picker` in `plugins/workspace`); with no answer there is no project.
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `Workspace.ROOT` | hook `Query(conversationId) → Path` | The project folder of a conversation; no answer when it has none. Used by `files` and `checks` (`Workspace.root(ctx, id, fallback)`) |
+| `Workspace.LIST` | hook `Listing.ALL → Projects(projects[Project(path, name, conversations)], hidden[id])` | The active projects and the chats of removed ones (not to be listed) |
+| `Workspace.PICK` | hook `PickQuery(signal) → Picked(path)` | A folder chosen in a native dialog; no answer when cancelled or unavailable |
 
 ## Permissions
 
@@ -35,6 +48,17 @@ registered `tool.run` hook, after its arguments are checked and before the tool 
    it for the conversations they talk to. No answer, a timeout or `DENY` returns `<tool>: denied by the user`.
    A cancelled caller is thrown (`CancelledException`).
 
+### Bypass mode (YOLO)
+
+`permissions.bypassPermissions: true` (default `false`) turns every `ask` into `allow`, so nothing waits for the
+user. A rule that says `deny` (in `permissions.tools` or `permissions.risks`) still denies: bypass only removes the
+questions, it never overrides an explicit refusal. A conversation can also switch it for itself with command
+`bypass on | off | status` (the web UI has a header switch, the REPL prompt reads `[bypass] > `). That choice wins
+over the config default in both directions, applies to the sub-agents of that conversation, and is kept in memory
+only: it is not config (a plugin never updates its own), so it is forgotten when `permissions` restarts, for
+example when its section changes. One-shot mode has no approver and denies what would be asked, so set
+`bypassPermissions` in the config for scripts. Use it only where the agent can do no harm you cannot undo.
+
 Denials are ordinary error results, so the agent loop passes them to the model. Unknown risks or rules in
 `permissions` are a config error, so a typo cannot open the gate. `permissions` requires nothing, so a change
 to its section restarts only it and applies from the next call.
@@ -46,7 +70,8 @@ to its section restarts only it and applies from the next call.
 | `Tools.register(ctx, tool)` | registers hooks in `ctx` | Declares a `Tool`. It exists while the plugin does, and disposal waits for a call in progress |
 | `Tools.LIST` | hook `Listing → Info(ToolSpec, Risk, timeoutSeconds)` | Every tool available right now (`collect`). Use `Tools.specs(ctx)` (what the model sees), `Tools.infos(ctx)` (with risks and time limits) or `Tools.info(ctx, name)`. They sort and drop duplicate names (first wins) |
 | `Tools.RUN` | hook `Invocation(ToolCall, ToolContext) → ToolResult` | Runs a call through the permission gate. Use `Tools.call(ctx, call, toolCtx)` |
-| `Tools.POLICY` | hook `Check(ToolCall, Risk) → Verdict(Permission, askTimeoutSeconds)` | The rule for a call. Answered by `permissions`. `Tools.verdict(ctx, call, risk)` applies the fallback |
+| `Tools.POLICY` | hook `Check(ToolCall, Risk, conversationId) → Verdict(Permission, askTimeoutSeconds)` | The rule for a call (`conversationId` is the conversation the user talks to, null when none). Answered by `permissions`, which applies bypass mode. `Tools.verdict(ctx, call, risk[, conversationId])` applies the fallback |
+| `Tools.BYPASS` | hook `BypassQuery(conversationId) → Bypass(on, byDefault)` | Whether a conversation bypasses approvals. Answered by `permissions`; front-ends show it |
 | `Tools.APPROVE` | hook `Approval(conversationId, ToolCall, Risk, Signal, agent?) → Decision` | Asks the user. `conversationId` is the call's `origin`, the conversation the user talks to, also for a sub-agent's call (`agent` names it). Front-ends answer only for their own conversations and return null otherwise. A blocking answer must honour `signal` |
 
 `ToolContext(conversationId, signal, started?, origin?, agent?, traceId?, spanId?, progress?)`:

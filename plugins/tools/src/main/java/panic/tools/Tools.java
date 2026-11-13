@@ -59,8 +59,16 @@ public final class Tools {
     }
   }
 
-  /** The question put to the policy: may this call run? */
-  public record Check(ToolCall call, Risk risk) {
+  /**
+   * The question put to the policy: may this call run? {@code conversationId} is the conversation the user talks
+   * to ({@link ToolContext#origin}, also for a sub-agent's call), or null when nobody asks for a conversation (the
+   * {@code tools} command listing).
+   */
+  public record Check(ToolCall call, Risk risk, String conversationId) {
+
+    public Check(ToolCall call, Risk risk) {
+      this(call, risk, null);
+    }
   }
 
   /** The policy's answer. {@code askTimeoutSeconds} bounds the wait for the user when it is {@code ASK}. */
@@ -92,6 +100,17 @@ public final class Tools {
     }
   }
 
+  /** Asks whether a conversation runs in bypass mode (YOLO: calls the policy would ask about just run). */
+  public record BypassQuery(String conversationId) {
+    public BypassQuery {
+      Objects.requireNonNull(conversationId, "conversationId");
+    }
+  }
+
+  /** {@code on}: the conversation bypasses approvals now; {@code byDefault}: what the config says for all of them. */
+  public record Bypass(boolean on, boolean byDefault) {
+  }
+
   /** The user's answer to an {@link Approval}. */
   public enum Decision { ALLOW, DENY }
 
@@ -101,6 +120,10 @@ public final class Tools {
   public static final HookKey<Invocation, ToolResult> RUN = HookKey.of("tool.run", Invocation.class, ToolResult.class);
   /** Answered by the policy plugin ({@code permissions}); without it {@link Verdict#fallback} applies. */
   public static final HookKey<Check, Verdict> POLICY = HookKey.of("tool.policy", Check.class, Verdict.class);
+
+  /** Whether a conversation bypasses approvals; answered by {@code permissions}, so front-ends can show it. */
+  public static final HookKey<BypassQuery, Bypass> BYPASS = HookKey.of("tool.bypass", BypassQuery.class,
+      Bypass.class);
   /**
    * Answered by front-ends, only for the conversations they are talking to (return null for others). No
    * answer means {@link Decision#DENY}.
@@ -151,9 +174,14 @@ public final class Tools {
     return infos(ctx).stream().filter(i -> i.spec().name().equals(name)).findFirst();
   }
 
-  /** What the policy says about {@code call} right now. */
+  /** What the policy says about {@code call} right now, for no conversation in particular. */
   public static Verdict verdict(Context ctx, ToolCall call, Risk risk) {
-    return Hooks.bail(ctx, POLICY, new Check(call, risk)).orElseGet(() -> Verdict.fallback(risk));
+    return verdict(ctx, call, risk, null);
+  }
+
+  /** What the policy says about {@code call} of {@code conversationId} (null: none) right now. */
+  public static Verdict verdict(Context ctx, ToolCall call, Risk risk, String conversationId) {
+    return Hooks.bail(ctx, POLICY, new Check(call, risk, conversationId)).orElseGet(() -> Verdict.fallback(risk));
   }
 
   /** Runs {@code call} on the calling thread. See the class comment for what it returns. */
@@ -171,7 +199,7 @@ public final class Tools {
     if (!problems.isEmpty()) {
       return ToolResult.error(name + ": invalid arguments: " + String.join("; ", problems));
     }
-    Verdict verdict = verdict(owner, inv.call(), info.risk());
+    Verdict verdict = verdict(owner, inv.call(), info.risk(), inv.context().origin());
     switch (verdict.permission()) {
       case DENY -> {
         return ToolResult.error(name + ": denied by policy");

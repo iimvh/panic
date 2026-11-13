@@ -85,6 +85,7 @@ export OPENROUTER_API_KEY=sk-or-...   # and/or MISTRAL_API_KEY
 | `chat.maxHistory` | Number of past messages sent with each request. `0` sends them all. |
 | `conversations.dir`, `conversations.persist` | Where chat history is saved (default `.panic/conversations`, one JSON lines file per conversation), so it survives a restart. `persist: false` keeps it in memory only. |
 | `tracing.dir`, `tracing.keepDays`, `tracing.maxTraces` | Where the trace of every turn is saved (default `.panic/traces`, one JSON lines file per conversation), how many days to keep it (default 30, `0` = forever) and how many traces to keep per conversation (default 500). `"tracing": false` keeps none. |
+| `workspace.dir` | Where the projects (folders a chat works in) are saved (default `.panic/workspace`). `folder-picker.enabled` (default true) lets the server open the system's folder dialog for "Add project"; turn it off when Panic runs on another machine than the browser. |
 | `todo.dir`, `todo.maxItems` | Where the agent's task lists are saved (default `.panic/todo`) and how many tasks one list may hold. |
 | `checks.checks`, `checks.dir` | Commands the agent may run to verify its work (`check` tool), by name, e.g. `"test": {"command": ["./gradlew", "test"]}`. Asked before each run unless `permissions.tools.check` is `allow`. |
 | `chat.maxReviews` | How many times an answer rejected by the reviewer goes back to the model (default 1, `0` = no review). Answers are reviewed only when the conversation has acceptance criteria. |
@@ -143,7 +144,9 @@ Plain text runs `ask`. In the REPL, commands start with `/`. On the command line
 | `provider [id]`, `model [id]` | `settings` | always |
 | `reset`, `chats [count]`, `forget <id>` | `conversations` | always. `reset` clears this session's conversation; `chats` lists the conversations; `forget` deletes one (with its sub-agents' conversations, plan and traces) |
 | `tools`, `tool <name> [args...]` | `tools` | always. `tools` shows each tool's risk and permission. `args` is a JSON object, e.g. `tool read_file {"path":"README.md"}` |
+| `bypass [on \| off \| status]` | `permissions` | always. Runs tools without asking in this chat (YOLO mode); `deny` rules still apply |
 | `todo` | `todo` | always. Shows this session's task list and acceptance criteria |
+| `workspace [list \| add <path> \| use <path> \| reset \| remove [path] \| pick]` | `workspace` | always. Projects are folders a chat works in (file tools and checks run there). `use` makes this chat work in a folder, `pick` opens the system's folder dialog and adds the folder, `remove` hides a project and its chats until it is added again |
 | `checks` | `checks` | always. Lists the configured checks |
 | `agents` | `agents` | always. Lists the sub-agents the bot can start |
 | `traces [count]`, `trace <id>`, `stats` | `tracing` | always. This session's latest traces, one trace as a tree of timed spans (an id prefix is enough), and latency, tokens and tool use over the session |
@@ -155,6 +158,11 @@ Tools that change things ask first. Reading is allowed, but a call such as `writ
 for your answer: the REPL prints `[approve] write_file (write) {...}` and runs it only if you type `y`, and the
 web UI shows Allow/Deny buttons. With no answer (one-shot mode, nobody watching, `askTimeoutSeconds` passed)
 the call is denied and the model is told so. Tune the rules per risk or per tool in the `permissions` section.
+
+**YOLO mode.** `"permissions": {"bypassPermissions": true}` runs every call the rules would ask about without
+asking; a rule that says `deny` still denies. In a chat, `/bypass on` / `/bypass off` (or the switch in the web
+header) does the same for that chat only, and the REPL prompt shows `[bypass] > ` while it is on. Use it only where
+the agent can do no harm you cannot undo.
 
 Edit `panic.json` while Panic is running and the change is applied as soon as you save. Only the plugins whose section changed are restarted. A model picked with `/model` stays selected when you edit other sections of the file.
 
@@ -203,7 +211,8 @@ Solid lines show ownership in the tree. Dotted lines show the services and hooks
 | `conversations` | Keeps chat history, saved on disk under `conversations.dir`, so it survives a restart. It does not depend on the LLM, so history also survives a provider or model switch. |
 | `chat` | Requires `llm` and `conversations`. Answers the `chat.ask` hook with an agent loop: it offers the registered tools, runs the calls and feeds the results back until the model answers (limits in its config). Emits `chat.step` and `chat.turn`, and declares `ask`. |
 | `settings` | Declares `provider` and `model`, which change the `llm` config at runtime through the `Configs` service. |
-| `tools`, `permissions`, `files`, `clock` | `tools` declares the `tools` and `tool` commands. `permissions` answers the `tool.policy` hook (allow / ask / deny per risk and per tool); calls it asks about go to front-ends through `tool.approve`. `files` (`read_file`, `list_dir`, `write_file`, confined to `files.root`) and `clock` (`time`) register tools through the `tool.list` / `tool.run` hooks. |
+| `tools`, `permissions`, `files`, `clock` | `tools` declares the `tools` and `tool` commands. `permissions` answers the `tool.policy` hook (allow / ask / deny per risk and per tool, or allow-all with `bypassPermissions`) and `tool.bypass`; calls it asks about go to front-ends through `tool.approve`. `files` (`read_file`, `list_dir`, `write_file`, confined to `files.root`) and `clock` (`time`) register tools through the `tool.list` / `tool.run` hooks. |
+| `workspace`, `folder-picker` | `workspace` keeps projects (folders) and which chat works in which; it answers `workspace.root` (the folder `files` and `checks` use for that chat, falling back to `files.root` / `checks.dir`) and `workspace.list` (the web sidebar groups chats by project), adds a `Workspace` section to the system prompt and declares `workspace`. `folder-picker` answers `workspace.pick` by opening the operating system's folder dialog. |
 | `todo` | A plan per conversation (tasks and acceptance criteria), saved under `todo.dir`. Registers `todo_read` and `todo_write`, adds the plan to the system prompt (`chat.context`) and answers `todo.plan`, so the agent keeps track of multi-step work across turns and restarts. |
 | `checks`, `review` | `checks` registers the `check` tool, which runs commands configured in its section (tests, build) and returns the result. `review` answers `chat.review`: when the conversation has acceptance criteria, a separate model call judges the final answer against them, and a rejection goes back to the agent. |
 | `agents` | Registers the `agent` tool: it runs a sub-agent as a delegated `chat.ask` (its own prompt, tools, limits and saved conversation) and returns its answer. Sub-agents' tool calls are approved in the user's conversation and their steps stream under the call. |
@@ -307,6 +316,7 @@ A module may declare several plugins. For example `:llm` declares `openrouter`, 
 │   ├── chat/         panic.chat     conversations, chat; Chat (hook ASK, event TURN)
 │   ├── tools/        panic.tools    tools, permissions, files, clock; Tools (hooks LIST, RUN, POLICY, APPROVE)
 │   ├── todo/         panic.todo     todo: todo_read, todo_write and the Tasks section
+│   ├── workspace/    panic.workspace workspace (projects per chat), folder-picker (native folder dialog)
 │   ├── verify/       panic.verify   checks (check tool), review (answers chat.review)
 │   ├── agents/       panic.agents   agents (agent tool: sub-agents as delegated chat asks)
 │   ├── trace/        panic.trace.store  tracing: keeps spans, traces/trace/stats commands

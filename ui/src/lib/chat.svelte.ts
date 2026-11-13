@@ -1,5 +1,5 @@
-import { ApiError, deleteConversation, events, follow, getConversations, getHistory, getState, postApproval, postStop, putSettings, stream, type State } from './api';
-import { without, type ConversationInfo } from './conversations';
+import { ApiError, deleteConversation, events, follow, getConversations, getHistory, getPermissions, getState, getWorkspaces, postApproval, postStop, putSettings, quoteArg, runCommand, stream, type Permissions, type State } from './api';
+import { without, type ConversationInfo, type Workspaces } from './conversations';
 import { askApproval, clearApproval, createAnswer, duration, failAnswer, fromHistory, type Approval, type Part } from './reply';
 import { newSessionId, sessionId, setSessionId } from './session';
 
@@ -33,10 +33,16 @@ class Chat {
 	messages = $state<Message[]>([]);
 	/** The stored conversations, newest first, for the chat list. */
 	conversations = $state<ConversationInfo[]>([]);
+	/** The projects (workspaces) and their chats; null while unknown or when the server has none. */
+	workspaces = $state<Workspaces | null>(null);
+	/** Bypass mode (tool calls run without asking) of this session; null when the server has no policy plugin. */
+	permissions = $state<Permissions | null>(null);
 	busy = $state(false);
 	/** Server unreachable or failing; shown as a banner. */
 	offline = $state<string | null>(null);
 	#abort: AbortController | null = null;
+	/** The folder dialog being waited for (Add project), to give up on it. */
+	#picking: AbortController | null = null;
 	/** The request in flight is an answer (stopped through the server) rather than a command. */
 	#answering = false;
 	/** The request in flight, to wait for it to end. */
@@ -45,6 +51,8 @@ class Chat {
 	/** The stored conversation, then the answer still running in this session, if any (after a reload). */
 	async load() {
 		void this.loadConversations();
+		void this.loadWorkspaces();
+		void this.loadPermissions();
 		try {
 			const [state, history] = await Promise.all([getState(), getHistory(this.session)]);
 			this.state = state;
@@ -89,12 +97,90 @@ class Chat {
 		}
 	}
 
-	/** Starts a new conversation; the current one stays in the list. A running answer is stopped first. */
-	async newChat() {
+	/** The bypass state of this session; a failure leaves it as it was. */
+	async loadPermissions() {
+		try {
+			this.permissions = await getPermissions(this.session);
+		} catch {
+			// offline: load() reports it
+		}
+	}
+
+	/** Turns bypass mode (YOLO) on or off for this chat; null is the error text when that failed. */
+	async setBypass(on: boolean): Promise<string | null> {
+		try {
+			await runCommand(this.session, `bypass ${on ? 'on' : 'off'}`);
+		} catch (e) {
+			return errorText(e);
+		}
+		await this.loadPermissions();
+		return null;
+	}
+
+	/** The projects again; a failure leaves them as they were. */
+	async loadWorkspaces() {
+		try {
+			this.workspaces = await getWorkspaces();
+		} catch {
+			// offline: load() reports it
+		}
+	}
+
+	/**
+	 * Starts a new conversation; the current one stays in the list. A running answer is stopped first. With
+	 * `project` (a folder path) the chat works in that project; null is the error text when that failed.
+	 */
+	async newChat(project?: string): Promise<string | null> {
 		await this.#settle();
 		this.session = newSessionId();
 		this.messages = [];
+		let problem: string | null = null;
+		if (project) {
+			try {
+				await runCommand(this.session, `workspace use ${quoteArg(project)}`);
+			} catch (e) {
+				problem = errorText(e);
+			}
+		}
 		void this.loadConversations();
+		void this.loadWorkspaces();
+		void this.loadPermissions();
+		return problem;
+	}
+
+	/**
+	 * Adds a project: the folder `path` when given, else the one chosen in the folder dialog on the server's
+	 * machine. Returns what the server said; `needsPath` when no dialog could give a folder (type one instead).
+	 */
+	async addProject(path?: string): Promise<{ text: string; needsPath: boolean; error: boolean }> {
+		this.#picking = new AbortController();
+		try {
+			const text = await runCommand(this.session, path ? `workspace add ${quoteArg(path)}` : 'workspace pick', this.#picking.signal);
+			void this.loadWorkspaces();
+			return { text, needsPath: !path && text.includes('workspace add <path>'), error: false };
+		} catch (e) {
+			// cancelled by the user: the server closes the dialog when the stream goes away
+			if (e instanceof DOMException && e.name === 'AbortError') return { text: '', needsPath: true, error: false };
+			return { text: errorText(e), needsPath: false, error: true };
+		} finally {
+			this.#picking = null;
+		}
+	}
+
+	/** Gives up waiting for the folder dialog: the server closes it, and the page offers a typed path. */
+	cancelAddProject() {
+		this.#picking?.abort();
+	}
+
+	/** Removes a project from the list; its chats are hidden until the folder is added again. */
+	async removeProject(path: string): Promise<string | null> {
+		try {
+			await runCommand(this.session, `workspace remove ${quoteArg(path)}`);
+		} catch (e) {
+			return errorText(e);
+		}
+		await this.loadWorkspaces();
+		return null;
 	}
 
 	/** Shows conversation `id`. A running answer is stopped first, so it cannot land in the other chat. */
@@ -125,6 +211,7 @@ class Chat {
 		this.conversations = without(this.conversations, id);
 		if (id === this.session) await this.newChat();
 		else void this.loadConversations();
+		void this.loadWorkspaces();
 		return null;
 	}
 

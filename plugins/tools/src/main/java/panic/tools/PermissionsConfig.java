@@ -8,13 +8,21 @@ import java.util.TreeMap;
  * The permission policy. {@code risks}: the rule per {@link Risk} ({@code read}, {@code write}, {@code exec},
  * {@code network}), merged over the defaults (read allow, everything else ask). {@code tools}: rules for single
  * tools by name, which win over their risk's rule. A rule is {@code allow}, {@code ask} or {@code deny}.
- * {@code askTimeoutSeconds}: how long a call waits for the user before it is denied.
+ * {@code askTimeoutSeconds}: how long a call waits for the user before it is denied. {@code bypassPermissions}
+ * (YOLO mode, default false): every call the rules would ask about runs without asking; a rule that says
+ * {@code deny} still denies. {@code permissions} also lets each conversation switch it on or off at run time
+ * (command {@code bypass}), which wins over this default for that conversation.
  *
  * Unknown risks or rules are a config error, not silently ignored: a typo must not open a hole.
  */
-public record PermissionsConfig(Map<String, String> risks, Map<String, String> tools, int askTimeoutSeconds) {
+public record PermissionsConfig(Map<String, String> risks, Map<String, String> tools, int askTimeoutSeconds,
+    boolean bypassPermissions) {
 
   public static final PermissionsConfig DEFAULT = new PermissionsConfig(null, null, 0);
+
+  public PermissionsConfig(Map<String, String> risks, Map<String, String> tools, int askTimeoutSeconds) {
+    this(risks, tools, askTimeoutSeconds, false);
+  }
 
   public PermissionsConfig {
     Map<String, String> merged = new TreeMap<>();

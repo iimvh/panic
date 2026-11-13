@@ -28,6 +28,7 @@ import panic.tools.PermissionsPlugin;
 import panic.tools.ToolContext;
 import panic.tools.ToolResult;
 import panic.tools.Tools;
+import panic.tools.Workspace;
 
 class ChecksPluginTest {
 
@@ -56,6 +57,20 @@ class ChecksPluginTest {
 
   private ToolResult call(String args) {
     return call(args, new CancelToken());
+  }
+
+  @Test
+  void runsInTheProjectOfTheConversation() throws Exception {
+    Files.writeString(dir.resolve("default-marker"), "x");
+    Path project = Files.createDirectory(dir.resolve("project"));
+    Files.writeString(project.resolve("project-marker"), "x");
+    checks(Map.of("test", sh("ls", 0)), 0);
+    root.hook(Workspace.ROOT, q -> q.conversationId().equals("c") ? project : null);
+    String inProject = call("{\"name\":\"test\"}").content();
+    assertTrue(inProject.contains("project-marker") && !inProject.contains("default-marker"), inProject);
+    ToolResult other = Tools.call(root, new ToolCall("id", "check", "{\"name\":\"test\"}"),
+        new ToolContext("d", new CancelToken()));
+    assertTrue(other.content().contains("default-marker"), "no project: the configured dir: " + other.content());
   }
 
   @Test

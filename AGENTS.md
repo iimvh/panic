@@ -120,6 +120,7 @@ every pull request. A change is not done until it passes.
 | `plugins/chat` | `conversations`, `chat` | [README](plugins/chat/README.md) |
 | `plugins/tools` | `tools`, `permissions`, `files`, `clock` | [README](plugins/tools/README.md) |
 | `plugins/todo` | `todo` | [README](plugins/todo/README.md) |
+| `plugins/workspace` | `workspace`, `folder-picker` | [README](plugins/workspace/README.md) |
 | `plugins/verify` | `checks`, `review` | [README](plugins/verify/README.md) |
 | `plugins/trace` | `tracing` | [README](plugins/trace/README.md) |
 | `plugins/agents` | `agents` | [README](plugins/agents/README.md) |

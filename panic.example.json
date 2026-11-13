@@ -21,6 +21,8 @@
   },
   "conversations": { "dir": ".panic/conversations", "persist": true },
   "todo": { "dir": ".panic/todo", "maxItems": 50 },
+  "workspace": { "dir": ".panic/workspace" },
+  "folder-picker": { "enabled": true, "timeoutSeconds": 120 },
   "tracing": { "dir": ".panic/traces", "keepDays": 30, "maxTraces": 500 },
   "checks": {
     "dir": ".",
@@ -44,7 +46,8 @@
   "permissions": {
     "risks": { "read": "allow", "write": "ask", "exec": "ask", "network": "ask" },
     "tools": { "todo_write": "allow" },
-    "askTimeoutSeconds": 120
+    "askTimeoutSeconds": 120,
+    "bypassPermissions": false
   },
   "web": { "enabled": false, "host": "127.0.0.1", "port": 8080, "detachSeconds": 120 }
 }

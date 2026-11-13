@@ -1,16 +1,24 @@
 <script lang="ts">
 	import { chat } from '$lib/chat.svelte';
-	import { ago } from '$lib/conversations';
+	import { ago, group, type ConversationInfo } from '$lib/conversations';
 
 	/**
-	 * The stored chats, newest first: open one, start a new one, delete one (asked again before it goes). A
-	 * sidebar on wide screens; on narrow ones a drawer, shown while `open`.
+	 * The stored chats, newest first, grouped by project (workspace) when the server has projects: open a chat,
+	 * start a new one (in a project with its "+"), delete one (asked again before it goes), add or remove a
+	 * project. A sidebar on wide screens; on narrow ones a drawer, shown while `open`.
 	 */
 	let { open = false, onclose }: { open?: boolean; onclose: () => void } = $props();
 
 	let confirming = $state<string | null>(null);
 	let problem = $state<string | null>(null);
 	let now = $state(Date.now());
+	const groups = $derived(group(chat.conversations, chat.workspaces, chat.session, now));
+
+	/** The folder to add by typing: when no dialog could pick one, or the user prefers to type. */
+	let typing = $state(false);
+	let typed = $state('');
+	let adding = $state(false);
+	let removing = $state<string | null>(null);
 
 	$effect(() => {
 		const timer = setInterval(() => (now = Date.now()), 60_000);
@@ -31,6 +39,31 @@
 		await chat.newChat();
 	}
 
+	async function freshIn(path: string) {
+		confirming = null;
+		problem = null;
+		onclose();
+		problem = await chat.newChat(path);
+	}
+
+	async function addProject(path?: string) {
+		adding = true;
+		problem = null;
+		const r = await chat.addProject(path);
+		adding = false;
+		if (r.error) problem = r.text;
+		else if (r.needsPath) typing = true;
+		else if (path) {
+			typed = '';
+			typing = false;
+		}
+	}
+
+	async function removeProject(path: string) {
+		problem = await chat.removeProject(path);
+		removing = null;
+	}
+
 	async function remove(id: string) {
 		problem = await chat.remove(id);
 		confirming = null;
@@ -39,12 +72,46 @@
 	function onkeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') {
 			if (confirming) confirming = null;
+			else if (removing) removing = null;
 			else onclose();
 		}
 	}
 </script>
 
 <svelte:window {onkeydown} />
+
+{#snippet row(c: ConversationInfo)}
+	<li class:current={c.id === chat.session}>
+		{#if confirming === c.id}
+			<div class="confirm">
+				<span>Delete this chat?</span>
+				<button class="btn danger" onclick={() => remove(c.id)}>Delete</button>
+				<button class="btn" onclick={() => (confirming = null)}>Cancel</button>
+			</div>
+		{:else}
+			<button
+				class="item"
+				onclick={() => pick(c.id)}
+				aria-current={c.id === chat.session ? 'page' : undefined}
+				title={c.title}
+			>
+				<span class="title">{c.title || 'New chat'}</span>
+				<span class="time">{ago(c.updatedAt, now)}</span>
+			</button>
+			<button class="delete" aria-label={`Delete "${c.title || 'New chat'}"`} onclick={() => (confirming = c.id)}>
+				<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
+					><path
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.8"
+						stroke-linecap="round"
+						d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"
+					/></svg
+				>
+			</button>
+		{/if}
+	</li>
+{/snippet}
 
 {#if open}
 	<button class="scrim" aria-label="Close the chat list" onclick={onclose}></button>
@@ -57,41 +124,90 @@
 		New chat
 	</button>
 	{#if problem}<p class="problem" role="alert">{problem}</p>{/if}
-	<ul>
-		{#each chat.conversations as c (c.id)}
-			<li class:current={c.id === chat.session}>
-				{#if confirming === c.id}
-					<div class="confirm">
-						<span>Delete this chat?</span>
-						<button class="btn danger" onclick={() => remove(c.id)}>Delete</button>
-						<button class="btn" onclick={() => (confirming = null)}>Cancel</button>
-					</div>
-				{:else}
-					<button
-						class="item"
-						onclick={() => pick(c.id)}
-						aria-current={c.id === chat.session ? 'page' : undefined}
-						title={c.title}
-					>
-						<span class="title">{c.title || 'Untitled chat'}</span>
-						<span class="time">{ago(c.updatedAt, now)}</span>
-					</button>
-					<button class="delete" aria-label={`Delete "${c.title || 'Untitled chat'}"`} onclick={() => (confirming = c.id)}>
-						<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
-							><path
-								fill="none"
-								stroke="currentColor"
-								stroke-width="1.8"
-								stroke-linecap="round"
-								d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"
-							/></svg
-						>
-					</button>
-				{/if}
-			</li>
+
+	{#if chat.workspaces}
+		<div class="head">
+			<span>Projects</span>
+			{#if adding}
+				<button class="link" onclick={() => chat.cancelAddProject()}>Cancel</button>
+			{:else}
+				<button class="link" onclick={() => addProject()} disabled={!!chat.offline}>Add project</button>
+			{/if}
+		</div>
+		{#if adding}
+			<p class="note" role="status">
+				A folder dialog is open on the computer that runs Panic. Can't see it? Cancel and type the path.
+			</p>
+		{/if}
+		{#if typing}
+			<form
+				class="typing"
+				onsubmit={(e) => {
+					e.preventDefault();
+					if (typed.trim()) void addProject(typed.trim());
+				}}
+			>
+				<input bind:value={typed} placeholder="Folder path, e.g. D:\work\app" aria-label="Folder path" />
+				<button class="btn" disabled={adding || !typed.trim()}>Add</button>
+				<button class="btn" type="button" onclick={() => (typing = false)}>Cancel</button>
+			</form>
 		{:else}
-			<li class="none">No chats yet</li>
+			<button class="link small" onclick={() => (typing = true)}>or type a path</button>
+		{/if}
+
+		{#each groups.groups as g (g.project.path)}
+			<section class="project" aria-label={g.project.name}>
+				<div class="project-title" title={g.project.path}>
+					<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
+						><path
+							fill="none"
+							stroke="currentColor"
+							stroke-width="1.8"
+							stroke-linejoin="round"
+							d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"
+						/></svg
+					>
+					<span class="name">{g.project.name}</span>
+					{#if removing === g.project.path}
+						<button class="btn danger" onclick={() => removeProject(g.project.path)}>Remove</button>
+						<button class="btn" onclick={() => (removing = null)}>Cancel</button>
+					{:else}
+						<button
+							class="icon"
+							aria-label={`New chat in ${g.project.name}`}
+							title="New chat in this project"
+							onclick={() => freshIn(g.project.path)}
+							disabled={!!chat.offline}
+						>
+							<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
+								><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14" /></svg
+							>
+						</button>
+						<button
+							class="icon"
+							aria-label={`Remove project ${g.project.name}`}
+							title="Remove project (its chats are hidden)"
+							onclick={() => (removing = g.project.path)}
+						>
+							<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
+								><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18" /></svg
+							>
+						</button>
+					{/if}
+				</div>
+				{#if removing === g.project.path}
+					<p class="note">Its chats are hidden until you add the folder again.</p>
+				{/if}
+				<ul>
+					{#each g.chats as c (c.id)}{@render row(c)}{:else}<li class="none">No chats yet</li>{/each}
+				</ul>
+			</section>
 		{/each}
+		{#if groups.groups.length > 0}<div class="head"><span>Chats</span></div>{/if}
+	{/if}
+
+	<ul>
+		{#each groups.rest as c (c.id)}{@render row(c)}{:else}<li class="none">No chats yet</li>{/each}
 	</ul>
 </nav>
 
@@ -201,7 +317,8 @@
 	.confirm span {
 		flex-basis: 100%;
 	}
-	.confirm .btn {
+	.confirm .btn,
+	.project-title .btn {
 		font-size: 13px;
 		padding: 3px 10px;
 	}
@@ -216,10 +333,102 @@
 		font-size: 13px;
 		color: var(--danger);
 	}
+	.note {
+		margin: 0;
+		padding: 0 10px;
+		font-size: 12px;
+		color: var(--muted);
+	}
 	.none {
 		padding: 8px 10px;
 		font-size: 13px;
 		color: var(--muted);
+	}
+	.head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		padding: 6px 10px 0;
+		font-size: 12px;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--muted);
+	}
+	.link {
+		border: 0;
+		background: none;
+		padding: 0;
+		font: inherit;
+		font-size: 12px;
+		text-transform: none;
+		letter-spacing: 0;
+		color: var(--accent);
+		cursor: pointer;
+	}
+	.link.small {
+		align-self: flex-start;
+		margin: -4px 10px 0;
+		color: var(--muted);
+	}
+	.link:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+	.typing {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		padding: 0 8px;
+	}
+	.typing input {
+		flex-basis: 100%;
+		min-width: 0;
+		padding: 6px 8px;
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		background: var(--surface-2);
+		color: var(--text);
+		font: inherit;
+		font-size: 13px;
+	}
+	.project {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+	.project-title {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 4px 4px 4px 10px;
+		font-size: 14px;
+		font-weight: 600;
+	}
+	.project-title .name {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.icon {
+		flex: none;
+		display: grid;
+		place-items: center;
+		width: 26px;
+		height: 26px;
+		border: 0;
+		border-radius: 6px;
+		background: none;
+		color: var(--muted);
+		cursor: pointer;
+	}
+	.icon:hover:not(:disabled) {
+		color: var(--text);
+		background: var(--surface-2);
+	}
+	.project ul {
+		padding-left: 10px;
 	}
 	.scrim {
 		display: none;

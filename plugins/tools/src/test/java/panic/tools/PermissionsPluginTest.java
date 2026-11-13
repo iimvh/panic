@@ -160,6 +160,89 @@ class PermissionsPluginTest {
     assertEquals(1, asked.size(), "a denied call is never asked");
   }
 
+  private String bypass(String conversation, String state) {
+    StringBuilder out = new StringBuilder();
+    Commands.run(root, "bypass", state, new Session(conversation, out::append, new CancelToken()));
+    return out.toString().strip();
+  }
+
+  private Tools.Bypass bypassOf(String conversation) {
+    return panic.command.Hooks.bail(root, Tools.BYPASS, new Tools.BypassQuery(conversation)).orElseThrow();
+  }
+
+  @Test
+  void bypassInTheConfigRunsEverythingTheRulesWouldAsk() {
+    approver(a -> Tools.Decision.DENY);
+    policy(new PermissionsConfig(null, null, 0, true));
+    assertEquals(ToolResult.ok("change ran"), call("change"));
+    assertEquals(ToolResult.ok("run ran"), call("run"));
+    assertTrue(asked.isEmpty(), "nobody is asked");
+    assertEquals(new Tools.Bypass(true, true), bypassOf("c"));
+  }
+
+  @Test
+  void aDenyRuleStillWinsInBypassMode() {
+    policy(new PermissionsConfig(Map.of("network", "deny"), Map.of("run", "deny"), 0, true));
+    root.plugin("net", ctx -> {
+      Tools.register(ctx, tool("fetch", Risk.NETWORK));
+      return null;
+    });
+    assertEquals(ToolResult.error("run: denied by policy"), call("run"));
+    assertEquals(ToolResult.error("fetch: denied by policy"), call("fetch"));
+    assertEquals(ToolResult.ok("change ran"), call("change"));
+  }
+
+  @Test
+  void bypassIsSwitchedPerChatAndBeatsTheConfigDefaultBothWays() {
+    approver(a -> Tools.Decision.DENY);
+    policy(PermissionsConfig.DEFAULT);
+    assertEquals(ToolResult.error("change: denied by the user"), call("change"));
+    assertTrue(bypass("c", "status").startsWith("bypass off in this chat"));
+
+    assertTrue(bypass("c", "on").startsWith("bypass on:"));
+    assertEquals(ToolResult.ok("change ran"), call("change"));
+    assertEquals(ToolResult.error("change: denied by the user"), call("change", "{}", "other"), "another chat asks");
+    assertEquals(new Tools.Bypass(true, false), bypassOf("c"));
+    assertEquals(new Tools.Bypass(false, false), bypassOf("other"));
+
+    assertEquals("bypass off: calls that need approval ask again", bypass("c", "off"));
+    assertEquals(ToolResult.error("change: denied by the user"), call("change"));
+  }
+
+  @Test
+  void aChatCanTurnTheConfigDefaultOff() {
+    approver(a -> Tools.Decision.DENY);
+    policy(new PermissionsConfig(null, null, 0, true));
+    bypass("c", "off");
+    assertEquals(ToolResult.error("change: denied by the user"), call("change"));
+    assertEquals(ToolResult.ok("change ran"), call("change", "{}", "other"), "the others keep the default");
+    bypass("c", "on");
+    assertEquals(ToolResult.ok("change ran"), call("change"));
+  }
+
+  @Test
+  void aSubAgentFollowsTheBypassOfTheChatItWorksFor() {
+    policy(PermissionsConfig.DEFAULT);
+    bypass("c", "on");
+    ToolContext sub = new ToolContext("c~explore-1", new CancelToken(), null, "c", "explore", null, null, null);
+    assertEquals(ToolResult.ok("change ran"), Tools.call(root, new ToolCall("id", "change", "{}"), sub));
+  }
+
+  @Test
+  void bypassCommandRejectsAnUnknownState() {
+    policy(PermissionsConfig.DEFAULT);
+    assertThrows(panic.command.UsageException.class, () -> bypass("c", "maybe"));
+  }
+
+  @Test
+  void bypassIsForgottenWhenThePermissionsPluginRestarts() {
+    ConfigHandle<PermissionsConfig> permissions = policy(PermissionsConfig.DEFAULT);
+    bypass("c", "on");
+    assertEquals(ToolResult.ok("change ran"), call("change"));
+    permissions.update(new PermissionsConfig(null, null, 5));
+    assertFalse(bypassOf("c").on());
+  }
+
   @Test
   void policyChangesTakeEffectWithoutRestartingOtherPlugins() {
     AtomicInteger starts = new AtomicInteger();

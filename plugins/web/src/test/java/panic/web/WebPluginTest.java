@@ -643,6 +643,37 @@ class WebPluginTest {
   }
 
   @Test
+  void bypassStateComesFromThePermissionsHookAnd503WithoutAnswer() throws Exception {
+    assertEquals(503, get("/api/permissions?session=s").statusCode());
+    root.plugin("permissions", new panic.tools.PermissionsPlugin(), new panic.tools.PermissionsConfig(null, null, 0, false));
+    JsonNode off = Json.parseOrNull(get("/api/permissions?session=s").body());
+    assertFalse(off.path("bypass").asBoolean());
+    assertFalse(off.path("default").asBoolean());
+    send("POST", "/api/command", "{\"session\":\"s\",\"line\":\"bypass on\"}");
+    assertTrue(Json.parseOrNull(get("/api/permissions?session=s").body()).path("bypass").asBoolean());
+    assertFalse(Json.parseOrNull(get("/api/permissions?session=other").body()).path("bypass").asBoolean());
+    assertEquals(400, get("/api/permissions?session=..").statusCode());
+    assertEquals(405, send("PUT", "/api/permissions", "{}").statusCode());
+  }
+
+  @Test
+  void workspacesAreListedFromTheHookAnd503WithoutAnswer() throws Exception {
+    assertEquals(503, get("/api/workspaces").statusCode());
+    root.hook(panic.tools.Workspace.LIST, q -> new panic.tools.Workspace.Projects(
+        List.of(new panic.tools.Workspace.Project(java.nio.file.Path.of("/w/meeting-room").toAbsolutePath(),
+            "meeting-room", List.of("one", "bad id!"))), List.of("old")));
+    HttpResponse<String> r = get("/api/workspaces");
+    assertEquals(200, r.statusCode());
+    JsonNode body = Json.parseOrNull(r.body());
+    assertEquals("meeting-room", body.path("projects").path(0).path("name").asText());
+    assertEquals(List.of("one"),
+        Json.MAPPER.convertValue(body.path("projects").path(0).path("conversations"), List.class),
+        "ids that are not valid sessions are left out");
+    assertEquals(List.of("old"), Json.MAPPER.convertValue(body.path("hidden"), List.class));
+    assertEquals(405, send("PUT", "/api/workspaces", "{}").statusCode());
+  }
+
+  @Test
   void webKeepsRunningWhenConversationsStopAndAnswersUnavailable() throws Exception {
     String before = base;
     conversations.dispose();

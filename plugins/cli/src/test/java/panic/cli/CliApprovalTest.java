@@ -120,6 +120,27 @@ class CliApprovalTest {
   }
 
   @Test
+  void bypassModeRunsCallsWithoutAskingAndShowsInThePrompt() throws Exception {
+    root.plugin("permissions", new panic.tools.PermissionsPlugin(), panic.tools.PermissionsConfig.DEFAULT);
+    see("\n> ", 1);
+    type("/bypass on");
+    see("bypass on:", 1);
+    see("[bypass] > ", 1);
+    type("/tool change");
+    see("changed\n", 1);
+    assertEquals(1, ran.get());
+    assertFalse(screen.toString().contains("[approve]"), "nothing was asked");
+
+    type("/bypass off");
+    see("bypass off:", 1);
+    type("/tool change");
+    see("[approve] change (write) {}\nallow? [y/N] ", 1);
+    type("n");
+    see("error: change: denied by the user\n", 1);
+    assertEquals(1, ran.get());
+  }
+
+  @Test
   void otherSessionsAreNotAskedHere() throws Exception {
     see("> ", 1); // the REPL is up
     StringBuilder out = new StringBuilder();

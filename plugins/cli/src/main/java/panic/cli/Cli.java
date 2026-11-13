@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import panic.command.Command;
 import panic.command.Commands;
+import panic.command.Hooks;
 import panic.command.Out;
 import panic.command.Session;
 import panic.command.UsageException;
@@ -33,7 +34,9 @@ import panic.tools.Tools;
  *
  * In the REPL it also answers {@link Tools#APPROVE} for its own session: a tool call the policy wants
  * approved is shown and runs only if the user types {@code y}. One-shot mode answers nothing, so such calls
- * are denied.
+ * are denied (set {@code permissions.bypassPermissions} for scripts). While the session runs in bypass mode
+ * ({@link Tools#BYPASS}, switched with command {@code bypass}) the policy allows those calls, so nothing is asked,
+ * and the prompt reads {@code [bypass] > } so that mode is never silent.
  */
 public final class Cli implements ConfigPlugin<CliConfig> {
 
@@ -66,7 +69,7 @@ public final class Cli implements ConfigPlugin<CliConfig> {
       Commands.run(ctx, Commands.STATUS, "", session);
       try {
         while (!signal.isCancelled() && !stop.get()) {
-          out.print("\n> ");
+          out.print(prompt(ctx));
           String line = in.readLine();
           if (line == null) break;
           line = line.strip();
@@ -79,6 +82,12 @@ public final class Cli implements ConfigPlugin<CliConfig> {
       return null;
     });
     return null;
+  }
+
+  /** {@code > }, or {@code [bypass] > } while the REPL's conversation runs without approvals (YOLO mode). */
+  private static String prompt(Context ctx) {
+    boolean bypass = Hooks.bail(ctx, Tools.BYPASS, new Tools.BypassQuery(SESSION)).map(Tools.Bypass::on).orElse(false);
+    return bypass ? "\n[bypass] > " : "\n> ";
   }
 
   /**

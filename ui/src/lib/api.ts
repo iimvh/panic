@@ -1,4 +1,4 @@
-import type { ConversationInfo } from './conversations';
+import type { ConversationInfo, Workspaces } from './conversations';
 import { createSseParser, type SseEvent } from './sse';
 
 export type ProviderStatus = { id: string; connected: boolean };
@@ -68,6 +68,42 @@ export const getConversations = () => json<ConversationInfo[]>('/api/conversatio
 /** Deletes a conversation with its plan and traces; ApiError 409 while an answer runs in it, 404 when unknown. */
 export const deleteConversation = (session: string) =>
 	json<{ ok: boolean }>(`/api/conversations?session=${encodeURIComponent(session)}`, { method: 'DELETE' });
+
+/** The projects and their chats; null when the server has no `workspace` plugin (503). */
+export async function getWorkspaces(): Promise<Workspaces | null> {
+	const res = await fetch('/api/workspaces');
+	if (res.status === 503) return null;
+	if (!res.ok) await fail(res);
+	return res.json() as Promise<Workspaces>;
+}
+
+/** Whether the session runs without tool approvals (YOLO) and the config default; null when the server has no `permissions` plugin (503). */
+export type Permissions = { bypass: boolean; default: boolean };
+export async function getPermissions(session: string): Promise<Permissions | null> {
+	const res = await fetch(`/api/permissions?session=${encodeURIComponent(session)}`);
+	if (res.status === 503) return null;
+	if (!res.ok) await fail(res);
+	return res.json() as Promise<Permissions>;
+}
+
+/** The argument of a command line: quoted so a path with spaces stays one argument. */
+export const quoteArg = (arg: string) => (arg.includes('"') ? `'${arg}'` : `"${arg}"`);
+
+/** Runs a command and returns what it printed; ApiError when it failed, was unknown or got bad arguments. */
+export async function runCommand(session: string, line: string, signal?: AbortSignal): Promise<string> {
+	let text = '';
+	let problem: string | null = null;
+	await stream('/api/command', { session, line }, ({ event, data }) => {
+		const d = data as Record<string, unknown>;
+		if (event === 'delta') text += String(d.text ?? '');
+		else if (event === 'unknown') problem = `Unknown command /${d.name}.`;
+		else if (event === 'usage') problem = `Usage: /${d.usage} (${d.message})`;
+		else if (event === 'error') problem = String(d.message);
+		else if (event === 'approve') problem = 'This command needs an approval; run it from the chat.';
+	}, signal);
+	if (problem) throw new ApiError(problem, 400);
+	return text.trim();
+}
 
 /** One trace of the session; ApiError 404 when unknown or when tracing is off (its message says which). */
 export const getTrace = (session: string, id: string) =>

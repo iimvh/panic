@@ -40,6 +40,7 @@ import panic.llm.Providers;
 import panic.llm.ToolCall;
 import panic.llm.ToolCallDelta;
 import panic.tools.Tools;
+import panic.tools.Workspace;
 import panic.trace.Span;
 import panic.trace.Trace;
 
@@ -85,6 +86,8 @@ final class Api {
         if (method.equals("DELETE")) only(ex, method, "DELETE", () -> deleteConversation(ex));
         else only(ex, method, "GET", () -> conversations(ex));
       }
+      case "/api/permissions" -> only(ex, method, "GET", () -> permissions(ex));
+      case "/api/workspaces" -> only(ex, method, "GET", () -> workspaces(ex));
       case "/api/trace" -> only(ex, method, "GET", () -> trace(ex));
       case "/api/chat" -> only(ex, method, "POST", () -> chat(ex, signal));
       case "/api/stream" -> only(ex, method, "GET", () -> follow(ex, signal));
@@ -176,6 +179,46 @@ final class Api {
       if (!SESSION.matcher(i.id()).matches()) continue;
       out.addObject().put("id", i.id()).put("title", i.title()).put("updatedAt", i.updatedAt());
     }
+    Http.json(ex, 200, out);
+  }
+
+  /**
+   * Whether the session runs in bypass mode (YOLO: tool calls that would ask the user just run):
+   * {@code {bypass, default}}, {@code default} being what the config says for every chat. {@code 503} when nobody
+   * answers (no {@code permissions} plugin: then calls follow the fallback policy). Switching goes through
+   * {@code POST /api/command} ({@code bypass on|off}).
+   */
+  private void permissions(HttpExchange ex) throws IOException {
+    String session = session(Http.query(ex).get("session"));
+    Optional<Tools.Bypass> bypass = Hooks.bail(ctx, Tools.BYPASS, new Tools.BypassQuery(session));
+    if (bypass.isEmpty()) {
+      Http.error(ex, 503, "permissions are not available");
+      return;
+    }
+    Http.json(ex, 200, Json.object().put("bypass", bypass.get().on()).put("default", bypass.get().byDefault()));
+  }
+
+  /**
+   * The projects (workspaces) and which chats work in them: {@code {projects: [{path, name, conversations}],
+   * hidden: [id]}}; {@code hidden} are the chats of removed projects, which a page does not list. {@code 503} when
+   * nobody answers (no {@code workspace} plugin): the page then shows plain chats. Changing a project goes
+   * through {@code POST /api/command} ({@code workspace ...}).
+   */
+  private void workspaces(HttpExchange ex) throws IOException {
+    Optional<Workspace.Projects> all = Hooks.bail(ctx, Workspace.LIST, Workspace.Listing.ALL);
+    if (all.isEmpty()) {
+      Http.error(ex, 503, "workspaces are not available");
+      return;
+    }
+    ObjectNode out = Json.object();
+    ArrayNode projects = out.putArray("projects");
+    for (Workspace.Project p : all.get().projects()) {
+      ObjectNode o = projects.addObject().put("path", p.path().toString()).put("name", p.name());
+      ArrayNode ids = o.putArray("conversations");
+      p.conversations().stream().filter(id -> SESSION.matcher(id).matches()).forEach(ids::add);
+    }
+    ArrayNode hidden = out.putArray("hidden");
+    all.get().hidden().stream().filter(id -> SESSION.matcher(id).matches()).forEach(hidden::add);
     Http.json(ex, 200, out);
   }
 

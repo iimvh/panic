@@ -1,0 +1,65 @@
+name: CI
+
+# The gate: every push to master and every pull request must pass this before it counts.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout (with the z submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Builds the UI into the web jar, compiles with -Werror, runs every Java test (ConventionsTest included).
+      - name: Gradle check
+        run: ./gradlew check --console=plain
+
+      # node_modules was installed by the Gradle build (:web:installUi).
+      - name: UI type check
+        working-directory: ui
+        run: npm run check
+
+      - name: UI tests
+        working-directory: ui
+        run: npm test
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          retention-days: 7

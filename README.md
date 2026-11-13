@@ -7,6 +7,7 @@
 
 *An LLM assistant, in the terminal and the browser, built as a tree of hot-swappable plugins on the z lifecycle kernel*
 
+[![CI](https://github.com/iimvh/agent-panic/actions/workflows/ci.yml/badge.svg)](https://github.com/iimvh/agent-panic/actions/workflows/ci.yml)
 [![Java](https://img.shields.io/badge/Java-21-ED8B00?style=flat-square&logo=openjdk&logoColor=white)](https://adoptium.net)
 [![Gradle](https://img.shields.io/badge/Gradle-9.9-02303A?style=flat-square&logo=gradle&logoColor=white)](https://gradle.org)
 [![Built on z](https://img.shields.io/badge/built%20on-z-5B5BD6?style=flat-square)](https://github.com/iimvh/z)

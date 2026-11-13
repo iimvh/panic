@@ -94,6 +94,9 @@ to make a change pass.
 cd ui && npm run check && npm test  # when you touch ui/
 ```
 
+CI (`.github/workflows/ci.yml`, job **Build and test**) runs the same checks on every push to `master` and
+every pull request. A change is not done until it passes.
+
 ## Style
 
 - Java 21, 2-space indentation, `-Xlint:all -Werror`. Prefer records and small final classes.

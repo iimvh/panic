@@ -19,8 +19,9 @@ that left: a command is cancelled, an answer goes on without it (see [Resuming](
 | --- | --- |
 | `GET /api/state` | hooks `Llm.CONFIG`, `Llm.CURRENT`, `Providers.STATUS`; `Commands.list` |
 | `GET /api/models?filter=` | hook `Llm.CURRENT` |
-| `GET /api/history?session=` | service `Conversations.KEY`: `user {content}`, `assistant {content, toolCalls[]}`, `tool {toolCallId, status: ok/error, content}` (content cut like `tool` events), `review {reason}` for a rejection sent back to the model (`Chat.REVIEW_FEEDBACK_PREFIX`; errors are told by `Chat.TOOL_ERROR_PREFIX`). Turns already compacted into the summary are left out |
-| `POST /api/chat {session, text}` → SSE `start`, `delta`, `tool_delta`, `tool`, `review`, `done`, ... | `Chat.ask`, events in the order they happen (`tool_delta`: `{index, id?, name?, arguments}` from `onToolDelta`, a piece of a call the model is still writing; `tool`: `{id, name, arguments, status: running/ok/error, content?}` from `onStep`; `review`: `{attempt, pass, reason}` from `onReview`; `done` adds `stop`, `toolCalls` and `review` when the answer was reviewed) |
+| `GET /api/history?session=` | service `Conversations.KEY`: `user {content}`, `assistant {content, toolCalls[]}`, `tool {toolCallId, status: ok/error, content}` (content cut like `tool` events), `review {reason}` for a rejection sent back to the model (`Chat.REVIEW_FEEDBACK_PREFIX`; errors are told by `Chat.TOOL_ERROR_PREFIX`). Turns already compacted into the summary are left out. With a tracer (hook `Trace.LIST`), `user` entries whose turn was traced add `traceId` (see [Traces](#traces)) |
+| `POST /api/chat {session, text}` → SSE `start`, `delta`, `tool_delta`, `tool`, `review`, `done`, ... | `Chat.ask`, events in the order they happen (`tool_delta`: `{index, id?, name?, arguments}` from `onToolDelta`, a piece of a call the model is still writing; `tool`: `{id, name, arguments, status: running/ok/error, content?}` from `onStep`; `review`: `{attempt, pass, reason}` from `onReview`; `done` adds `stop`, `toolCalls`, `traceId` and `review` when the answer was reviewed) |
+| `GET /api/trace?session=&id=` | hook `Trace.GET`: `{traceId, spans: [{id, parentId, name, startMicros, durationMicros, status: ok/error/cancelled, error?, attrs}]}`, in the order they started. `404` `no such trace`, or `tracing is off` when nobody answers `Trace.LIST` |
 | `GET /api/stream?session=&after=` → SSE | attaches to the session's answer in flight: its events after SSE id `after`, then the rest; `204` when none runs |
 | `POST /api/stop {session}` | cancels the session's answer (`404` when none runs) |
 | `POST /api/command {session, line}` → SSE | `Commands.run` |
@@ -30,12 +31,23 @@ that left: a command is cancelled, an answer goes on without it (see [Resuming](
 ### Resuming
 
 An answer belongs to its session, not to the connection that asked for it. Every event of `POST /api/chat`
-has an SSE `id` (1, 2, ...), and the first one is `start {question, startedAt}`. When the browser goes (a
+has an SSE `id` (1, 2, ...), and the first one is `start {question, startedAt, traceId}`. When the browser goes (a
 reload, a dropped network) the answer keeps running and its events are kept. `GET /api/stream` with the
 last id seen replays the missed events, then streams the rest. The answer stops on `POST /api/stop`, when
 nobody has watched it for `detachSeconds` (`0`: as soon as the last page leaves, the old behaviour), or when
 the plugin stops. A session runs one answer at a time (`409` for another `POST /api/chat`). Once it ends,
 `GET /api/history` holds it.
+
+### Traces
+
+`POST /api/chat` picks the answer's trace id and passes it as `Ask.traceId`, so `start` already names the trace.
+A resumed page gets it from the replayed `start`. Web never requires the tracer: it only asks `Trace.GET` and
+`Trace.LIST` (from `sdk`). With no `tracing` plugin, those ask nobody: `/api/trace` answers `404` and history has
+no `traceId`.
+
+History links questions to traces by `Chat.questionHash`. Both are walked newest first, and each question takes
+the next saved trace (`saved` on the root) of the same question. A question asked while tracing was off gets
+none. Traces of turns that left the history (compacted, `reset`) are passed over.
 
 ### Approvals
 

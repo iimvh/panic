@@ -56,6 +56,8 @@ import panic.tools.Tool;
 import panic.tools.ToolContext;
 import panic.tools.ToolResult;
 import panic.tools.Tools;
+import panic.trace.Span;
+import panic.trace.Trace;
 
 class WebPluginTest {
 
@@ -228,6 +230,82 @@ class WebPluginTest {
 
     connected.update(false);
     assertEquals("unavailable", events(send("POST", "/api/chat", "{\"session\":\"s1\",\"text\":\"hi\"}").body()).get(0).name());
+  }
+
+  /** Keeps spans in memory and answers the trace hooks, like the {@code tracing} plugin. */
+  private void tracer() {
+    List<Span> spans = new java.util.concurrent.CopyOnWriteArrayList<>();
+    root.plugin("tracer", ctx -> {
+      ctx.on(Trace.SPAN, spans::add);
+      ctx.hook(Trace.GET, q -> {
+        List<Span> t = spans.stream().filter(s -> s.traceId().equals(q.traceId())).toList();
+        return t.isEmpty() ? null : new Trace.Spans(t.reversed()); // the root, which ends last, first
+      });
+      ctx.hook(Trace.LIST, q -> new Trace.Roots(spans.stream()
+          .filter(s -> s.root() && q.conversationId().equals(s.stringAttr(Trace.CONVERSATION)))
+          .toList().reversed()));
+      return null;
+    });
+  }
+
+  private static String startTraceId(String body) {
+    for (String block : body.split("\n\n")) {
+      if (block.contains("event: start\n")) {
+        return Json.parseOrNull(block.substring(block.indexOf("data: ") + 6)).path("traceId").asText();
+      }
+    }
+    throw new AssertionError("no start event in " + body);
+  }
+
+  @Test
+  void eachAnswerNamesItsTraceWhichTheApiServes() throws Exception {
+    tracer();
+    String body = send("POST", "/api/chat", "{\"session\":\"s1\",\"text\":\"hi\"}").body();
+    String id = startTraceId(body);
+    List<Event> ev = events(body);
+    assertEquals(id, ev.get(ev.size() - 1).data().path("traceId").asText(), "done names the same trace");
+
+    HttpResponse<String> r = get("/api/trace?session=s1&id=" + id);
+    assertEquals(200, r.statusCode(), r.body());
+    JsonNode t = Json.parseOrNull(r.body());
+    assertEquals(id, t.path("traceId").asText());
+    JsonNode turn = t.path("spans").path(0);
+    assertEquals("turn", turn.path("name").asText());
+    assertEquals("ok", turn.path("status").asText());
+    assertTrue(turn.path("parentId").isNull());
+    assertEquals(Chat.questionHash("hi"), turn.path("attrs").path("questionHash").asText());
+    assertEquals("llm", t.path("spans").path(1).path("name").asText());
+    assertEquals(turn.path("id").asText(), t.path("spans").path(1).path("parentId").asText());
+    assertEquals(3, t.path("spans").path(1).path("attrs").path("completionTokens").asInt());
+
+    assertEquals(404, get("/api/trace?session=s1&id=nope").statusCode());
+    assertTrue(get("/api/trace?session=s1&id=nope").body().contains("no such trace"));
+    assertEquals(400, get("/api/trace?session=s1").statusCode());
+  }
+
+  @Test
+  void withoutATracerTracesAreNotFound() throws Exception {
+    String body = send("POST", "/api/chat", "{\"session\":\"s1\",\"text\":\"hi\"}").body();
+    HttpResponse<String> r = get("/api/trace?session=s1&id=" + startTraceId(body));
+    assertEquals(404, r.statusCode());
+    assertTrue(r.body().contains("tracing is off"), r.body());
+    assertFalse(Json.parseOrNull(get("/api/history?session=s1").body()).path(0).has("traceId"));
+  }
+
+  @Test
+  void historyQuestionsKnowTheirTraces() throws Exception {
+    send("POST", "/api/chat", "{\"session\":\"s1\",\"text\":\"untraced\"}");
+    tracer();
+    List<String> ids = new ArrayList<>();
+    for (String q : List.of("a", "b", "a")) {
+      ids.add(startTraceId(send("POST", "/api/chat", "{\"session\":\"s1\",\"text\":\"" + q + "\"}").body()));
+    }
+    List<String> linked = new ArrayList<>();
+    for (JsonNode m : Json.parseOrNull(get("/api/history?session=s1").body())) {
+      if (m.path("role").asText().equals("user")) linked.add(m.path("traceId").asText("-"));
+    }
+    assertEquals(List.of("-", ids.get(0), ids.get(1), ids.get(2)), linked,
+        "the same question asked twice keeps each its own trace; one asked before tracing has none");
   }
 
   @Test
@@ -431,7 +509,8 @@ class WebPluginTest {
     assertEquals(200, r.statusCode());
     BufferedReader in = new BufferedReader(new InputStreamReader(r.body(), StandardCharsets.UTF_8));
     assertEquals(List.of("id: 1", "event: start"), List.of(in.readLine(), in.readLine()));
-    assertTrue(in.readLine().contains("\"question\":\"slow\""));
+    String start = in.readLine();
+    assertTrue(start.contains("\"question\":\"slow\"") && start.contains("\"traceId\":"), start);
     assertEquals(List.of("", "id: 2", "event: delta", "data: {\"text\":\"Hel\"}", ""),
         List.of(in.readLine(), in.readLine(), in.readLine(), in.readLine(), in.readLine()));
     fake.block.await();

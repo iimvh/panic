@@ -39,10 +39,13 @@ import panic.llm.Providers;
 import panic.llm.ToolCall;
 import panic.llm.ToolCallDelta;
 import panic.tools.Tools;
+import panic.trace.Span;
+import panic.trace.Trace;
 
 /**
  * The HTTP API. Like the CLI it owns no feature: everything goes through hooks (chat.ask, llm.config,
- * llm.current, llm.providers, tool.approve) and commands, so it reflects exactly what is running.
+ * llm.current, llm.providers, tool.approve, trace.get, trace.list) and commands, so it reflects exactly what is
+ * running.
  */
 final class Api {
 
@@ -77,6 +80,7 @@ final class Api {
       case "/api/state" -> only(ex, method, "GET", () -> Http.json(ex, 200, state()));
       case "/api/models" -> only(ex, method, "GET", () -> models(ex, signal));
       case "/api/history" -> only(ex, method, "GET", () -> history(ex));
+      case "/api/trace" -> only(ex, method, "GET", () -> trace(ex));
       case "/api/chat" -> only(ex, method, "POST", () -> chat(ex, signal));
       case "/api/stream" -> only(ex, method, "GET", () -> follow(ex, signal));
       case "/api/stop" -> only(ex, method, "POST", () -> stop(ex));
@@ -159,6 +163,7 @@ final class Api {
   private void history(HttpExchange ex) throws IOException {
     String session = session(Http.query(ex).get("session"));
     ArrayNode out = Json.MAPPER.createArrayNode();
+    List<ObjectNode> questions = new java.util.ArrayList<>();
     for (Message m : ctx.get(Conversations.KEY).get(session).recent(0)) {
       switch (m.role()) {
         case USER -> {
@@ -167,7 +172,7 @@ final class Api {
             int nl = reason.indexOf('\n');
             out.addObject().put("role", "review").put("reason", nl < 0 ? reason : reason.substring(0, nl));
           } else {
-            out.addObject().put("role", "user").put("content", m.content());
+            questions.add(out.addObject().put("role", "user").put("content", m.content()));
           }
         }
         case ASSISTANT -> {
@@ -186,6 +191,58 @@ final class Api {
         }
         default -> { }
       }
+    }
+    linkTraces(session, questions);
+    Http.json(ex, 200, out);
+  }
+
+  /**
+   * Sets {@code traceId} on the questions whose turn was traced. Both lists are walked newest first and matched
+   * on the question's digest: each question takes the next saved trace of the same question. A question with no
+   * trace (traced while tracing was off) takes none and leaves the rest in place; traces of turns no longer in
+   * the history (compacted, reset) are passed over.
+   */
+  private void linkTraces(String session, List<ObjectNode> questions) {
+    List<Span> roots;
+    try {
+      roots = ctx.bail(Trace.LIST, new Trace.ListQuery(session, 0)).map(Trace.Roots::roots).orElse(List.of());
+    } catch (RuntimeException e) {
+      return; // a broken tracer never breaks the history
+    }
+    List<Span> saved = roots.stream().filter(r -> Boolean.TRUE.equals(r.attrs().get("saved"))).toList();
+    int next = 0;
+    for (int i = questions.size() - 1; i >= 0 && next < saved.size(); i--) {
+      String hash = Chat.questionHash(questions.get(i).path("content").asText());
+      for (int j = next; j < saved.size(); j++) {
+        if (hash.equals(saved.get(j).stringAttr("questionHash"))) {
+          questions.get(i).put("traceId", saved.get(j).traceId());
+          next = j + 1;
+          break;
+        }
+      }
+    }
+  }
+
+  /** The spans of one trace of a session, in the order they started. 404 when unknown or tracing is off. */
+  private void trace(HttpExchange ex) throws IOException {
+    Map<String, String> q = Http.query(ex);
+    String session = session(q.get("session"));
+    String id = q.get("id");
+    if (id == null || id.isBlank()) throw new Http.BadRequest("missing id");
+    Optional<Trace.Spans> spans = ctx.bail(Trace.GET, new Trace.Query(session, id.strip()));
+    if (spans.isEmpty()) {
+      boolean tracing = ctx.bail(Trace.LIST, new Trace.ListQuery(session, 1)).isPresent();
+      Http.error(ex, 404, tracing ? "no such trace" : "tracing is off");
+      return;
+    }
+    ObjectNode out = Json.object().put("traceId", spans.get().spans().get(0).traceId());
+    ArrayNode list = out.putArray("spans");
+    for (Span s : spans.get().spans()) {
+      ObjectNode o = list.addObject().put("id", s.spanId()).put("parentId", s.parentId()).put("name", s.name())
+          .put("startMicros", s.startMicros()).put("durationMicros", s.durationMicros())
+          .put("status", s.status().name().toLowerCase(Locale.ROOT));
+      if (s.error() != null) o.put("error", s.error());
+      o.set("attrs", Json.MAPPER.valueToTree(s.attrs()));
     }
     Http.json(ex, 200, out);
   }
@@ -214,9 +271,11 @@ final class Api {
       return null;
     });
     try {
-      run.publish("start", Json.object().put("question", text).put("startedAt", System.currentTimeMillis()));
+      String traceId = Trace.newId();
+      run.publish("start", Json.object().put("question", text).put("startedAt", System.currentTimeMillis())
+          .put("traceId", traceId));
       run.attach(sse, 0);
-      answer(run, session, text, CancelToken.any(signal, run.cancelled()));
+      answer(run, session, text, traceId, CancelToken.any(signal, run.cancelled()));
     } finally {
       runs.remove(session, run);
       run.end();
@@ -225,14 +284,14 @@ final class Api {
     }
   }
 
-  private void answer(Run run, String session, String text, Signal signal) {
+  private void answer(Run run, String session, String text, String traceId, Signal signal) {
     try {
       Optional<Chat.Reply> reply = Chat.ask(ctx,
           new Chat.Ask(session, text, signal, d -> run.publish("delta", Json.object().put("text", d)),
               step -> run.publish("tool", step(step)),
               r -> run.publish("review", Json.object().put("attempt", r.attempt()).put("pass", r.verdict().pass())
                   .put("reason", r.verdict().reason())),
-              d -> run.publish("tool_delta", toolDelta(d))));
+              d -> run.publish("tool_delta", toolDelta(d)), traceId));
       if (reply.isEmpty()) {
         run.publish("unavailable", Json.object().put("message", "no LLM connected"));
         return;
@@ -241,6 +300,7 @@ final class Api {
       ObjectNode done = Json.object().put("model", r.model()).put("finishReason", r.finishReason())
           .put("stop", r.stop()).put("toolCalls", r.toolCalls());
       if (r.review() != null) done.put("review", r.review());
+      if (r.traceId() != null) done.put("traceId", r.traceId());
       done.putObject("usage").put("promptTokens", r.usage().promptTokens())
           .put("completionTokens", r.usage().completionTokens());
       run.publish("done", done);

@@ -145,4 +145,30 @@ class TodoPluginTest {
     Commands.run(root, "todo", "", new Session("s2", out::append, new CancelToken()));
     assertTrue(out.toString().contains("no tasks"), out.toString());
   }
+
+  @Test
+  void criteriaAreKeptUntilReplacedAndReadableThroughTheHook() {
+    call("a", "todo_write", "{\"items\":[{\"text\":\"fix\",\"status\":\"pending\"}],"
+        + "\"criteria\":[\"tests pass\",\" \",\"no warnings\"]}");
+    assertEquals(ToolResult.ok("1. [~] fix\nAcceptance criteria:\n- tests pass\n- no warnings"),
+        call("a", "todo_write", "{\"items\":[{\"text\":\"fix\",\"status\":\"in_progress\"}]}"),
+        "updating a status keeps the criteria; blank ones are dropped");
+
+    root.dispose();
+    root = Context.root("t");
+    start();
+    Todo.Plan plan = root.bail(Todo.PLAN, new Todo.Query("a")).orElseThrow();
+    assertEquals(List.of("tests pass", "no warnings"), plan.criteria());
+    assertTrue(sections("a").get(0).text().contains("- tests pass"));
+    assertTrue(root.bail(Todo.PLAN, new Todo.Query("b")).isEmpty(), "no plan, no answer");
+
+    assertEquals(ToolResult.ok("Acceptance criteria:\n- tests pass\n- no warnings"),
+        call("a", "todo_write", "{\"items\":[]}"), "criteria alone are a plan");
+    assertEquals(ToolResult.ok("task list cleared"), call("a", "todo_write", "{\"items\":[],\"criteria\":[]}"));
+    assertTrue(root.bail(Todo.PLAN, new Todo.Query("a")).isEmpty());
+
+    call("a", "todo_write", "{\"items\":[],\"criteria\":[\"x\"]}");
+    todo.dispose();
+    assertTrue(root.bail(Todo.PLAN, new Todo.Query("a")).isEmpty(), "the hook goes with the plugin");
+  }
 }

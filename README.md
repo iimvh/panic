@@ -211,6 +211,9 @@ The z kernel provides these guarantees, so Panic has no code for them:
 
 ## Writing a plugin
 
+> [!IMPORTANT]
+> Everything in Panic is a plugin. [AGENTS.md](AGENTS.md) holds the rules every contributor (human or coding agent) follows: when to use a service, hook, event, command or config, the dependency direction between modules, and the checklist for a new plugin. `ConventionsTest` enforces the rules that can be checked automatically.
+
 A plugin module is a folder in `plugins/`. Gradle includes it, the app depends on it, and the app installs its plugins at startup. Nothing else has to be edited.
 
 ```text

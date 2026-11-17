@@ -135,11 +135,15 @@ public final class Chat {
     }
   }
 
-  /** Why a turn ended. Anything but {@link #DONE} means the bot was stopped before it finished. */
+  /**
+   * Why a turn ended. Anything but {@link #DONE} means the bot was stopped before it finished. Only hard limits stop
+   * a turn ({@link #MAX_STEPS}, {@link #BUDGET}), as in the Claude Agent SDK ({@code max_turns}), Cursor (tool call
+   * limit, then "Continue") and the OpenAI Agents SDK ({@code max_turns}): a repeated call is refused as feedback,
+   * it does not end the turn.
+   */
   public static final String DONE = "done";
   public static final String MAX_STEPS = "max_steps";
   public static final String BUDGET = "budget";
-  public static final String LOOP = "loop";
   /** The reviewer still rejected the answer once {@code maxReviews} retries were used; see {@link Reply#review}. */
   public static final String REJECTED = "rejected";
 
@@ -153,9 +157,10 @@ public final class Chat {
   public static final String REVIEW_FEEDBACK_PREFIX = "A review of your answer rejected it: ";
 
   /**
-   * The answer. {@code text} is the bot's last message; {@code usage} adds up every model call of the turn
-   * (reviews included); {@code stop} says why it ended ({@link #DONE}, {@link #MAX_STEPS}, {@link #BUDGET},
-   * {@link #LOOP}, {@link #REJECTED}). {@code review} is the reason of the last verdict, null when nobody
+   * The answer. {@code text} is the bot's last message, or, when {@link #MAX_STEPS} or {@link #BUDGET} stopped the
+   * turn before it answered, a closing note of the harness (why it stopped, the tools run, how to continue) that is
+   * not saved in the conversation; {@code usage} adds up every model call of the turn (reviews included);
+   * {@code stop} says why it ended ({@link #DONE}, {@link #MAX_STEPS}, {@link #BUDGET}, {@link #REJECTED}). {@code review} is the reason of the last verdict, null when nobody
    * reviewed the answer. {@code traceId} is the turn's trace, whose spans are emitted on
    * {@link panic.trace.Trace#SPAN}.
    */

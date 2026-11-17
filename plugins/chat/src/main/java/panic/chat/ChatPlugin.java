@@ -134,6 +134,8 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private final List<Message> added = new ArrayList<>();
     private Usage usage = Usage.NONE;
     private int toolCalls;
+    /** How many times each tool ran this turn, in first-call order, for the closing text of a stopped turn. */
+    private final java.util.Map<String, Integer> ran = new java.util.LinkedHashMap<>();
     private String lastCall;
     private int repeats;
     private int reviews;
@@ -227,10 +229,40 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       signal.throwIfCancelled();
       conversation.append(added.toArray(Message[]::new));
       saved = true;
-      Chat.Reply reply = new Chat.Reply(last.text(), last.model(), last.finishReason(), usage, stop, steps,
+      String text = last.text();
+      String closing = closing(text);
+      if (closing != null) {
+        // the harness's own words: shown to the user, never saved as something the model said
+        ask.onDelta().accept(closing);
+        text = closing;
+      }
+      Chat.Reply reply = new Chat.Reply(text, last.model(), last.finishReason(), usage, stop, steps,
           toolCalls, review, span.traceId());
       ctx.emit(Chat.TURN, new Chat.Turn(ask.conversationId(), ask.text(), reply, ask.delegate()));
       return reply;
+    }
+
+    /**
+     * What the user reads when a hard limit stopped the turn before the model answered (the role of the OpenAI
+     * Agents SDK's max_turns handler): why it stopped, what ran, and how to go on (Cursor's "Continue"). Null when
+     * the model answered, the turn finished, or for a sub-agent (its caller reports the stop).
+     */
+    private String closing(String answer) {
+      if (ask.delegate() != null || !(Chat.MAX_STEPS.equals(stop) || Chat.BUDGET.equals(stop))) return null;
+      if (answer != null && !answer.isBlank()) return null;
+      String why = Chat.MAX_STEPS.equals(stop) ? "after " + steps + " steps (max_steps)"
+          : "after using " + usage.totalTokens() + " tokens (budget)";
+      StringBuilder out = new StringBuilder("Stopped ").append(why).append(" before finishing.");
+      if (!ran.isEmpty()) {
+        out.append(" Tools run this turn: ");
+        String sep = "";
+        for (java.util.Map.Entry<String, Integer> e : ran.entrySet()) {
+          out.append(sep).append(e.getKey()).append(" ×").append(e.getValue());
+          sep = ", ";
+        }
+        out.append('.');
+      }
+      return out.append(" Say \"continue\" to go on from here.").toString();
     }
 
     /** The step limit: the sub-agent's own when it has one, otherwise the config's. */
@@ -245,11 +277,15 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       return d != null && d.maxTokens() > 0 ? d.maxTokens() : cfg.maxTokens();
     }
 
-    /** The tools offered to the model: none when tools are off, only the allowed ones for a sub-agent. */
+    /**
+     * The tools offered to the model: none when tools are off, those no {@code Tools.GATE} refuses in the
+     * conversation the user talks to (plan mode, say), and only the allowed ones for a sub-agent. Asked again for
+     * every request, so a mode that ends mid-turn offers the tools on the next model call.
+     */
     private List<ToolSpec> specs() {
       if (!cfg.tools()) return List.of();
-      List<ToolSpec> all = Tools.specs(ctx);
       Chat.Delegate d = ask.delegate();
+      List<ToolSpec> all = Tools.specs(ctx, d == null ? ask.conversationId() : d.origin());
       return d == null ? all : all.stream().filter(t -> d.allows(t.name())).toList();
     }
 
@@ -494,8 +530,9 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     /**
      * Runs the calls of one model reply and adds their results in call order; returns how the turn goes on
      * ({@link Chat#DONE}) or why it stops. Every call gets a result, even when the turn stops here, so the
-     * history stays valid: once the turn is stopped (a limit reached before the calls, or a call that shows a
-     * loop) the remaining calls get a "not run" result.
+     * history stays valid: once the turn is stopped (a limit reached before the calls) the remaining calls get a
+     * "not run" result. A call repeated more than {@code maxRepeats} times in a row is refused, as feedback for the
+     * model; it does not stop the turn.
      *
      * Repeats are counted in call order first. Then the calls run one after the other, or up to
      * {@code parallelTools} at once on tasks of this plugin, so disposal cancels and awaits them like the
@@ -516,11 +553,12 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         if (ask.delegate() != null && !ask.delegate().allows(call.name())) {
           planned.add(new Planned(call, ToolResult.error(call.name() + " is not available to this agent")));
         } else if (repeats > cfg.maxRepeats()) {
+          // feedback, not a stop: only the hard limits end a turn
           planned.add(new Planned(call, ToolResult.error("the same call was made " + repeats + " times in a row; "
               + "change the arguments or answer with what you have")));
-          if (repeats > cfg.maxRepeats() + 1) next = Chat.LOOP;
         } else {
           toolCalls++;
+          ran.merge(call.name(), 1, Integer::sum);
           planned.add(new Planned(call, null));
         }
       }

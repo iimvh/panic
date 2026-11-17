@@ -32,7 +32,7 @@ public record ChatConfig(String systemPrompt, int maxHistory, Boolean tools, int
   public ChatConfig {
     if (maxHistory < 0) maxHistory = 0;
     if (tools == null) tools = Boolean.TRUE;
-    if (maxSteps <= 0) maxSteps = 8;
+    if (maxSteps <= 0) maxSteps = 25;
     if (maxTokens < 0) maxTokens = 0;
     if (toolTimeoutSeconds <= 0) toolTimeoutSeconds = 60;
     if (maxToolOutput <= 0) maxToolOutput = 16_000;

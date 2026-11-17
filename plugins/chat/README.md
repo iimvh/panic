@@ -40,17 +40,37 @@ message (`{"role", "content", "toolCalls"?, "toolCallId"?}`).
 ## The agent loop
 
 On each ask, `chat` sends the history and the tools registered right now (`Tools.specs`, from
-`plugins/tools`). It does not require them: with no tools it is a plain chat bot. When the model asks for tools,
+`plugins/tools`), less those a `Tools.GATE` keeps out of the conversation the user talks to (plan mode of
+`plugins/planner`). The list is read again before every model call, so a mode that ends mid-turn offers the tools
+on the next call. It does not require them: with no tools it is a plain chat bot. When the model asks for tools,
 `chat` runs each call (`Tools.call`), appends the results as `tool` messages and calls the model again. It repeats
 until the model answers or a limit stops it:
 
 | Stop (`Reply.stop`) | When |
 | --- | --- |
 | `done` | The model answered without calling a tool |
-| `max_steps` | `maxSteps` model calls were made (default 8) |
+| `max_steps` | `maxSteps` model calls were made (default 25) |
 | `budget` | The tokens of the turn reached `maxTokens` (default 0 = no budget) |
-| `loop` | The same call (name and arguments, key order ignored) came more than `maxRepeats + 1` times in a row. From the `maxRepeats + 1`th time (default 2) it is refused with an error result instead of run |
 | `rejected` | The reviewer still rejected the answer after `maxReviews` retries (or no step was left for one). `Reply.review` holds its reason |
+
+**Only hard limits stop a turn.** This follows proven harnesses:
+
+- Anthropic's "Building effective agents" recommends stopping conditions such as a maximum number of iterations.
+- The Claude Agent SDK stops at `max_turns` with `error_max_turns`, and the session can then be resumed.
+- Cursor stops after its tool call limit and offers "Continue".
+- The OpenAI Agents SDK raises `MaxTurnsExceeded` at `max_turns`, with a handler for a final output.
+
+A repeated call is feedback, not a stop. The same call (name and arguments, key order ignored) made more than
+`maxRepeats` times in a row (default 2) is refused with `error: the same call was made N times in a row; change the
+arguments or answer with what you have`, and the turn goes on, so a model that changes course recovers.
+
+**A turn stopped by a limit closes with a note for the user.** When `max_steps` or `budget` stops a turn before
+the model answered, `Reply.text` is a note written by the harness, not the model:
+`Stopped after 25 steps (max_steps) before finishing. Tools run this turn: read_file ×7, write_file ×2. Say
+"continue" to go on from here.` It is also streamed through `onDelta`. It is never saved in the conversation, so
+the model never reads the harness's words as its own. The work done is saved, so asking again (the web UI's
+**Continue** button, or typing "continue") goes on from there. A sub-agent gets no note: the `agent` tool reports
+its stop to its caller.
 
 Every failure is an observation for the model, not a crash of the turn. Unknown tools, bad arguments, tool
 errors, calls denied by the permission policy or the user, and timeouts (`toolTimeoutSeconds`, default 60) all
@@ -65,7 +85,7 @@ not support them.
 **Parallel calls.** When the model asks for several tools in one reply, they run one after the other by default.
 With `parallelTools` above 1, up to that many run at once (on tasks of the chat plugin, so cancelling the ask or
 disposing chat cancels and awaits all of them). Their results go back to the model in the order it made the
-calls. Repeats are counted in that order before any call runs, so loop detection is unchanged. `onStep` hears
+calls. Repeats are counted in that order before any call runs, so refusing repeats works the same. `onStep` hears
 the steps one at a time, in the order they start and end. Calls that may ask the user (writes, exec) are asked
 at the same time too; front-ends answer them one by one.
 
@@ -142,7 +162,7 @@ The trace id is `Ask.traceId` when the asker gives one (web does, to tell the UI
 | --- | --- | --- |
 | `turn` | none (root); a sub-agent's under the `tool` span that runs it | `conversationId`, `question` (first 200 chars), `questionHash` (`Trace.QUESTION_HASH`, from `Trace.questionHash`), `model`, `stop`, `steps`, `toolCalls`, `promptTokens`, `completionTokens` (whole turn), `saved`; `agent`, `origin` for a sub-agent |
 | `llm` | `turn` | `step`, `messages`, `model`, `finishReason`, `promptTokens`, `completionTokens`, `toolCalls`, `firstTokenMicros` (first text or tool-call piece) |
-| `tool` | `turn` | `tool`, `callId`, `approvalMicros` (until the tool started), `outputChars`, `truncated`, `refused` (loop detection, or a tool a sub-agent may not use), `timedOut`, `promptTokens` / `completionTokens` (a tool's own spending). An error result is an `ERROR` span |
+| `tool` | `turn` | `tool`, `callId`, `approvalMicros` (until the tool started), `outputChars`, `truncated`, `refused` (a repeated call, or a tool a sub-agent may not use), `timedOut`, `promptTokens` / `completionTokens` (a tool's own spending). An error result is an `ERROR` span |
 | `review` | `turn` | `attempt`, `verdict` (`pass` / `fail`), `pass`, `reason`, `promptTokens`, `completionTokens`. Only when a reviewer judged (or failed) |
 | `compaction` | `turn` | `messages` (summarised), `kept`, `applied`, `model`, tokens. `ERROR` when the model gave no summary |
 

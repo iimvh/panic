@@ -162,6 +162,12 @@ class AgentLoopTest {
     return Chat.ask(root, new Chat.Ask("c", text, new CancelToken(), d -> { }, steps::add)).orElseThrow();
   }
 
+  /** The saved history of conversation {@code id}. */
+  private List<Message> conversation(String id) {
+    return panic.command.Hooks.bail(root, Conversations.HISTORY, new Conversations.HistoryQuery(id)).orElseThrow()
+        .messages();
+  }
+
   private static List<Message> toolMessages(ChatRequest r) {
     return r.messages().stream().filter(m -> m.role() == Role.TOOL).toList();
   }
@@ -278,15 +284,45 @@ class AgentLoopTest {
   }
 
   @Test
-  void repeatedCallsAreRefusedThenStopTheTurn() {
+  void repeatedCallsAreRefusedButOnlyTheStepLimitStopsTheTurn() {
     tools(ECHO);
-    chat(cfg(20, 0, 0, 0, 2));
+    chat(cfg(6, 0, 0, 0, 2));
     llm.then(r -> calls(call("x" + r.messages().size(), "echo", "{\"text\":\"same\"}")));
     Chat.Reply reply = ask("go");
-    assertEquals(Chat.LOOP, reply.stop());
-    assertEquals(2, reply.toolCalls(), "runs twice, refuses the third, stops at the fourth");
-    assertEquals(4, llm.requests.size());
+    assertEquals(Chat.MAX_STEPS, reply.stop(), "a repeat is feedback, not a stop");
+    assertEquals(2, reply.toolCalls(), "runs twice, then every repeat is refused");
+    assertEquals(6, llm.requests.size());
     assertTrue(toolMessages(llm.requests.get(3)).get(2).content().contains("same call was made 3 times"));
+    assertTrue(toolMessages(llm.requests.get(4)).get(3).content().contains("same call was made 4 times"));
+  }
+
+  @Test
+  void aModelThatRecoversFromARepeatGoesOn() {
+    tools(ECHO);
+    chat(cfg(20, 0, 0, 0, 1));
+    String same = "{\"text\":\"same\"}";
+    llm.then(r -> calls(call("a", "echo", same))).then(r -> calls(call("b", "echo", same)))
+        .then(r -> calls(call("c", "echo", same))).then(r -> calls(call("d", "echo", "{\"text\":\"other\"}")))
+        .then(r -> answer("fixed"));
+    Chat.Reply reply = ask("go");
+    assertEquals(Chat.DONE, reply.stop());
+    assertEquals("fixed", reply.text());
+  }
+
+  @Test
+  void aStoppedTurnClosesWithANoteForTheUserThatIsNotSaved() {
+    tools(ECHO);
+    chat(cfg(3, 0, 0, 0, 100));
+    int[] n = {0};
+    llm.then(r -> calls(call("c" + n[0], "echo", "{\"text\":\"" + (n[0]++) + "\"}")));
+    StringBuilder streamed = new StringBuilder();
+    Chat.Reply reply = Chat.ask(root, new Chat.Ask("s", "go", new CancelToken(), streamed::append)).orElseThrow();
+    String note = "Stopped after 3 steps (max_steps) before finishing. Tools run this turn: echo ×2. Say \"continue\" "
+        + "to go on from here.";
+    assertEquals(note, reply.text());
+    assertEquals(note, streamed.toString(), "the user sees it while the turn ends");
+    assertTrue(conversation("s").stream().noneMatch(m -> m.content().contains("Stopped after")),
+        "never saved as something the model said");
   }
 
   @Test
@@ -523,7 +559,8 @@ class AgentLoopTest {
     llm.then(r -> calls(call("a", "echo", same), call("b", "echo", same), call("c", "echo", same),
         call("d", "echo", same))).then(r -> answer("never"));
     Chat.Reply reply = ask("go");
-    assertEquals(Chat.LOOP, reply.stop());
+    assertEquals(Chat.DONE, reply.stop(), "the refused repeats go back to the model, the turn goes on");
+    assertEquals("never", reply.text());
     assertEquals(1, reply.toolCalls());
   }
 

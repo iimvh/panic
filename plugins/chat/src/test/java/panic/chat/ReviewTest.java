@@ -146,17 +146,33 @@ class ReviewTest {
   }
 
   @Test
-  void noVerdictOrABrokenReviewerAccepts() {
+  void noVerdictAcceptsSilently() {
     chat(null);
-    reviewer(r -> {
-      if (r.attempt() > 0) throw new IllegalStateException("reviewer down");
-      return null;
-    });
+    reviewer(r -> null);
     llm.then(r -> answer("done"));
     Chat.Reply reply = ask(new StringBuilder());
     assertEquals(Chat.DONE, reply.stop());
     assertNull(reply.review());
+    assertTrue(heard.isEmpty(), "nobody judged: nothing to report");
+  }
+
+  @Test
+  void aBrokenReviewerAcceptsButIsReported() {
+    chat(null);
+    reviewer(r -> {
+      throw new IllegalStateException("reviewer down");
+    });
+    llm.then(r -> answer("done"));
+    Chat.Reply reply = ask(new StringBuilder());
+    assertEquals(Chat.DONE, reply.stop());
+    assertEquals("done", reply.text());
+    assertNull(reply.review());
     assertEquals(1, llm.requests.size());
+    assertEquals(1, heard.size());
+    assertTrue(heard.get(0).failed());
+    assertNull(heard.get(0).verdict());
+    assertEquals("reviewer down", heard.get(0).error());
+    assertEquals(heard, reviewed, "also emitted as Chat.REVIEWED");
   }
 
   @Test

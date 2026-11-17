@@ -156,6 +156,24 @@ class TracingTest {
   }
 
   @Test
+  void aBrokenReviewerLeavesAnErrorSpan() {
+    root.plugin("reviewer", ctx -> {
+      ctx.hook(Chat.REVIEW, r -> {
+        throw new IllegalStateException("reviewer model down");
+      });
+      return null;
+    });
+    chat(ChatConfig.DEFAULT);
+    llm.then(r -> answer("done"));
+    ask("do it", null, new CancelToken());
+
+    Span review = named("review").get(0);
+    assertEquals(Span.Status.ERROR, review.status());
+    assertEquals("reviewer model down", review.error());
+    assertEquals(Span.Status.OK, root().status(), "the answer still stands");
+  }
+
+  @Test
   void withoutAReviewerThereIsNoReviewSpan() {
     chat(ChatConfig.DEFAULT);
     llm.then(r -> answer("hello"));

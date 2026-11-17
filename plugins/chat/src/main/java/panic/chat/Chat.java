@@ -205,8 +205,23 @@ public final class Chat {
     }
   }
 
-  /** Emitted after each review of an answer (auditing...). */
-  public record Reviewed(String conversationId, int attempt, Verdict verdict) {
+  /**
+   * Emitted after each review of an answer (auditing...). {@code verdict} is null when the reviewer failed
+   * ({@code error} says why): the answer stands, but the failure is reported instead of passing silently.
+   */
+  public record Reviewed(String conversationId, int attempt, Verdict verdict, String error) {
+    public Reviewed {
+      if ((verdict == null) == (error == null)) throw new IllegalArgumentException("a verdict or an error, not both");
+    }
+
+    public Reviewed(String conversationId, int attempt, Verdict verdict) {
+      this(conversationId, attempt, verdict, null);
+    }
+
+    /** True when the reviewer could not judge the answer. */
+    public boolean failed() {
+      return error != null;
+    }
   }
 
   /** Emitted after every completed exchange. {@code delegate} is set when a sub-agent asked. */
@@ -239,7 +254,8 @@ public final class Chat {
   public static final EventKey<Turn> TURN = EventKey.of("chat.turn", Turn.class);
   /**
    * Asked when the model gives a final answer: may it stand? No answer (no reviewer, or nothing to check the
-   * answer against) accepts it. A rejection sends the reason back to the model for another attempt, at most
+   * answer against) accepts it. A reviewer that throws accepts it too, but the failure is recorded (an ERROR
+   * {@code review} span and a {@link Reviewed} with the error). A rejection sends the reason back to the model for another attempt, at most
    * {@code chat.maxReviews} times.
    */
   public static final HookKey<Review, Verdict> REVIEW = HookKey.of("chat.review", Review.class, Verdict.class);

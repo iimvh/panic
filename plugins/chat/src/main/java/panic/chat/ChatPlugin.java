@@ -51,7 +51,8 @@ import panic.trace.Trace;
  *
  * A final answer is put to {@link Chat#REVIEW} when someone answers it (the reviewer of {@code plugins/verify}
  * does when the conversation has acceptance criteria). A rejection is streamed to the asker and sent back to the
- * model as a user message, at most {@link ChatConfig#maxReviews} times; a reviewer that fails accepts.
+ * model as a user message, at most {@link ChatConfig#maxReviews} times; a reviewer that fails accepts, with an
+ * ERROR {@code review} span and a {@link Chat.Reviewed} that carries the error.
  *
  * Every turn is traced: a root span {@code turn} with children {@code llm} (one per model call), {@code tool},
  * {@code review} and {@code compaction}, emitted on {@link Trace#SPAN} as each ends, whether the turn is done,
@@ -338,7 +339,8 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
 
     /**
      * Puts the final {@code answer} to {@link Chat#REVIEW}. Null when reviews are off or nobody judged it; a
-     * reviewer that fails counts as no verdict, so a broken reviewer never blocks an answer. Cancellation is thrown.
+     * reviewer that fails counts as no verdict, so a broken reviewer never blocks an answer, but its span ends as
+     * ERROR and a {@link Chat.Reviewed} with the error is reported. Cancellation is thrown.
      */
     private Chat.Verdict review(String answer) {
       if (cfg.maxReviews() == 0 || ask.delegate() != null) return null; // the asker's answer is the one reviewed
@@ -352,6 +354,11 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         fail(s, e);
         signal.throwIfCancelled();
         if (e instanceof CancelledException c) throw c;
+        // the answer stands, but a check that could not run must show, not pass silently
+        String why = e.getMessage() == null || e.getMessage().isBlank() ? e.getClass().getSimpleName() : e.getMessage();
+        Chat.Reviewed failed = new Chat.Reviewed(ask.conversationId(), attempt, null, why);
+        ask.onReview().accept(failed);
+        ctx.emit(Chat.REVIEWED, failed);
         return null;
       }
       if (signal.isCancelled()) {
@@ -765,6 +772,11 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
 
     /** Rejections only: an accepted answer needs no note. */
     void review(Chat.Reviewed r) {
+      if (r.failed()) {
+        endLine();
+        out.println("[review failed: " + r.error() + "]");
+        return;
+      }
       if (r.verdict().pass()) return;
       endLine();
       out.println("[review: " + r.verdict().reason() + "]");

@@ -407,8 +407,7 @@ final class Api {
       Optional<Chat.Reply> reply = Chat.ask(ctx,
           new Chat.Ask(session, text, signal, d -> run.publish("delta", Json.object().put("text", d)),
               step -> run.publish("tool", step(step)),
-              r -> run.publish("review", Json.object().put("attempt", r.attempt()).put("pass", r.verdict().pass())
-                  .put("reason", r.verdict().reason())),
+              r -> run.publish("review", review(r)),
               d -> run.publish("tool_delta", toolDelta(d)), traceId,
               d -> run.publish("agent_delta", Json.object().put("parent", d.parentCallId()).put("agent", d.agent())
                   .put("text", d.text())),
@@ -480,6 +479,13 @@ final class Api {
     if (step.nested()) o.put("parent", step.parentCallId()).put("agent", step.agent());
     if (!step.done()) return o.put("status", "running");
     return o.put("status", step.result().isError() ? "error" : "ok").put("content", cut(step.result().content()));
+  }
+
+  /** A verdict as {@code {attempt, pass, reason}}, or a failed review as {@code {attempt, error}}. */
+  private static ObjectNode review(Chat.Reviewed r) {
+    ObjectNode o = Json.object().put("attempt", r.attempt());
+    if (r.failed()) return o.put("error", r.error());
+    return o.put("pass", r.verdict().pass()).put("reason", r.verdict().reason());
   }
 
   private static ObjectNode toolDelta(ToolCallDelta d) {

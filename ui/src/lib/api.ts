@@ -86,6 +86,15 @@ export async function getPermissions(session: string): Promise<Permissions | nul
 	return res.json() as Promise<Permissions>;
 }
 
+/** Whether the session is in plan mode and the config default; null when the server has no `planner` plugin (503). */
+export type Mode = { plan: boolean; default: boolean };
+export async function getMode(session: string): Promise<Mode | null> {
+	const res = await fetch(`/api/mode?session=${encodeURIComponent(session)}`);
+	if (res.status === 503) return null;
+	if (!res.ok) await fail(res);
+	return res.json() as Promise<Mode>;
+}
+
 /** The argument of a command line: quoted so a path with spaces stays one argument. */
 export const quoteArg = (arg: string) => (arg.includes('"') ? `'${arg}'` : `"${arg}"`);
 
@@ -99,7 +108,7 @@ export async function runCommand(session: string, line: string, signal?: AbortSi
 		else if (event === 'unknown') problem = `Unknown command /${d.name}.`;
 		else if (event === 'usage') problem = `Usage: /${d.usage} (${d.message})`;
 		else if (event === 'error') problem = String(d.message);
-		else if (event === 'approve') problem = 'This command needs an approval; run it from the chat.';
+		else if (event === 'approve' || event === 'plan' || event === 'question') problem = 'This command needs an approval; run it from the chat.';
 	}, signal);
 	if (problem) throw new ApiError(problem, 400);
 	return text.trim();
@@ -125,6 +134,22 @@ export const postApproval = (session: string, id: string, allow: boolean) =>
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ session, id, allow })
+	});
+
+/** Answers a `plan` event: approve the plan, or send it back with `feedback`. */
+export const postPlan = (session: string, id: string, approve: boolean, feedback = '') =>
+	json<{ ok: boolean }>('/api/plan', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ session, id, approve, feedback })
+	});
+
+/** Answers a `question` event: one answer per question, in order; all empty skips. */
+export const postAnswer = (session: string, id: string, answers: { selected: string[]; other: string }[]) =>
+	json<{ ok: boolean }>('/api/answer', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ session, id, answers })
 	});
 
 /** Asks the server to stop the session's answer; the answer's stream then ends with `cancelled`. */

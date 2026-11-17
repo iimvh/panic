@@ -18,6 +18,11 @@
 		problem = await chat.setBypass(on);
 	}
 
+	/** Plan mode: the agent researches read-only and proposes a plan before it changes anything. */
+	async function togglePlan() {
+		problem = await chat.setPlanMode(!chat.mode?.plan);
+	}
+
 	const info = $derived(chat.state);
 	const label = $derived(
 		info?.provider ? `${info.provider} / ${info.model || 'no model'}` : 'no provider selected'
@@ -38,9 +43,24 @@
 		<span class="dot" class:on={info?.connected} class:off={chat.offline}></span>
 		<span class="label">{chat.offline ? 'offline' : label}</span>
 	</button>
+	{#if chat.mode}
+		<button
+			class="mode plan"
+			class:on={chat.mode.plan}
+			aria-pressed={chat.mode.plan}
+			onclick={togglePlan}
+			disabled={!!chat.offline || chat.busy}
+			title={problem ??
+				(chat.mode.plan
+					? 'The agent researches read-only and proposes a plan for you to approve. Click to turn off.'
+					: 'Have the agent research and propose a plan before it changes anything. Click to turn on.')}
+		>
+			{chat.mode.plan ? 'Plan on' : 'Plan off'}
+		</button>
+	{/if}
 	{#if chat.permissions}
 		<button
-			class="bypass"
+			class="mode bypass"
 			class:on={chat.permissions.bypass}
 			aria-pressed={chat.permissions.bypass}
 			onclick={toggleBypass}
@@ -119,7 +139,7 @@
 	.dot.off {
 		background: var(--danger);
 	}
-	.bypass {
+	.mode {
 		flex: none;
 		border: 1px solid var(--border);
 		border-radius: 999px;
@@ -136,7 +156,13 @@
 		border-color: var(--danger);
 		font-weight: 600;
 	}
-	.bypass:disabled {
+	.plan.on {
+		color: var(--accent-text);
+		background: var(--accent);
+		border-color: var(--accent);
+		font-weight: 600;
+	}
+	.mode:disabled {
 		opacity: 0.6;
 		cursor: default;
 	}

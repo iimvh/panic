@@ -48,6 +48,77 @@ export type Approval = {
 	answering?: boolean;
 };
 
+/** The tool the agent calls to propose its plan in plan mode. */
+export const EXIT_PLAN_TOOL = 'exit_plan_mode';
+
+/** A plan the agent proposes in plan mode, as the `plan` server-sent event describes it. */
+export type PlanProposal = {
+	id: string;
+	/** markdown */
+	plan: string;
+	items: string[];
+	criteria: string[];
+	/** The answer is being sent. */
+	answering?: boolean;
+};
+
+/** Shows the proposed plan; the finished `exit_plan_mode` step (or the end of the stream) clears it. */
+export function askPlan(m: Message, d: Record<string, unknown>) {
+	const strings = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
+	m.plan = { id: String(d.id ?? ''), plan: String(d.plan ?? ''), items: strings(d.items), criteria: strings(d.criteria) };
+}
+
+/** The tool the agent calls to ask the user. */
+export const ASK_USER_TOOL = 'ask_user';
+
+/** One question the agent asks: a few options, one or several to pick, and the user's own text always allowed. */
+export type UserQuestion = {
+	question: string;
+	header: string;
+	multiSelect: boolean;
+	options: { label: string; description: string }[];
+};
+
+/** Questions waiting for the user, as the `question` server-sent event describes them. */
+export type Questions = {
+	id: string;
+	questions: UserQuestion[];
+	/** The answer is being sent. */
+	answering?: boolean;
+};
+
+/** Shows the agent's questions; the finished `ask_user` step (or the end of the stream) clears them. */
+export function askUser(m: Message, d: Record<string, unknown>) {
+	const list = Array.isArray(d.questions) ? (d.questions as Record<string, unknown>[]) : [];
+	m.question = {
+		id: String(d.id ?? ''),
+		questions: list.map((q) => ({
+			question: String(q.question ?? ''),
+			header: String(q.header ?? ''),
+			multiSelect: q.multiSelect === true,
+			options: (Array.isArray(q.options) ? (q.options as Record<string, unknown>[]) : []).map((o) => ({
+				label: String(o.label ?? ''),
+				description: String(o.description ?? '')
+			}))
+		}))
+	};
+}
+
+/**
+ * A shell command call (`{command, cwd?, background?}`, the `exec` tool) as the user reads it: `$ command`, with
+ * where and how it runs; null for any other arguments.
+ */
+export function shellCommand(args: string): string | null {
+	try {
+		const a = JSON.parse(args) as Record<string, unknown>;
+		if (typeof a?.command !== 'string') return null;
+		const where = typeof a.cwd === 'string' && a.cwd ? `   (in ${a.cwd})` : '';
+		return `$ ${a.command}${where}${a.background === true ? '   [background]' : ''}`;
+	} catch {
+		return null;
+	}
+}
+
 /** Appends streamed text: to the last part when it is text, else as a new text part. */
 export function appendText(m: Timeline, delta: string) {
 	if (!delta) return;
@@ -114,6 +185,8 @@ export function toolStep(m: Message, d: Record<string, unknown>) {
 	const into = d.parent ? subAgent(m, String(d.parent), d.agent) : m;
 	if (into) upsertStep(into, step);
 	if (step.status !== 'running') clearApproval(m, (a) => a.callId === step.id);
+	if (step.status !== 'running' && step.name === EXIT_PLAN_TOOL && !d.parent) m.plan = undefined;
+	if (step.status !== 'running' && step.name === ASK_USER_TOOL && !d.parent) m.question = undefined;
 }
 
 function upsertStep(t: Timeline, step: ToolStep) {
@@ -255,7 +328,12 @@ export function createAnswer(reply: Message, schedule: (run: () => void) => void
 			else if (event === 'tool') toolStep(reply, d);
 			else if (event === 'review') review(reply, d);
 			else if (event === 'approve') askApproval(reply, d);
-			else if (event === 'done') reply.meta = meta(d);
+			else if (event === 'plan') askPlan(reply, d);
+			else if (event === 'question') askUser(reply, d);
+			else if (event === 'done') {
+				reply.meta = meta(d);
+				if (typeof d.stop === 'string') reply.stop = d.stop;
+			}
 			else if (event === 'unavailable') failAnswer(reply, 'No LLM is connected. Open Settings to pick a provider with an API key.');
 			else if (event === 'error') failAnswer(reply, String(d.message));
 			else if (event === 'cancelled') reply.meta = 'stopped';
@@ -280,6 +358,8 @@ export function failAnswer(m: Message, text: string) {
 /** What a streaming answer is doing right now, for the status line. */
 export function activity(m: Message): string {
 	if (m.approval) return 'Waiting for approval';
+	if (m.plan) return 'Waiting for plan approval';
+	if (m.question) return 'Waiting for your answer';
 	const last = m.parts?.at(-1);
 	const running = (m.parts ?? []).filter((p) => p.kind === 'tool' && p.step.status === 'running');
 	if (running.length > 1) return `Running ${running.length} tools…`;
@@ -328,6 +408,17 @@ export function createBatcher(apply: (text: string) => void, schedule: (run: () 
 		},
 		flush
 	};
+}
+
+/** The message the Continue button sends: the history holds the work, so a plain ask picks it up. */
+export const CONTINUE_TEXT = 'Continue where you stopped.';
+
+/**
+ * Whether an answer ended on a hard limit (steps or tokens) and can be continued, as Cursor offers "Continue" after
+ * its tool call limit and the Claude Agent SDK resumes a session after max_turns.
+ */
+export function canContinue(m: Message): boolean {
+	return m.role === 'assistant' && !m.streaming && (m.stop === 'max_steps' || m.stop === 'budget');
 }
 
 export function meta(d: Record<string, unknown>): string {

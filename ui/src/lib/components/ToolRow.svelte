@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { size, type ToolStep } from '$lib/reply';
+	import { shellCommand, size, type ToolStep } from '$lib/reply';
 	import TextPart from './TextPart.svelte';
 	import ToolRow from './ToolRow.svelte';
 
@@ -11,6 +11,7 @@
 
 	const agent = $derived(step.agent);
 	const working = $derived(step.status === 'running');
+	const command = $derived(step.status === 'drafting' ? null : shellCommand(step.arguments));
 </script>
 
 <div class="tool {step.status}" title={step.content ?? step.arguments}>
@@ -20,7 +21,7 @@
 		<span class="args tail"><bdi>{step.arguments.slice(-200)}</bdi></span>
 		<span class="status">writing · {size(step.arguments)}</span>
 	{:else}
-		<span class="args">{step.arguments}</span>
+		<span class="args">{command ?? step.arguments}</span>
 		<span class="status">{working ? '…' : step.status}</span>
 	{/if}
 </div>

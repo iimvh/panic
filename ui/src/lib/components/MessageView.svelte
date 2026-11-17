@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { chat, type Message } from '$lib/chat.svelte';
-	import { activity, duration } from '$lib/reply';
+	import { activity, canContinue, duration } from '$lib/reply';
 	import ApprovalCard from './ApprovalCard.svelte';
+	import PlanCard from './PlanCard.svelte';
+	import QuestionCard from './QuestionCard.svelte';
 	import TextPart from './TextPart.svelte';
 	import ToolRow from './ToolRow.svelte';
 	import TraceView from './TraceView.svelte';
@@ -42,6 +44,8 @@
 			<div class="line">{message.meta}</div>
 			{#if message.text}<pre>{message.text.replace(/\n$/, '')}</pre>{/if}
 			<ApprovalCard {message} />
+			<PlanCard {message} />
+			<QuestionCard {message} />
 		</div>
 	{:else}
 		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -60,6 +64,8 @@
 				{/if}
 			{/each}
 			<ApprovalCard {message} />
+			<PlanCard {message} />
+			<QuestionCard {message} />
 			{#if message.streaming}
 				<div class="progress" aria-live="polite">
 					<span class="typing" aria-hidden="true"><i></i><i></i><i></i></span>
@@ -78,11 +84,31 @@
 				</div>
 				{#if showTrace && message.traceId}<TraceView session={chat.session} traceId={message.traceId} />{/if}
 			{/if}
+			{#if canContinue(message) && chat.messages.at(-1)?.id === message.id}
+				<button type="button" class="continue" disabled={chat.busy} onclick={() => chat.continueAnswer()}>
+					Continue
+				</button>
+			{/if}
 		</div>
 	{/if}
 </article>
 
 <style>
+	.continue {
+		margin-top: 8px;
+		font: inherit;
+		font-size: 13px;
+		border-radius: 8px;
+		padding: 5px 14px;
+		cursor: pointer;
+		border: 1px solid var(--accent);
+		background: var(--accent);
+		color: var(--accent-text);
+	}
+	.continue:disabled {
+		opacity: 0.6;
+		cursor: default;
+	}
 	article {
 		display: flex;
 		margin: 0 0 18px;

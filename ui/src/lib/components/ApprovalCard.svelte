@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { chat, type Message } from '$lib/chat.svelte';
+	import { shellCommand } from '$lib/reply';
 
 	let { message }: { message: Message } = $props();
 
 	const a = $derived(message.approval);
+	const command = $derived(a ? shellCommand(a.arguments) : null);
 </script>
 
 {#if a}
@@ -14,7 +16,7 @@
 			<span class="name">{a.name}</span>
 			<span class="risk {a.risk}">{a.risk}</span>
 		</div>
-		<pre class="args">{a.arguments}</pre>
+		<pre class="args">{command ?? a.arguments}</pre>
 		{#if message.waiting?.length}
 			<div class="more">{message.waiting.length} more waiting</div>
 		{/if}

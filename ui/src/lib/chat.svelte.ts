@@ -1,6 +1,6 @@
-import { ApiError, deleteConversation, events, follow, getConversations, getHistory, getPermissions, getState, getWorkspaces, postApproval, postStop, putSettings, quoteArg, runCommand, stream, type Permissions, type State } from './api';
+import { ApiError, deleteConversation, events, follow, getConversations, getHistory, getMode, getPermissions, getState, getWorkspaces, postAnswer, postApproval, postPlan, postStop, putSettings, quoteArg, runCommand, stream, type Mode, type Permissions, type State } from './api';
 import { without, type ConversationInfo, type Workspaces } from './conversations';
-import { askApproval, clearApproval, createAnswer, duration, failAnswer, fromHistory, type Approval, type Part } from './reply';
+import { CONTINUE_TEXT, askApproval, askPlan, askUser, clearApproval, createAnswer, duration, failAnswer, fromHistory, type Approval, type Part, type PlanProposal, type Questions } from './reply';
 import { newSessionId, sessionId, setSessionId } from './session';
 
 export type Message = {
@@ -17,6 +17,12 @@ export type Message = {
 	approval?: Approval;
 	/** More questions, asked while `approval` is shown (calls running in parallel); shown next, in order. */
 	waiting?: Approval[];
+	/** A plan the agent proposes (plan mode), waiting for the user to approve it or send it back. */
+	plan?: PlanProposal;
+	/** Why the answer ended (`done`, `max_steps`, `budget`, `rejected`), from the `done` event (assistant only). */
+	stop?: string;
+	/** Questions the agent asks, waiting for the user's answers. */
+	question?: Questions;
 	error?: boolean;
 	streaming?: boolean;
 	/** The answer's trace (assistant only), when the server traces turns. */
@@ -37,6 +43,8 @@ class Chat {
 	workspaces = $state<Workspaces | null>(null);
 	/** Bypass mode (tool calls run without asking) of this session; null when the server has no policy plugin. */
 	permissions = $state<Permissions | null>(null);
+	/** Plan mode of this session; null when the server has no planner plugin. */
+	mode = $state<Mode | null>(null);
 	busy = $state(false);
 	/** Server unreachable or failing; shown as a banner. */
 	offline = $state<string | null>(null);
@@ -53,6 +61,7 @@ class Chat {
 		void this.loadConversations();
 		void this.loadWorkspaces();
 		void this.loadPermissions();
+		void this.loadMode();
 		try {
 			const [state, history] = await Promise.all([getState(), getHistory(this.session)]);
 			this.state = state;
@@ -80,6 +89,11 @@ class Chat {
 		if (!text || this.busy) return;
 		if (text.startsWith('/')) await this.#command(text);
 		else await this.#ask(text);
+	}
+
+	/** Goes on with an answer a limit stopped: a new ask on the same history (Cursor's "Continue"). */
+	async continueAnswer() {
+		await this.send(CONTINUE_TEXT);
 	}
 
 	/** An answer is stopped by the server (it outlives the connection), so its stream ends with `cancelled`. */
@@ -117,6 +131,26 @@ class Chat {
 		return null;
 	}
 
+	/** The plan mode of this session; a failure leaves it as it was. */
+	async loadMode() {
+		try {
+			this.mode = await getMode(this.session);
+		} catch {
+			// offline: load() reports it
+		}
+	}
+
+	/** Turns plan mode on or off for this chat; null is the error text when that failed. */
+	async setPlanMode(on: boolean): Promise<string | null> {
+		try {
+			await runCommand(this.session, `plan ${on ? 'on' : 'off'}`);
+		} catch (e) {
+			return errorText(e);
+		}
+		await this.loadMode();
+		return null;
+	}
+
 	/** The projects again; a failure leaves them as they were. */
 	async loadWorkspaces() {
 		try {
@@ -145,6 +179,7 @@ class Chat {
 		void this.loadConversations();
 		void this.loadWorkspaces();
 		void this.loadPermissions();
+		void this.loadMode();
 		return problem;
 	}
 
@@ -230,6 +265,40 @@ class Chat {
 		}
 	}
 
+	/**
+	 * Answers the plan shown in `m`: approve it (plan mode ends and the agent carries it out), or send it back
+	 * with `feedback`. The `exit_plan_mode` step that follows shows what happened.
+	 */
+	async answerPlan(m: Message, approve: boolean, feedback = '') {
+		const p = m.plan;
+		if (!p || p.answering) return;
+		p.answering = true;
+		try {
+			await postPlan(this.session, p.id, approve, feedback.trim());
+		} catch (e) {
+			// 404: the plan is gone (answered, timed out or stopped); the stream tells the rest
+			if (!(e instanceof ApiError && e.status === 404)) fail(m, errorText(e));
+		} finally {
+			if (m.plan?.id === p.id) m.plan = undefined;
+			void this.loadMode();
+		}
+	}
+
+	/** Answers the questions shown in `m`, one answer per question; all empty skips. The `ask_user` step follows. */
+	async answerQuestions(m: Message, answers: { selected: string[]; other: string }[]) {
+		const q = m.question;
+		if (!q || q.answering) return;
+		q.answering = true;
+		try {
+			await postAnswer(this.session, q.id, answers);
+		} catch (e) {
+			// 404: the question is gone (answered, timed out or stopped); the stream tells the rest
+			if (!(e instanceof ApiError && e.status === 404)) fail(m, errorText(e));
+		} finally {
+			if (m.question?.id === q.id) m.question = undefined;
+		}
+	}
+
 	async settings(change: { provider?: string; model?: string }) {
 		this.state = await putSettings(change);
 	}
@@ -258,6 +327,7 @@ class Chat {
 		reply.meta = [reply.meta, duration(Date.now() - (reply.startedAt ?? Date.now()))].filter(Boolean).join(' · ');
 		if (!this.state?.connected) void this.refresh();
 		void this.loadConversations(); // a new chat appears, the one used moves up
+		void this.loadMode(); // an approved plan ends plan mode
 	}
 
 	/** Picks up the answer this session still runs on the server (the page was reloaded while it ran). */
@@ -316,6 +386,8 @@ class Chat {
 				const d = data as Record<string, unknown>;
 				if (event === 'delta') out.text += String(d.text ?? '');
 				else if (event === 'approve') askApproval(out, d);
+				else if (event === 'plan') askPlan(out, d);
+				else if (event === 'question') askUser(out, d);
 				else if (event === 'unknown') fail(out, `Unknown command /${d.name}. Type /help for the commands available now.`);
 				else if (event === 'usage') fail(out, `Usage: /${d.usage} (${d.message})`);
 				else if (event === 'error') fail(out, String(d.message));
@@ -328,6 +400,7 @@ class Chat {
 		}
 		else if (quiet) this.messages = this.messages.filter((m) => m.id !== out.id);
 		void this.refresh(); // commands may change what runs (provider, model, ...)
+		void this.loadMode(); // ... or the chat's mode (/plan on)
 	}
 
 	/** Adds a message and returns its reactive proxy (mutations on it update the page). */
@@ -359,6 +432,8 @@ class Chat {
 				t.streaming = false;
 				t.approval = undefined;
 				t.waiting = undefined;
+				t.plan = undefined;
+				t.question = undefined;
 			}
 			this.busy = false;
 			this.#answering = false;

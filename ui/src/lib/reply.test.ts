@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from './chat.svelte';
-import { activity, agentText, appendText, clearApproval, createAnswer, askApproval, createBatcher, duration, endDrafts, fromHistory, meta, review, size, toolDelta, toolStep, type Part } from './reply';
+import { canContinue, shellCommand, activity, agentText, appendText, clearApproval, createAnswer, askApproval, askPlan, askUser, ASK_USER_TOOL, EXIT_PLAN_TOOL, createBatcher, duration, endDrafts, fromHistory, meta, review, size, toolDelta, toolStep, type Part } from './reply';
 
 const steps = (m: Message) => (m.parts ?? []).flatMap((p) => (p.kind === 'tool' ? [p.step] : []));
 const kinds = (m: Message) => (m.parts ?? []).map((p: Part) => p.kind);
@@ -122,6 +122,82 @@ describe('askApproval', () => {
 
 		toolStep(m, { id: 'a', name: 'write_file', status: 'error', content: 'write_file: denied by the user' });
 		expect(m.approval).toBeUndefined();
+	});
+});
+
+describe('askPlan', () => {
+	it('shows the plan until the exit_plan_mode call finishes', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '' };
+		toolStep(m, { id: 'p', name: EXIT_PLAN_TOOL, arguments: '{}', status: 'running' });
+		askPlan(m, { id: 'x', plan: '# Plan', items: ['look', 'fix'], criteria: ['fixed'] });
+		expect(m.plan).toEqual({ id: 'x', plan: '# Plan', items: ['look', 'fix'], criteria: ['fixed'] });
+		expect(activity(m)).toBe('Waiting for plan approval');
+
+		toolStep(m, { id: 'b', name: 'read_file', status: 'ok' });
+		expect(m.plan?.id).toBe('x');
+		// a sub-agent's call of the same name does not answer it
+		toolStep(m, { id: 'c', name: EXIT_PLAN_TOOL, status: 'error', parent: 'p', agent: 'explore' });
+		expect(m.plan?.id).toBe('x');
+
+		toolStep(m, { id: 'p', name: EXIT_PLAN_TOOL, status: 'ok', content: 'approved' });
+		expect(m.plan).toBeUndefined();
+	});
+
+	it('comes from the plan event of an answer, missing lists read as empty', () => {
+		const reply: Message = { id: 2, role: 'assistant', text: '', parts: [] };
+		createAnswer(reply, (run) => run()).onEvent({ event: 'plan', data: { id: 'y', plan: 'p' }, id: '1' });
+		expect(reply.plan).toEqual({ id: 'y', plan: 'p', items: [], criteria: [] });
+	});
+});
+
+describe('canContinue', () => {
+	it('offers to continue an answer a hard limit stopped', () => {
+		const reply: Message = { id: 2, role: 'assistant', text: '', parts: [], streaming: true };
+		const a = createAnswer(reply, (run) => run());
+		a.onEvent({ event: 'done', data: { model: 'm', stop: 'max_steps' }, id: '1' });
+		expect(canContinue(reply)).toBe(false); // still streaming
+		reply.streaming = false;
+		expect(reply.stop).toBe('max_steps');
+		expect(canContinue(reply)).toBe(true);
+		expect(canContinue({ ...reply, stop: 'budget' })).toBe(true);
+		expect(canContinue({ ...reply, stop: 'done' })).toBe(false);
+		expect(canContinue({ ...reply, stop: 'rejected' })).toBe(false);
+	});
+});
+
+describe('shellCommand', () => {
+	it('shows an exec call as a command line', () => {
+		expect(shellCommand('{"command":"npm run dev","cwd":"web","background":true}')).toBe('$ npm run dev   (in web)   [background]');
+		expect(shellCommand('{"command":"ls"}')).toBe('$ ls');
+		expect(shellCommand('{"path":"x"}')).toBeNull();
+		expect(shellCommand('{oops')).toBeNull();
+	});
+});
+
+describe('askUser', () => {
+	it('shows the questions until the ask_user call finishes', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '' };
+		toolStep(m, { id: 'q', name: ASK_USER_TOOL, arguments: '{}', status: 'running' });
+		askUser(m, {
+			id: 'x',
+			questions: [{ question: 'Which cache?', header: 'Cache', multiSelect: false, options: [{ label: 'Redis', description: 'shared' }, { label: 'Memory' }] }]
+		});
+		expect(m.question).toEqual({
+			id: 'x',
+			questions: [{ question: 'Which cache?', header: 'Cache', multiSelect: false, options: [{ label: 'Redis', description: 'shared' }, { label: 'Memory', description: '' }] }]
+		});
+		expect(activity(m)).toBe('Waiting for your answer');
+
+		toolStep(m, { id: 'q2', name: ASK_USER_TOOL, status: 'error', parent: 'a', agent: 'explore' });
+		expect(m.question?.id).toBe('x');
+		toolStep(m, { id: 'q', name: ASK_USER_TOOL, status: 'ok', content: 'The user answered: …' });
+		expect(m.question).toBeUndefined();
+	});
+
+	it('comes from the question event of an answer', () => {
+		const reply: Message = { id: 2, role: 'assistant', text: '', parts: [] };
+		createAnswer(reply, (run) => run()).onEvent({ event: 'question', data: { id: 'y', questions: [{ question: 'q?', multiSelect: true }] }, id: '1' });
+		expect(reply.question).toEqual({ id: 'y', questions: [{ question: 'q?', header: '', multiSelect: true, options: [] }] });
 	});
 });
 

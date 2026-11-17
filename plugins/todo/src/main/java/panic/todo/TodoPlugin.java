@@ -35,7 +35,7 @@ import panic.tools.Tools;
  * A plan per conversation that the agent keeps across turns and restarts: a task list and the acceptance
  * criteria of the work. Tools {@code todo_read} (risk read) and {@code todo_write} (risk write: it replaces the
  * list), the plan as a {@code Tasks} section of the system prompt ({@link Chat#contribute}), hook
- * {@link Todo#PLAN} for other plugins (the reviewer reads the criteria there), and command {@code todo}. Plans
+ * {@link Todo#PLAN} for other plugins, hook {@link Todo#WRITE} for plugins that write the plan (an approved plan), (the reviewer reads the criteria there), and command {@code todo}. Plans
  * are JSON files under {@link TodoConfig#dir}, replaced atomically on every write.
  *
  * Requires nothing: the tools and the section exist while the plugin does, and chat does not require them. A
@@ -44,6 +44,10 @@ import panic.tools.Tools;
 public final class TodoPlugin implements ConfigPlugin<TodoConfig> {
 
   private static final Pattern SAFE = Pattern.compile("[A-Za-z0-9_-]{1,100}");
+
+  /** What {@code todo_write} answers when the list it gets is the one already saved. */
+  static final String NOTHING_CHANGED = "nothing changed: the list already says this. Do the step in progress with "
+      + "your tools, then mark it done, or answer the user if you are stuck.";
 
   private final Consumer<String> warn;
 
@@ -63,6 +67,21 @@ public final class TodoPlugin implements ConfigPlugin<TodoConfig> {
     ctx.hook(Todo.PLAN, q -> {
       Todo.Plan plan = store.read(q.conversationId());
       return plan.isEmpty() ? null : plan;
+    });
+    ctx.hook(Todo.WRITE, w -> {
+      List<String> criteria = w.criteria() == null ? null
+          : w.criteria().stream().filter(c -> !c.isBlank()).map(String::strip).toList();
+      if (w.items().size() > cfg.maxItems()) {
+        throw new IllegalArgumentException("too many tasks: " + w.items().size() + " (at most " + cfg.maxItems() + ")");
+      }
+      if (criteria != null && criteria.size() > cfg.maxItems()) {
+        throw new IllegalArgumentException("too many criteria: " + criteria.size() + " (at most " + cfg.maxItems() + ")");
+      }
+      try {
+        return store.write(w.conversationId(), w.items(), criteria);
+      } catch (IOException e) {
+        throw new java.io.UncheckedIOException("cannot save the task list: " + e.getMessage(), e);
+      }
     });
     // a deleted conversation takes its plan with it
     ctx.on(Conversations.DELETED, d -> store.delete(d.id()));
@@ -188,7 +207,8 @@ public final class TodoPlugin implements ConfigPlugin<TodoConfig> {
     @Override
     public ToolSpec spec() {
       return new ToolSpec("todo_read", "Your plan for this conversation: one numbered line per task with its "
-          + "status ([ ] pending, [~] in progress, [x] done), then the acceptance criteria.",
+          + "status ([ ] pending, [~] in progress, [x] done), then the acceptance criteria. Takes no arguments; to "
+          + "change the list, use todo_write.",
           Json.parseOrNull("{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}"));
     }
 
@@ -247,6 +267,12 @@ public final class TodoPlugin implements ConfigPlugin<TodoConfig> {
         if (criteria.size() > maxItems) {
           return ToolResult.error("too many criteria: " + criteria.size() + " (at most " + maxItems + ")");
         }
+      }
+      // poka-yoke: writing the same list again is never progress, so say so instead of answering "ok"
+      Todo.Plan current = store.read(tc.conversationId());
+      if (!current.isEmpty() && current.items().equals(tasks)
+          && (criteria == null || current.criteria().equals(criteria))) {
+        return ToolResult.error(NOTHING_CHANGED);
       }
       Todo.Plan plan;
       try {

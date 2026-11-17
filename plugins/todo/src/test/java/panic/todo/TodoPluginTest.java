@@ -2,6 +2,7 @@ package panic.todo;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import context.ConfigHandle;
@@ -71,6 +72,41 @@ class TodoPluginTest {
 
     assertEquals(ToolResult.ok("task list cleared"), call("a", "todo_write", "{\"items\":[]}"));
     assertFalse(Files.exists(dir.resolve("a.json")));
+  }
+
+  @Test
+  void writingTheSameListAgainIsReportedAsNoProgress() throws Exception {
+    call("a", "todo_write", TWO);
+    long before = Files.getLastModifiedTime(dir.resolve("a.json")).toMillis();
+    Thread.sleep(20);
+    assertEquals(ToolResult.error(TodoPlugin.NOTHING_CHANGED), call("a", "todo_write", TWO));
+    assertEquals(before, Files.getLastModifiedTime(dir.resolve("a.json")).toMillis(), "not written");
+    // a status change is progress
+    assertFalse(call("a", "todo_write", TWO.replace("in_progress", "done")).isError());
+    // so are new criteria
+    assertFalse(call("a", "todo_write", TWO.replace("in_progress", "done").replace("]}", "],\"criteria\":[\"ok\"]}"))
+        .isError());
+    // an empty list cleared again is harmless
+    call("b", "todo_write", "{\"items\":[]}");
+    assertEquals(ToolResult.ok("task list cleared"), call("b", "todo_write", "{\"items\":[]}"));
+  }
+
+  @Test
+  void otherPluginsWriteThePlanThroughTheHook() {
+    Todo.Plan plan = panic.command.Hooks.bail(root, Todo.WRITE, new Todo.Write("a",
+        List.of(new TodoItem("look", TodoItem.Status.PENDING)), List.of(" tests pass ", " "))).orElseThrow();
+    assertEquals(List.of("tests pass"), plan.criteria());
+    assertEquals(ToolResult.ok("1. [ ] look\nAcceptance criteria:\n- tests pass"), call("a", "todo_read", "{}"));
+
+    // null criteria keep the current ones
+    panic.command.Hooks.bail(root, Todo.WRITE, new Todo.Write("a", List.of(), null));
+    assertEquals(ToolResult.ok("Acceptance criteria:\n- tests pass"), call("a", "todo_read", "{}"));
+
+    List<TodoItem> four = List.of(new TodoItem("1", TodoItem.Status.PENDING), new TodoItem("2", TodoItem.Status.PENDING),
+        new TodoItem("3", TodoItem.Status.PENDING), new TodoItem("4", TodoItem.Status.PENDING));
+    assertThrows(IllegalArgumentException.class,
+        () -> panic.command.Hooks.bail(root, Todo.WRITE, new Todo.Write("a", four, null)));
+    assertEquals(ToolResult.ok("Acceptance criteria:\n- tests pass"), call("a", "todo_read", "{}"), "unchanged");
   }
 
   @Test

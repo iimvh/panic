@@ -34,8 +34,28 @@ public final class Todo {
     }
   }
 
+  /**
+   * Replaces the plan of a conversation, as {@code todo_write} does: {@code items} in order, and {@code criteria}
+   * unless null (null keeps the current ones). Used by plugins that make the plan for the agent (an approved plan
+   * of {@code planner}).
+   */
+  public record Write(String conversationId, List<TodoItem> items, List<String> criteria) {
+    public Write {
+      Objects.requireNonNull(conversationId, "conversationId");
+      items = items == null ? List.of() : List.copyOf(items);
+      criteria = criteria == null ? null : List.copyOf(criteria);
+    }
+  }
+
   /** The plan of a conversation; answered by plugin {@code todo}, with null when the plan is empty. */
   public static final HookKey<Query, Plan> PLAN = HookKey.of("todo.plan", Query.class, Plan.class);
+
+  /**
+   * Answered by plugin {@code todo} with the plan as saved. Too many tasks or criteria throw
+   * {@link IllegalArgumentException}, a failed write {@link java.io.UncheckedIOException}; no answer means no
+   * {@code todo} is running.
+   */
+  public static final HookKey<Write, Plan> WRITE = HookKey.of("todo.write", Write.class, Plan.class);
 
   private Todo() {
   }

@@ -8,14 +8,14 @@ in the system prompt on every ask. The reviewer (`plugins/verify`) judges answer
 
 | Name | Config (`panic.json` section) | Requires | Provides / registers |
 | --- | --- | --- | --- |
-| `todo` | `TodoConfig { dir = ".panic/todo", maxItems = 50 }` | none | tools `todo_read` (read), `todo_write` (write); context section `Tasks`; hook `Todo.PLAN`; command `todo` |
+| `todo` | `TodoConfig { dir = ".panic/todo", maxItems = 50 }` | none | tools `todo_read` (read), `todo_write` (write); context section `Tasks`; hooks `Todo.PLAN`, `Todo.WRITE`; command `todo` |
 
 ## Tools
 
 | Tool | Risk | Arguments | Result |
 | --- | --- | --- | --- |
 | `todo_read` | read | `{}` | The list as numbered lines, `1. [ ] text` (`[ ]` pending, `[~]` in progress, `[x]` done), then `Acceptance criteria:` and one `- criterion` per line, or `no tasks` |
-| `todo_write` | write | `{items: [{text, status: pending \| in_progress \| done}], criteria?: [string]}` | Replaces the whole list and returns the plan. `criteria` left out keeps the current ones (so a status update never loses them), `[]` clears them; blank criteria are dropped. More than `maxItems` tasks or criteria, or a blank task text, is refused and changes nothing |
+| `todo_write` | write | `{items: [{text, status: pending \| in_progress \| done}], criteria?: [string]}` | Replaces the whole list and returns the plan. `criteria` left out keeps the current ones (so a status update never loses them), `[]` clears them; blank criteria are dropped. More than `maxItems` tasks or criteria, or a blank task text, is refused and changes nothing. The same list as the saved one is refused with `nothing changed: ...` (a poka-yoke: writing it again is never progress, so a model stuck re-marking its plan is told to do the step or answer) |
 
 `todo_write` only changes the agent's own list, never workspace files, but it is still a write, so the default
 policy asks the user. `panic.example.json` allows it with `"permissions": {"tools": {"todo_write": "allow"}}`.
@@ -32,6 +32,7 @@ empty list with a warning; the next write replaces it.
 | Key | Type | Meaning |
 | --- | --- | --- |
 | `Todo.PLAN` | hook `Query(conversationId) → Plan(items, criteria)` | The plan of a conversation. Answered by `todo`; empty (no answer) when the plan is empty or `todo` is not running |
+| `Todo.WRITE` | hook `Write(conversationId, items, criteria?) → Plan` | Replaces the plan as `todo_write` does (null `criteria` keeps them), for plugins that make it (an approved plan of `plugins/planner`). Too many tasks or criteria throw `IllegalArgumentException`; no answer when `todo` is not running |
 
 ## Keys used
 

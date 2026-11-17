@@ -32,6 +32,10 @@ import panic.tools.ToolsPlugin;
 /** The REPL answers tool approvals for its own session by asking at the terminal. */
 class CliApprovalTest {
 
+  /** Where plan files go: these conversations have no project. */
+  @org.junit.jupiter.api.io.TempDir
+  java.nio.file.Path plans;
+
   private final Root root = Context.root("t");
   private final StringBuffer screen = new StringBuffer();
   private final AtomicInteger ran = new AtomicInteger();
@@ -138,6 +142,67 @@ class CliApprovalTest {
     type("n");
     see("error: change: denied by the user\n", 1);
     assertEquals(1, ran.get());
+  }
+
+  @Test
+  void aPlanIsShownAndApprovedOrSentBackWithFeedback() throws Exception {
+    root.plugin("planner", new panic.planner.PlannerPlugin(), new panic.planner.PlannerConfig(false, null, 0, null, plans.toString()));
+    see("\n> ", 1);
+    type("/plan on");
+    see("[plan] > ", 1);
+    String exit = "/tool exit_plan_mode '{\"plan\":\"do it\",\"items\":[\"one\",\"two\"],\"criteria\":[\"done\"]}'";
+    type(exit);
+    see("[plan]\ndo it\n\nSteps:\n1. one\n2. two\n\nAcceptance criteria:\n- done\n"
+        + "approve the plan? [y/N, or what to change] ", 1);
+    type("fewer steps");
+    see("[plan not approved]", 1);
+    see("did not approve the plan: fewer steps", 1);
+    see("[plan] > ", 2);
+
+    type(exit);
+    see("approve the plan? [y/N, or what to change] ", 2);
+    type("y");
+    see("The user approved the plan", 1);
+    type("/plan");
+    see("plan off in this chat", 1);
+  }
+
+  @Test
+  void questionsAreAnsweredByNumberOrInTheUsersOwnWords() throws Exception {
+    root.plugin("ask-user", new panic.interact.AskUserPlugin(), panic.interact.AskUserConfig.DEFAULT);
+    see("\n> ", 1);
+    type("/tool ask_user '{\"questions\":[{\"question\":\"Which cache?\",\"header\":\"Cache\",\"options\":"
+        + "[{\"label\":\"Redis\",\"description\":\"shared\"},{\"label\":\"Memory\"}]},"
+        + "{\"question\":\"What?\",\"multiSelect\":true,\"options\":[{\"label\":\"a\"},{\"label\":\"b\"},{\"label\":\"c\"}]},"
+        + "{\"question\":\"Name?\",\"options\":[{\"label\":\"x\"},{\"label\":\"y\"}]}]}'");
+    see("[question] [Cache] Which cache?\n  1. Redis - shared\n  2. Memory\n  0. Other (type your own)\n"
+        + "choose or type: ", 1);
+    type("2");
+    see("choose (e.g. 1,3) or type: ", 1);
+    type("1, 3");
+    see("[question] Name?", 1);
+    type("0");
+    see("your answer: ", 1);
+    type("zed");
+    see("The user answered:\n\"Which cache?\" → Memory\n\"What?\" → a, c\n\"Name?\" → (other: zed)\n", 1);
+  }
+
+  @Test
+  void shellCommandsAreShownAsCommands() {
+    assertEquals("\n  $ npm run dev   (in web)   [background]",
+        Cli.shown("{\"command\":\"npm run dev\",\"cwd\":\"web\",\"background\":true}"));
+    assertEquals("{\"path\":\"x\"}", Cli.shown("{\"path\":\"x\"}"));
+  }
+
+  @Test
+  void parsingAnAnswer() {
+    panic.interact.AskUser.Question single = new panic.interact.AskUser.Question("q", "", java.util.List.of(
+        new panic.interact.AskUser.Option("a", ""), new panic.interact.AskUser.Option("b", "")), false);
+    assertEquals(new panic.interact.AskUser.Answer(java.util.List.of("b"), null), Cli.parse(single, "2"));
+    assertEquals(new panic.interact.AskUser.Answer(null, "1,2"), Cli.parse(single, "1,2"), "one pick only");
+    assertEquals(new panic.interact.AskUser.Answer(null, "3"), Cli.parse(single, "3"), "no such option");
+    assertEquals(new panic.interact.AskUser.Answer(null, "use b please"), Cli.parse(single, "use b please"));
+    assertEquals(new panic.interact.AskUser.Answer(null, null), Cli.parse(single, ""));
   }
 
   @Test

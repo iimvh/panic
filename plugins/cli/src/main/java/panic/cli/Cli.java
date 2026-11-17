@@ -6,6 +6,7 @@ import context.ServiceKey;
 import core.CancelledException;
 import core.Disposable;
 import core.Signal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -18,6 +19,8 @@ import panic.command.Hooks;
 import panic.command.Out;
 import panic.command.Session;
 import panic.command.UsageException;
+import panic.interact.AskUser;
+import panic.planner.Planner;
 import panic.plugin.App;
 import panic.tools.Tools;
 
@@ -36,7 +39,10 @@ import panic.tools.Tools;
  * approved is shown and runs only if the user types {@code y}. One-shot mode answers nothing, so such calls
  * are denied (set {@code permissions.bypassPermissions} for scripts). While the session runs in bypass mode
  * ({@link Tools#BYPASS}, switched with command {@code bypass}) the policy allows those calls, so nothing is asked,
- * and the prompt reads {@code [bypass] > } so that mode is never silent.
+ * and the prompt reads {@code [bypass] > } so that mode is never silent. It answers {@link Planner#APPROVE} the
+ * same way: the proposed plan is printed and {@code y} approves it, any other text goes back to the agent as
+ * feedback. While the session is in plan mode the prompt reads {@code [plan] > }. Questions the agent asks
+ * ({@link AskUser#ASK}) are shown with numbered options, in the same queue.
  */
 public final class Cli implements ConfigPlugin<CliConfig> {
 
@@ -63,6 +69,8 @@ public final class Cli implements ConfigPlugin<CliConfig> {
     Commands.command(ctx, "exit", "quit", call -> stop.set(true));
     ReentrantLock asking = new ReentrantLock(true);
     ctx.hook(Tools.APPROVE, a -> a.conversationId().equals(SESSION) ? approve(a, in, out, asking) : null);
+    ctx.hook(Planner.APPROVE, p -> p.conversationId().equals(SESSION) ? approve(p, in, out, asking) : null);
+    ctx.hook(AskUser.ASK, r -> r.conversationId().equals(SESSION) ? answer(r, in, out, asking) : null);
     ctx.spawn("repl", signal -> {
       Session session = new Session(SESSION, out, signal);
       out.println("panic — type a message, or " + PREFIX + "help");
@@ -84,10 +92,14 @@ public final class Cli implements ConfigPlugin<CliConfig> {
     return null;
   }
 
-  /** {@code > }, or {@code [bypass] > } while the REPL's conversation runs without approvals (YOLO mode). */
-  private static String prompt(Context ctx) {
+  /**
+   * {@code > }, with {@code [plan]} while the REPL's conversation is in plan mode and {@code [bypass]} while it runs
+   * without approvals (YOLO mode), so neither mode is silent.
+   */
+  static String prompt(Context ctx) {
+    boolean plan = Hooks.bail(ctx, Planner.MODE, new Planner.ModeQuery(SESSION)).map(Planner.Mode::on).orElse(false);
     boolean bypass = Hooks.bail(ctx, Tools.BYPASS, new Tools.BypassQuery(SESSION)).map(Tools.Bypass::on).orElse(false);
-    return bypass ? "\n[bypass] > " : "\n> ";
+    return "\n" + (plan ? "[plan] " : "") + (bypass ? "[bypass] " : "") + "> ";
   }
 
   /**
@@ -103,7 +115,7 @@ public final class Cli implements ConfigPlugin<CliConfig> {
       try {
         a.signal().throwIfCancelled();
         out.print("\n[approve] " + (a.agent() == null ? "" : a.agent() + ": ") + a.call().name() + " ("
-            + a.risk().wire() + ") " + a.call().arguments() + "\nallow? [y/N] ");
+            + a.risk().wire() + ") " + shown(a.call().arguments()) + "\nallow? [y/N] ");
         answer = in.readLine(a.signal());
       } finally {
         asking.unlock();
@@ -116,6 +128,120 @@ public final class Cli implements ConfigPlugin<CliConfig> {
     boolean allowed = yes.equals("y") || yes.equals("yes");
     if (!allowed) out.println("[denied]");
     return allowed ? Tools.Decision.ALLOW : Tools.Decision.DENY;
+  }
+
+  /**
+   * The arguments as the user reads them: a shell command ({@code {"command": ...}}, the {@code exec} tool) as
+   * {@code $ command} (with {@code (in cwd)}), anything else as its JSON.
+   */
+  static String shown(String arguments) {
+    com.fasterxml.jackson.databind.JsonNode args = panic.util.Json.parseOrNull(arguments);
+    if (args == null || !args.path("command").isTextual()) return arguments;
+    String cwd = args.path("cwd").asText("");
+    return "\n  $ " + args.get("command").asText() + (cwd.isBlank() ? "" : "   (in " + cwd + ")")
+        + (args.path("background").asBoolean(false) ? "   [background]" : "");
+  }
+
+  /**
+   * Shows a proposed plan and reads one line, queued with the tool approvals: {@code y}/{@code yes} approves it,
+   * anything else is sent back as feedback (an empty line or {@code n} without any); end of input answers nothing.
+   */
+  private static Planner.Answer approve(Planner.Proposal p, Stdin in, Out out, ReentrantLock asking) {
+    String answer;
+    try {
+      while (!asking.tryLock(100, TimeUnit.MILLISECONDS)) p.signal().throwIfCancelled();
+      try {
+        p.signal().throwIfCancelled();
+        StringBuilder text = new StringBuilder("\n[plan]\n").append(p.plan().strip()).append('\n');
+        if (!p.items().isEmpty()) {
+          text.append("\nSteps:\n");
+          for (int i = 0; i < p.items().size(); i++) text.append(i + 1).append(". ").append(p.items().get(i)).append('\n');
+        }
+        if (!p.criteria().isEmpty()) {
+          text.append("\nAcceptance criteria:\n");
+          for (String c : p.criteria()) text.append("- ").append(c).append('\n');
+        }
+        out.print(text + "approve the plan? [y/N, or what to change] ");
+        answer = in.readLine(p.signal());
+      } finally {
+        asking.unlock();
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new CancelledException("plan approval interrupted");
+    }
+    if (answer == null) return null; // end of input: no answer
+    String reply = answer.strip();
+    String lower = reply.toLowerCase(Locale.ROOT);
+    if (lower.equals("y") || lower.equals("yes")) return Planner.Answer.APPROVED;
+    out.println("[plan not approved]");
+    return Planner.Answer.rejected(lower.equals("n") || lower.equals("no") ? "" : reply);
+  }
+
+  /**
+   * Shows the agent's questions one by one, with numbered options and {@code 0} for an answer of the user's own,
+   * and reads one line each, queued with the approvals: {@code 2} picks an option, {@code 1,3} several (when the
+   * question allows it), {@code 0} asks for the text, anything else is the user's own answer, an empty line leaves
+   * the question unanswered. End of input answers nothing (null).
+   */
+  private static AskUser.Answers answer(AskUser.Request r, Stdin in, Out out, ReentrantLock asking) {
+    List<AskUser.Answer> answers = new ArrayList<>();
+    try {
+      while (!asking.tryLock(100, TimeUnit.MILLISECONDS)) r.signal().throwIfCancelled();
+      try {
+        for (AskUser.Question q : r.questions()) {
+          r.signal().throwIfCancelled();
+          StringBuilder text = new StringBuilder("\n[question] ");
+          if (!q.header().isEmpty()) text.append('[').append(q.header()).append("] ");
+          text.append(q.question()).append('\n');
+          for (int i = 0; i < q.options().size(); i++) {
+            AskUser.Option o = q.options().get(i);
+            text.append("  ").append(i + 1).append(". ").append(o.label());
+            if (!o.description().isEmpty()) text.append(" - ").append(o.description());
+            text.append('\n');
+          }
+          text.append("  0. Other (type your own)\n");
+          out.print(text + (q.multiSelect() ? "choose (e.g. 1,3) or type: " : "choose or type: "));
+          String line = in.readLine(r.signal());
+          if (line == null) return null;
+          line = line.strip();
+          if (line.equals("0")) {
+            out.print("your answer: ");
+            line = in.readLine(r.signal());
+            if (line == null) return null;
+            answers.add(new AskUser.Answer(null, line));
+          } else {
+            answers.add(parse(q, line));
+          }
+        }
+      } finally {
+        asking.unlock();
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new CancelledException("question interrupted");
+    }
+    return new AskUser.Answers(answers);
+  }
+
+  /** Option numbers ({@code 2}, or {@code 1,3} for a multi-select) pick labels; any other text is the user's own. */
+  static AskUser.Answer parse(AskUser.Question q, String line) {
+    if (line.isEmpty()) return new AskUser.Answer(null, null);
+    String[] parts = line.split("\\s*,\\s*|\\s+");
+    if (parts.length > 1 && !q.multiSelect()) return new AskUser.Answer(null, line);
+    List<String> picked = new ArrayList<>();
+    for (String p : parts) {
+      int n;
+      try {
+        n = Integer.parseInt(p);
+      } catch (NumberFormatException e) {
+        return new AskUser.Answer(null, line);
+      }
+      if (n < 1 || n > q.options().size()) return new AskUser.Answer(null, line);
+      String label = q.options().get(n - 1).label();
+      if (!picked.contains(label)) picked.add(label);
+    }
+    return new AskUser.Answer(picked, null);
   }
 
   private static void dispatch(Context ctx, String line, Session session, Signal signal) {

@@ -28,6 +28,21 @@ describe('renderMarkdown', () => {
 		);
 	});
 
+	it('keeps one numbered list when blank lines separate its items', () => {
+		expect(renderMarkdown('1. one\n\n2. two\n\n3. three')).toBe('<ol><li>one</li><li>two</li><li>three</li></ol>');
+		expect(renderMarkdown('1. one\n\n   more about one\n\n2. two')).toBe(
+			'<ol><li>one more about one</li><li>two</li></ol>'
+		);
+		expect(renderMarkdown('- a\n\n- b\n\ntext')).toBe('<ul><li>a</li><li>b</li></ul><p>text</p>');
+	});
+
+	it('keeps the number a list starts at', () => {
+		expect(renderMarkdown('3. three\n4. four')).toBe('<ol start="3"><li>three</li><li>four</li></ol>');
+		expect(renderMarkdown('1. one\n\ntext\n\n2. two')).toBe(
+			'<ol><li>one</li></ol><p>text</p><ol start="2"><li>two</li></ol>'
+		);
+	});
+
 	it('renders fenced code, also while still streaming', () => {
 		expect(renderMarkdown('```js\nlet a = 1;\n```')).toContain('<code class="language-js">let a = 1;</code>');
 		expect(renderMarkdown('see:\n```py\nprint(1)')).toContain('<code class="language-py">print(1)</code>');

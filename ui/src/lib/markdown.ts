@@ -118,12 +118,24 @@ function blocks(text: string): string {
 					i++;
 				} else if (lines[i].trim() !== '' && /^\s{2,}/.test(lines[i]) && items.length) {
 					items[items.length - 1] += ' ' + lines[i++].trim(); // continuation line
+				} else if (lines[i].trim() === '' && items.length) {
+					// a loose list: blank lines between items (or before an indented continuation) do not end it
+					let j = i;
+					while (j < lines.length && lines[j].trim() === '') j++;
+					const next = j < lines.length ? LIST_ITEM.exec(lines[j]) : null;
+					if ((next && /\d/.test(next[2]) === ordered) || (j < lines.length && /^\s{2,}\S/.test(lines[j]))) {
+						i = j;
+					} else {
+						break;
+					}
 				} else {
 					break;
 				}
 			}
 			const tag = ordered ? 'ol' : 'ul';
-			out.push(`<${tag}>` + items.map((t) => `<li>${inline(t)}</li>`).join('') + `</${tag}>`);
+			const start = ordered ? parseInt(item[2], 10) : 1;
+			const open = ordered && start !== 1 ? `<ol start="${start}">` : `<${tag}>`;
+			out.push(open + items.map((t) => `<li>${inline(t)}</li>`).join('') + `</${tag}>`);
 			continue;
 		}
 		const para: string[] = [];

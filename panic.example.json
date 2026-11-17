@@ -33,6 +33,13 @@
         "args": ["-y", "chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222"],
         "risk": "network",
         "enabled": false
+      },
+      "context7": {
+        "type": "http",
+        "url": "https://mcp.context7.com/mcp",
+        "headers": { "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}" },
+        "excludeTools": [],
+        "enabled": false
       }
     },
     "timeoutSeconds": 120

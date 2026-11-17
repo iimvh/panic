@@ -22,6 +22,7 @@ import org.junit.jupiter.api.io.TempDir;
 import panic.chat.Chat;
 import panic.command.Commands;
 import panic.command.Session;
+import panic.command.UsageException;
 import panic.llm.ToolCall;
 import panic.tools.Risk;
 import panic.tools.ToolContext;
@@ -298,6 +299,40 @@ class McpPluginTest {
     await(() -> names().contains(McpResources.LIST), "offered");
     call("mcp__fake__die", "{}");
     await(() -> !names().contains(McpResources.LIST), "gone with the server");
+  }
+
+  @Test
+  void promptsBecomeCommandsThatAskTheChat() {
+    startFake();
+    await(() -> run("mcp", "prompts").contains("review"), "the prompts are listed");
+    assertTrue(run("mcp", "prompts").contains("mcp__fake__review <code> [focus] - Reviews code."),
+        run("mcp", "prompts"));
+    assertTrue(run("mcp", "prompts").contains("mcp__fake__summary_notes - Two messages."), run("mcp", "prompts"));
+
+    String printed = run("mcp__fake__summary_notes", "");
+    assertTrue(printed.contains("[user]\nbuy milk\n\n[assistant]\nNoted."), "no chat: printed: " + printed);
+
+    List<String> asked = new java.util.concurrent.CopyOnWriteArrayList<>();
+    root.plugin("chat", ctx -> {
+      Commands.command(ctx, "ask <text...>", "", call -> asked.add(call.arg("text")));
+      return null;
+    });
+    run("mcp__fake__review", "\"x = 1\" naming and   style");
+    assertEquals(List.of("Review: x = 1 | focus: naming and style"), asked, "quotes group, the last takes the rest");
+    run("mcp__fake__review", "y");
+    assertEquals("Review: y | focus: everything", asked.get(1));
+    UsageException missing = assertThrows(UsageException.class, () -> run("mcp__fake__review", ""));
+    assertTrue(missing.usage().contains("mcp__fake__review <code> [focus]"), missing.usage());
+    assertThrows(UsageException.class, () -> run("mcp__fake__summary_notes", "extra"));
+  }
+
+  @Test
+  void promptCommandsGoWithTheServer() {
+    startFake();
+    await(() -> run("mcp", "prompts").contains("review"), "the prompts are listed");
+    call("mcp__fake__die", "{}");
+    await(() -> !Commands.run(root, "mcp__fake__review", "x", new Session("x", t -> { }, new CancelToken())),
+        "the command is gone");
   }
 
   @Test

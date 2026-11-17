@@ -9,7 +9,7 @@ remote server (GitHub, Sentry, documentation search) is reached over HTTP.
 
 | Name | Config (`panic.json` section) | Requires | Provides / registers |
 | --- | --- | --- | --- |
-| `mcp` | `McpConfig { servers = {}, dir = ".panic/mcp", timeoutSeconds = 120, startupSeconds = 60 }` | none | one tool per tool of each running server, `mcp__<server>__<tool>`; `list_mcp_resources` and `read_mcp_resource` while a server offers resources; command `mcp` |
+| `mcp` | `McpConfig { servers = {}, dir = ".panic/mcp", timeoutSeconds = 120, startupSeconds = 60 }` | none | one tool per tool of each running server, `mcp__<server>__<tool>`; `list_mcp_resources` and `read_mcp_resource` while a server offers resources; commands `mcp` and one `mcp__<server>__<prompt>` per prompt |
 
 ## Config
 
@@ -89,6 +89,15 @@ unknown `type` or `risk`, no `command` for stdio, no http(s) `url` for http or s
   are risk `read`, so the default policy runs them without asking, like Claude Code; ask for them with
   `"permissions": {"tools": {"read_mcp_resource": "ask"}}`. Nothing is cached, so a changed list needs no
   notification; subscriptions are not used.
+- **Prompts** (`McpPrompts`): templates a server offers for the user to start from. As Claude Code's slash commands
+  `/mcp__<server>__<prompt> arg1 arg2`, each prompt becomes the command `mcp__<server>__<prompt>` (lowercase, other
+  characters `_`). Values go to the prompt's arguments in the order it declares them; quotes group words and the
+  last argument takes the rest of the line; a required one that is missing shows the usage. The command gets the
+  prompt (`prompts/get`) and runs the chat's `ask` command with its text in the same session, so the chat gets it
+  as if the user had typed it. A prompt of several messages is sent as one text, each message headed by its role.
+  Without a chat the text is printed. `notifications/prompts/list_changed` lists them again, keeping the commands
+  that did not change. In the web UI a command's output is shown as such, not as a chat turn: there, typing
+  `/mcp__server__prompt` gives the answer but not a turn in the conversation view.
 - **Results:** text content is passed on as is. Images and audio are saved under `dir/<server>/` and the result
   names the file (models without vision cannot read them; use a text tool such as chrome-devtools-mcp's
   `take_snapshot` to inspect a page). `isError: true` makes an error result.
@@ -110,12 +119,15 @@ unknown `type` or `risk`, no `command` for stdio, no http(s) `url` for http or s
 | --- | --- | --- |
 | `Tools.register` | `plugins/tools` | Registers each server's tools |
 | `Chat.contribute` | `plugins/chat` | Section `MCP Server Instructions` of the system prompt |
+| command `ask` | `plugins/chat` | A prompt command sends the prompt's text to the chat |
 
 ## Commands
 
 | Command | Does |
 | --- | --- |
 | `mcp [list]` | Each server with its state (`starting`, `ready`, `reconnecting`, `failed`, `exited (exit N)`, `disabled`), the server's name and protocol or why it stopped, and its tools |
+| `mcp prompts [server]` | The prompts of every server that offers them, as commands with their arguments |
+| `mcp__<server>__<prompt> [args...]` | Sends the prompt to the chat (see Prompts) |
 | `mcp resources [server]` | The resources and URI templates of every server that offers them, or of one |
 | `mcp read <server> <uri>` | Prints a resource (binary content is saved to a file) |
 | `mcp restart <name>` | Stops the server and starts it again (after it crashed or gave up, or to pick up a new version) |

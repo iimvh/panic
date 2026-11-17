@@ -53,9 +53,30 @@ public final class FakeMcpServer {
           ObjectNode caps = Json.object();
           caps.set("tools", Json.object().put("listChanged", true));
           caps.set("resources", Json.object());
+          caps.set("prompts", Json.object().put("listChanged", true));
           result.set("capabilities", caps);
           result.set("serverInfo", Json.object().put("name", "fake").put("version", "0.1"));
           result.put("instructions", "Use echo to repeat text.");
+        }
+        case "prompts/list" -> {
+          ArrayNode prompts = result.putArray("prompts");
+          ObjectNode review = prompts.addObject().put("name", "review").put("description", "Reviews code.");
+          review.putArray("arguments").add(Json.object().put("name", "code").put("required", true))
+              .add(Json.object().put("name", "focus"));
+          prompts.addObject().put("name", "Summary.Notes").put("description", "Two messages.");
+        }
+        case "prompts/get" -> {
+          ArrayNode messages = result.putArray("messages");
+          JsonNode a = params.path("arguments");
+          if (params.path("name").asText().equals("review")) {
+            messages.addObject().put("role", "user").set("content", Json.object().put("type", "text").put("text",
+                "Review: " + a.path("code").asText() + " | focus: " + a.path("focus").asText("everything")));
+          } else {
+            messages.addObject().put("role", "user").set("content", Json.object().put("type", "resource")
+                .set("resource", Json.object().put("uri", "file:///notes.txt").put("text", "buy milk")));
+            messages.addObject().put("role", "assistant").set("content", Json.object().put("type", "text")
+                .put("text", "Noted."));
+          }
         }
         case "resources/list" -> {
           ArrayNode resources = result.putArray("resources");

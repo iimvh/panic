@@ -42,6 +42,11 @@ final class McpSession {
   /** What the session loop waits for: the tool list changed, or the connection was lost. */
   private record Event(String kind, String status, String detail) {
     static final Event RELIST = new Event("relist", null, null);
+    static final Event RELIST_PROMPTS = new Event("relist-prompts", null, null);
+
+    boolean relist() {
+      return this == RELIST || this == RELIST_PROMPTS;
+    }
   }
 
   private final Context ctx;
@@ -53,6 +58,7 @@ final class McpSession {
   private final BlockingQueue<Event> events = new LinkedBlockingQueue<>();
   private final Map<String, Registered> registered = new LinkedHashMap<>();
   private final Runnable onChange;
+  private final McpPrompts prompts;
   private volatile McpClient client;
   /** What the server declared in {@code initialize} ({@code tools}, {@code resources}, {@code prompts}). */
   private volatile JsonNode capabilities = Json.object();
@@ -67,6 +73,7 @@ final class McpSession {
     this.state = state;
     this.warn = warn;
     this.onChange = onChange;
+    this.prompts = new McpPrompts(this, ctx);
   }
 
   String name() {
@@ -151,8 +158,10 @@ final class McpSession {
       Thread.currentThread().interrupt(); // cancelled: the plugin is going away
     } finally {
       state.tools = List.of();
+      state.prompts = List.of();
       state.instructions = null;
       unregister();
+      prompts.clear();
       changed();
     }
   }
@@ -165,7 +174,13 @@ final class McpSession {
   private Outcome connect(Transport transport, Signal signal) throws InterruptedException {
     long startup = TimeUnit.SECONDS.toMillis(cfg.startupSeconds());
     McpClient c = new McpClient(transport, n -> {
-      if (n.method().equals("notifications/tools/list_changed")) events.offer(Event.RELIST);
+      switch (n.method()) {
+        case "notifications/tools/list_changed" -> events.offer(Event.RELIST);
+        case "notifications/prompts/list_changed" -> events.offer(Event.RELIST_PROMPTS);
+        default -> {
+          // resources are not cached, so their list_changed needs nothing
+        }
+      }
     });
     events.clear();
     boolean ready = false;
@@ -193,23 +208,28 @@ final class McpSession {
         client = c;
         notifyAll(); // calls waiting for a new session
       }
+      capabilities = init.path("capabilities").isObject() ? init.path("capabilities") : Json.object();
       list(signal, startup);
+      listPrompts(signal, startup);
       state.detail = about;
       state.instructions = init.path("instructions").isTextual() ? init.path("instructions").asText() : null;
-      capabilities = init.path("capabilities").isObject() ? init.path("capabilities") : Json.object();
       state.status = "ready";
       changed();
       ready = true;
       while (true) {
         Event event = events.take();
-        if (event != Event.RELIST) {
+        if (!event.relist()) {
           return new Outcome(true, event, event.status() + (event.detail() == null ? "" : ": " + event.detail()));
         }
-        list(signal, startup);
+        if (event == Event.RELIST) {
+          list(signal, startup);
+        } else {
+          listPrompts(signal, startup);
+        }
       }
     } catch (McpException e) {
       String tail = transport.log();
-      Event lost = events.stream().filter(ev -> ev != Event.RELIST).findFirst().orElse(null);
+      Event lost = events.stream().filter(ev -> !ev.relist()).findFirst().orElse(null);
       if (lost != null && !transport.reconnects()) return new Outcome(ready, lost, null);
       return new Outcome(ready, null, e.getMessage() + (tail.isEmpty() ? "" : " | " + tail));
     } catch (CancelledException e) {
@@ -328,6 +348,16 @@ final class McpSession {
     }
   }
 
+  /** Lists the server's prompts as commands, when it has any; a server that fails to list them keeps working. */
+  private void listPrompts(Signal signal, long timeoutMillis) {
+    if (!offers("prompts")) return;
+    try {
+      state.prompts = List.copyOf(prompts.list(signal, timeoutMillis));
+    } catch (McpException e) {
+      warn.accept("mcp: server " + name + ": cannot list its prompts: " + e.getMessage());
+    }
+  }
+
   private void unregister() {
     List<Disposable> old;
     synchronized (registered) {
@@ -373,26 +403,32 @@ final class McpSession {
 
   private final AtomicInteger saved = new AtomicInteger();
 
-  /** The content blocks as text: text as is, images and audio saved to files and named by their path. */
+  /** The content blocks as text (see {@link #block}). */
   private String content(JsonNode result) {
     List<String> parts = new ArrayList<>();
-    for (JsonNode block : result.path("content")) {
-      String type = block.path("type").asText("");
-      switch (type) {
-        case "text" -> parts.add(block.path("text").asText(""));
-        case "image", "audio" -> parts.add(save(type, block.path("data").asText(""), block.path("mimeType").asText("")));
-        case "resource_link" -> parts.add("[resource " + block.path("uri").asText("?")
-            + (block.hasNonNull("name") ? " (" + block.path("name").asText() + ")" : "") + "]");
-        case "resource" -> {
-          JsonNode r = block.path("resource");
-          parts.add(r.hasNonNull("text") ? r.path("text").asText()
-              : "[binary resource " + r.path("uri").asText("?") + ", " + r.path("mimeType").asText("?") + "]");
-        }
-        default -> parts.add("[" + (type.isEmpty() ? "unknown" : type) + " content left out]");
-      }
-    }
+    for (JsonNode block : result.path("content")) parts.add(block(block));
     if (parts.isEmpty() && result.has("structuredContent")) parts.add(result.get("structuredContent").toString());
     return parts.isEmpty() ? "(no output)" : String.join("\n", parts);
+  }
+
+  /**
+   * One content block (of a tool result or a prompt message) as text: text as is, images and audio saved to files
+   * and named by their path, an embedded resource by its text.
+   */
+  String block(JsonNode block) {
+    String type = block.path("type").asText("");
+    return switch (type) {
+      case "text" -> block.path("text").asText("");
+      case "image", "audio" -> save(type, block.path("data").asText(""), block.path("mimeType").asText(""));
+      case "resource_link" -> "[resource " + block.path("uri").asText("?")
+          + (block.hasNonNull("name") ? " (" + block.path("name").asText() + ")" : "") + "]";
+      case "resource" -> {
+        JsonNode r = block.path("resource");
+        yield r.hasNonNull("text") ? r.path("text").asText()
+            : "[binary resource " + r.path("uri").asText("?") + ", " + r.path("mimeType").asText("?") + "]";
+      }
+      default -> "[" + (type.isEmpty() ? "unknown" : type) + " content left out]";
+    };
   }
 
   /** Saves {@code base64} data under {@code dir/<server>/} and says where, for the model. */
@@ -429,6 +465,8 @@ final class McpSession {
     volatile String detail;
     /** What the server says about using it ({@code instructions} of {@code initialize}), or null. */
     volatile String instructions;
+    /** How the server's prompts are run, as commands ({@code mcp__s__p <arg> - description}). */
+    volatile List<String> prompts = List.of();
   }
 
   /** A tool of a server: calls go to its session. */

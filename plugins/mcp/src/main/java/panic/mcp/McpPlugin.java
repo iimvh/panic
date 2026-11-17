@@ -51,7 +51,8 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
   /** At most this much of one server's instructions goes into every system prompt. */
   static final int MAX_INSTRUCTIONS = 2000;
 
-  private static final String USAGE = "mcp [list | restart <name> | resources [server] | read <server> <uri>]";
+  private static final String USAGE =
+      "mcp [list | restart <name> | prompts [server] | resources [server] | read <server> <uri>]";
 
   @Override
   public Disposable apply(Context ctx, McpConfig cfg) {
@@ -70,7 +71,8 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
     });
     Chat.contribute(ctx, SECTION, 40, q -> instructions(states));
     Commands.command(ctx, "mcp [action] [args...]",
-        "MCP servers, their tools and resources: list | restart <name> | resources [server] | read <server> <uri>",
+        "MCP servers, their tools, prompts and resources: list | restart <name> | prompts [server] | "
+            + "resources [server] | read <server> <uri>",
         call -> {
           String action = call.argOr("action", "list");
           String args = call.argOr("args", "").strip();
@@ -102,6 +104,15 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
                 handles.put(args, start(ctx, cfg, args, server, state, sessions, resources::update));
               }
               call.out().println("server " + args + " restarted");
+            }
+            case "prompts" -> {
+              StringBuilder out = new StringBuilder();
+              states.forEach((name, st) -> {
+                if (st.prompts.isEmpty() || !(args.isEmpty() || args.equals(name))) return;
+                out.append(name).append(":\n");
+                st.prompts.forEach(p -> out.append("  ").append(p).append('\n'));
+              });
+              call.out().println(out.isEmpty() ? "no server offers prompts now" : out.toString().stripTrailing());
             }
             case "resources" -> {
               try {

@@ -22,14 +22,12 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import panic.command.Commands;
 import panic.command.UsageException;
 import panic.llm.ToolSpec;
 import panic.mcp.McpClient.McpException;
-import panic.tools.Processes;
 import panic.tools.Risk;
 import panic.tools.Tool;
 import panic.tools.ToolContext;
@@ -129,10 +127,13 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
     });
   }
 
-  /** One running server: its process, the connection, and the tools registered for it. */
+  /** One server: its connection, and the tools registered for it while it is ready. */
   private static final class Session {
-    private static final String RELIST = "relist";
-    private static final String EXIT = "exit";
+
+    /** What the session loop waits for: the tool list changed, or the connection was lost. */
+    private record Event(String kind, String status, String detail) {
+      static final Event RELIST = new Event("relist", null, null);
+    }
 
     private final Context ctx;
     private final McpConfig cfg;
@@ -140,12 +141,9 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
     private final McpConfig.Server server;
     private final State state;
     private final Consumer<String> warn;
-    private final BlockingQueue<String> events = new LinkedBlockingQueue<>();
+    private final BlockingQueue<Event> events = new LinkedBlockingQueue<>();
     private final List<Disposable> registered = new ArrayList<>();
-    private final AtomicBoolean down = new AtomicBoolean();
-    private Process process;
-    private Path stderr;
-    private McpClient client;
+    private volatile McpClient client;
 
     Session(Context ctx, McpConfig cfg, String name, McpConfig.Server server, State state, Consumer<String> warn) {
       this.ctx = ctx;
@@ -157,32 +155,6 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
     }
 
     void start() {
-      try {
-        stderr = Files.createTempFile("panic-mcp-" + name + "-", ".log");
-        ProcessBuilder pb = new ProcessBuilder(server.commandLine())
-            .directory(Path.of(server.cwd()).toAbsolutePath().normalize().toFile())
-            .redirectError(stderr.toFile());
-        pb.environment().putAll(server.env());
-        process = pb.start();
-      } catch (IOException | RuntimeException e) {
-        failed("could not start " + String.join(" ", server.commandLine()) + ": " + e.getMessage());
-        deleteQuietly(stderr);
-        return;
-      }
-      client = new McpClient(process.getInputStream(), process.getOutputStream(), n -> {
-        if (n.method().equals("notifications/tools/list_changed")) events.offer(RELIST);
-      });
-      // read first, so it is disposed last: the session task stops the server, which ends the reading
-      ctx.spawn("read", signal -> {
-        Disposable onCancel = signal.onCancel(this::shutdown);
-        try {
-          client.readLoop();
-        } finally {
-          onCancel.dispose();
-          events.offer(EXIT);
-        }
-        return null;
-      });
       ctx.spawn("session", signal -> {
         run(signal);
         return null;
@@ -191,9 +163,27 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
 
     private void run(Signal signal) {
       long startup = TimeUnit.SECONDS.toMillis(cfg.startupSeconds());
+      Transport transport = new StdioTransport(server);
+      McpClient c = new McpClient(transport, n -> {
+        if (n.method().equals("notifications/tools/list_changed")) events.offer(Event.RELIST);
+      });
+      client = c;
+      Event lost = null;
       try {
-        JsonNode init = client.request("initialize", initialize(), signal, startup);
-        client.notify("notifications/initialized", null);
+        transport.open(ctx, new Transport.Listener() {
+          @Override
+          public void message(JsonNode msg) {
+            c.receive(msg);
+          }
+
+          @Override
+          public void lost(String status, String detail) {
+            c.close("the server stopped");
+            events.offer(new Event("lost", status, detail));
+          }
+        }, signal, startup);
+        JsonNode init = c.request("initialize", initialize(), signal, startup);
+        c.notify("notifications/initialized", null);
         JsonNode info = init.path("serverInfo");
         state.detail = info.isObject()
             ? info.path("name").asText("?") + " " + info.path("version").asText("") + ", protocol "
@@ -202,36 +192,37 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
         list(signal, startup);
         state.status = "ready";
         while (true) {
-          String event = events.take();
-          if (event.equals(EXIT)) break;
+          Event event = events.take();
+          if (event != Event.RELIST) {
+            lost = event;
+            break;
+          }
           list(signal, startup);
         }
       } catch (McpException e) {
-        failed(e.getMessage());
+        String tail = transport.log();
+        failed(e.getMessage() + (tail.isEmpty() ? "" : " | " + tail));
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt(); // cancelled: the plugin is going away
       } finally {
-        boolean stopping = down.get(); // we stopped it (the plugin is going away): not worth a warning
-        // the server first: calls still waiting on it fail, so removing the tools does not wait for them
-        shutdown();
-        if (!signal.isCancelled() && !stopping && !state.status.equals("failed")) {
-          String tail = Processes.tail(stderr, 500).strip();
-          state.status = "exited" + (process.isAlive() ? "" : " (exit " + process.exitValue() + ")");
-          state.detail = tail.isEmpty() ? null : tail.replace('\n', ' ');
+        // the connection first: calls still waiting on it fail, so removing the tools does not wait for them
+        c.close("the server stopped");
+        transport.close();
+        if (lost != null && !signal.isCancelled()) {
+          state.status = lost.status();
+          state.detail = lost.detail();
           state.tools = List.of();
-          warn.accept("mcp: server " + name + " " + state.status + (tail.isEmpty() ? "" : ": " + tail));
+          warn.accept("mcp: server " + name + " " + lost.status() + (lost.detail() == null ? "" : ": " + lost.detail()));
         }
         unregister();
-        deleteQuietly(stderr);
       }
     }
 
     private void failed(String why) {
-      String tail = stderr == null ? "" : Processes.tail(stderr, 500).strip();
       state.status = "failed";
-      state.detail = why + (tail.isEmpty() ? "" : " | " + tail.replace('\n', ' '));
+      state.detail = why;
       state.tools = List.of();
-      warn.accept("mcp: server " + name + " failed: " + state.detail);
+      warn.accept("mcp: server " + name + " failed: " + why);
     }
 
     private static ObjectNode initialize() {
@@ -281,32 +272,6 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
         registered.clear();
       }
       old.forEach(Disposable::dispose);
-    }
-
-    /**
-     * Stops the server as the MCP spec says for stdio: close its input, wait, SIGTERM, wait, SIGKILL; then
-     * whatever it started that is still alive. Once, whoever calls first.
-     */
-    private void shutdown() {
-      if (!down.compareAndSet(false, true)) return;
-      boolean interrupted = Thread.interrupted(); // wait even when stopping because of a cancel
-      List<ProcessHandle> children = process.descendants().toList();
-      try {
-        try {
-          process.getOutputStream().close();
-        } catch (IOException ignored) {
-          // already closed
-        }
-        if (!process.waitFor(2, TimeUnit.SECONDS)) {
-          process.destroy();
-          if (!process.waitFor(2, TimeUnit.SECONDS)) Processes.kill(process);
-        }
-      } catch (InterruptedException e) {
-        Processes.kill(process);
-      } finally {
-        children.stream().filter(ProcessHandle::isAlive).forEach(ProcessHandle::destroyForcibly);
-        if (interrupted) Thread.currentThread().interrupt();
-      }
     }
 
     /** {@code tools/call}: the result as text for the model; images are saved to files. */
@@ -373,14 +338,6 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
       return bytes < 1024 ? bytes + " B" : String.format(Locale.ROOT, "%.1f KB", bytes / 1024.0);
     }
 
-    private static void deleteQuietly(Path file) {
-      if (file == null) return;
-      try {
-        Files.deleteIfExists(file);
-      } catch (IOException ignored) {
-        // a temporary log left behind is harmless
-      }
-    }
   }
 
   /**

@@ -1,17 +1,10 @@
 package panic.mcp;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import core.CancelledException;
 import core.Disposable;
 import core.Signal;
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,16 +16,15 @@ import java.util.function.Consumer;
 import panic.util.Json;
 
 /**
- * The client side of a JSON-RPC 2.0 connection to an MCP server over stdio: one JSON message per line on the
- * server's stdin and stdout (the MCP stdio transport). It owns no thread: {@link #readLoop} reads the server's
- * messages until its stdout ends and must run on a task of the caller; {@link #request} blocks the calling thread
- * until the answer arrives, the time limit passes or the signal is cancelled (then the server is sent
+ * The client side of a JSON-RPC 2.0 connection to an MCP server, over any {@link Transport}. It owns no thread:
+ * the transport hands it what the server sends ({@link #receive}); {@link #request} blocks the calling thread until
+ * the answer arrives, the time limit passes or the signal is cancelled (then the server is sent
  * {@code notifications/cancelled}, as the MCP cancellation spec asks).
  *
  * Requests from the server are answered here: {@code ping} with an empty result, anything else (sampling, roots,
  * elicitation: capabilities this client does not declare) with "method not found". Notifications go to
- * {@code onNotification}, on the reading thread: it must not make requests itself (their answers are read by that
- * same thread).
+ * {@code onNotification}, on the transport's receiving thread: it must not make requests itself (their answers may
+ * be read by that same thread).
  */
 final class McpClient {
 
@@ -40,35 +32,25 @@ final class McpClient {
   record Notification(String method, JsonNode params) {
   }
 
-  private final BufferedReader in;
-  private final OutputStream out;
+  private final Transport transport;
   private final Consumer<Notification> onNotification;
   private final Map<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
   private final AtomicLong ids = new AtomicLong();
   private volatile String closed;
 
-  McpClient(InputStream fromServer, OutputStream toServer, Consumer<Notification> onNotification) {
-    this.in = new BufferedReader(new InputStreamReader(fromServer, StandardCharsets.UTF_8));
-    this.out = toServer;
+  McpClient(Transport transport, Consumer<Notification> onNotification) {
+    this.transport = transport;
     this.onNotification = onNotification;
   }
 
-  /**
-   * Reads the server's messages until its stdout ends (it exited or was stopped), then fails every request still
-   * waiting. Lines that are not JSON objects are skipped: a server that logs to stdout must not break the session.
-   */
-  void readLoop() {
-    try {
-      String line;
-      while ((line = in.readLine()) != null) {
-        if (line.isBlank()) continue;
-        JsonNode msg = Json.parseOrNull(line);
-        if (msg != null && msg.isObject()) dispatch(msg);
-      }
-    } catch (IOException e) {
-      // the pipe broke: the same as the server going away
-    } finally {
-      close("the server stopped");
+  /** A message (or a JSON array of messages) from the server. Anything that is not a message is ignored. */
+  void receive(JsonNode msg) {
+    if (msg.isArray()) {
+      msg.forEach(m -> {
+        if (m.isObject()) dispatch(m);
+      });
+    } else if (msg.isObject()) {
+      dispatch(msg);
     }
   }
 
@@ -142,6 +124,7 @@ final class McpClient {
     } finally {
       onCancel.dispose();
       pending.remove(id);
+      transport.done(id);
     }
   }
 
@@ -163,20 +146,7 @@ final class McpClient {
   }
 
   private void send(JsonNode msg) {
-    byte[] line;
-    try {
-      line = (Json.MAPPER.writeValueAsString(msg) + "\n").getBytes(StandardCharsets.UTF_8);
-    } catch (JsonProcessingException e) {
-      throw new McpException("cannot encode the message: " + e.getMessage());
-    }
-    synchronized (out) {
-      try {
-        out.write(line);
-        out.flush();
-      } catch (IOException e) {
-        throw new McpException("the server does not read its input any more: " + e.getMessage());
-      }
-    }
+    transport.send(msg);
   }
 
   /** Fails every waiting request with {@code reason}; later requests fail at once. */

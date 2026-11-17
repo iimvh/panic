@@ -94,6 +94,16 @@ class McpPluginTest {
     }
   }
 
+  private String mcp() {
+    return run("mcp", "");
+  }
+
+  private String run(String command, String args) {
+    StringBuilder out = new StringBuilder();
+    Commands.run(root, command, args, new Session("x", out::append, new CancelToken()));
+    return out.toString();
+  }
+
   private ProcessHandle server() throws Exception {
     return ProcessHandle.of(Long.parseLong(Files.readString(dir.resolve("pid")).strip())).orElseThrow();
   }
@@ -214,9 +224,9 @@ class McpPluginTest {
   @Test
   void aServerThatCannotStartIsReported() {
     start(new McpConfig.Server("/no/such/program", List.of()), 5);
-    StringBuilder out = new StringBuilder();
-    Commands.run(root, "mcp", "", new Session("x", out::append, new CancelToken()));
-    assertTrue(out.toString().contains("fake  failed  could not start /no/such/program"), out.toString());
+    await(() -> mcp().contains("failed"), "the server is reported");
+    String out = mcp();
+    assertTrue(out.contains("fake  failed  could not start /no/such/program"), out);
     assertTrue(names().isEmpty());
   }
 

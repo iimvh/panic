@@ -19,6 +19,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import panic.chat.Chat;
 import panic.command.Commands;
 import panic.command.Session;
 import panic.llm.ToolCall;
@@ -231,7 +232,33 @@ class McpPluginTest {
   }
 
   private static McpConfig.Server server(String type, String command, String url, String risk) {
-    return new McpConfig.Server(type, command, null, null, null, url, null, risk, null);
+    return new McpConfig.Server(type, command, null, null, null, url, null, risk, null, null, null);
+  }
+
+  @Test
+  void filteredToolsAreNotOfferedButListed() {
+    McpConfig.Server f = fake();
+    start(new McpConfig.Server(null, f.command(), f.args(), null, null, null, null, null, null, null,
+        List.of("die", "wait")), 30);
+    await(() -> names().contains("mcp__fake__grow"), "the tools are listed");
+    assertFalse(names().contains("mcp__fake__die"));
+    assertFalse(names().contains("mcp__fake__wait"));
+    assertTrue(names().contains("mcp__fake__echo"));
+    assertTrue(mcp().contains("  mcp__fake__die (filtered)"), mcp());
+    assertTrue(f.offers("die"));
+    McpConfig.Server only = new McpConfig.Server(null, "x", null, null, null, null, null, null, null,
+        List.of("echo"), List.of("echo"));
+    assertFalse(only.offers("echo"), "exclude wins");
+    assertFalse(only.offers("grow"), "only the included ones");
+  }
+
+  @Test
+  void theServersInstructionsGoIntoTheSystemPrompt() {
+    startFake();
+    List<Chat.Section> sections = root.collect(Chat.CONTEXT, new Chat.ContextQuery("c"));
+    Chat.Section mcp = sections.stream().filter(x -> x.name().equals(McpPlugin.SECTION)).findFirst().orElseThrow();
+    assertTrue(mcp.text().contains("### fake\nUse echo to repeat text."), mcp.text());
+    assertTrue(mcp.text().startsWith("The following MCP servers have provided instructions"), mcp.text());
   }
 
   @Test
@@ -246,7 +273,7 @@ class McpPluginTest {
     assertThrows(IllegalArgumentException.class,
         () -> new McpConfig(Map.of("bad name", new McpConfig.Server("x", null)), null, 0, 0));
     McpConfig.Server s = new McpConfig.Server("stdio", "npx", List.of("-y", "chrome-devtools-mcp@latest"), null, null,
-        null, null, null, null);
+        null, null, null, null, null, null);
     assertEquals("network", s.risk());
     assertTrue(s.enabled());
     assertTrue(s.local());

@@ -47,6 +47,10 @@ Panic adds:
   default `network`, which the default policy asks about). Allow single tools with
   `"permissions": {"tools": {"mcp__chrome-devtools__take_snapshot": "allow"}}`.
 - `enabled`: `false` keeps the entry without starting the server.
+- `includeTools` (only these) and `excludeTools` (not these): the server's tools the agent gets, by their name on the
+  server; default all. A server with dozens of tools costs tokens on every request; this is OpenAI Agents SDK's
+  `tool_filter` and the per-tool switches of Cursor and VS Code. `mcp list` still shows a filtered tool, marked
+  `(filtered)`.
 
 `dir` is where images returned by tools are saved, `timeoutSeconds` a tool call's time limit, `startupSeconds` how
 long `initialize` and `tools/list` may take (`npx` may download the server first). A bad entry is a config error: an
@@ -75,6 +79,9 @@ unknown `type` or `risk`, no `command` for stdio, no http(s) `url` for http or s
 - **Tools:** each tool becomes `mcp__<server>__<tool>` (Claude Code's naming; characters a model API refuses become
   `_`, cut at 64), with the server's description and `inputSchema`. Calls go through the permission policy like any
   other tool.
+- **Instructions:** what a server says in `instructions` when it initializes goes into the system prompt, in the
+  section `MCP Server Instructions` (`### <server>` each, at most 2000 characters per server), while the server is
+  ready. Claude Code does the same.
 - **Results:** text content is passed on as is. Images and audio are saved under `dir/<server>/` and the result
   names the file (models without vision cannot read them; use a text tool such as chrome-devtools-mcp's
   `take_snapshot` to inspect a page). `isError: true` makes an error result.
@@ -95,6 +102,7 @@ unknown `type` or `risk`, no `command` for stdio, no http(s) `url` for http or s
 | Key | From | Use |
 | --- | --- | --- |
 | `Tools.register` | `plugins/tools` | Registers each server's tools |
+| `Chat.contribute` | `plugins/chat` | Section `MCP Server Instructions` of the system prompt |
 
 ## Commands
 

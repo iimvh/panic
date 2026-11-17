@@ -24,6 +24,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import panic.chat.Chat;
 import panic.command.Commands;
 import panic.command.UsageException;
 import panic.llm.ToolSpec;
@@ -69,7 +70,15 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
     volatile String status = "starting";
     volatile List<String> tools = List.of();
     volatile String detail;
+    /** What the server says about using it ({@code instructions} of {@code initialize}), or null. */
+    volatile String instructions;
   }
+
+  /** The system prompt section with the servers' instructions; Claude Code adds the same. */
+  static final String SECTION = "MCP Server Instructions";
+
+  /** At most this much of one server's instructions goes into every system prompt. */
+  static final int MAX_INSTRUCTIONS = 2000;
 
   @Override
   public Disposable apply(Context ctx, McpConfig cfg) {
@@ -84,6 +93,7 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
         handles.put(name, start(ctx, cfg, name, server, state));
       }
     });
+    Chat.contribute(ctx, SECTION, 40, q -> instructions(states));
     Commands.command(ctx, "mcp [action] [name]", "MCP servers and their tools: list | restart <name>", call -> {
       String action = call.argOr("action", "list");
       switch (action) {
@@ -120,6 +130,20 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
       }
     });
     return null;
+  }
+
+  /** The instructions of the servers that are ready, one heading per server; null when none has any. */
+  static String instructions(Map<String, State> states) {
+    StringBuilder text = new StringBuilder();
+    states.forEach((name, s) -> {
+      String i = s.instructions;
+      if (i == null || i.isBlank() || !s.status.equals("ready")) return;
+      i = i.strip();
+      if (i.length() > MAX_INSTRUCTIONS) i = i.substring(0, MAX_INSTRUCTIONS) + "… [cut]";
+      text.append("\n### ").append(name).append('\n').append(i).append('\n');
+    });
+    return text.isEmpty() ? null
+        : "The following MCP servers have provided instructions for how to use their tools and resources:\n" + text;
   }
 
   private PluginHandle start(Context ctx, McpConfig cfg, String name, McpConfig.Server server, State state) {
@@ -212,6 +236,7 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
         Thread.currentThread().interrupt(); // cancelled: the plugin is going away
       } finally {
         state.tools = List.of();
+        state.instructions = null;
         unregister();
       }
     }
@@ -254,6 +279,7 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
         }
         list(signal, startup);
         state.detail = about;
+        state.instructions = init.path("instructions").isTextual() ? init.path("instructions").asText() : null;
         state.status = "ready";
         ready = true;
         while (true) {
@@ -331,10 +357,15 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
         cursor = page.path("nextCursor").asText(null);
       } while (cursor != null && !cursor.isEmpty());
       Map<String, Registered> next = new LinkedHashMap<>();
+      List<String> shown = new ArrayList<>();
       for (JsonNode t : tools) {
         String original = t.path("name").asText("");
         if (original.isEmpty()) continue;
         String toolName = toolName(name, original);
+        if (!server.offers(original)) {
+          shown.add(toolName + " (filtered)");
+          continue;
+        }
         if (next.containsKey(toolName)) {
           warn.accept("mcp: server " + name + ": tool " + original + " skipped, its name clashes as " + toolName);
           continue;
@@ -342,9 +373,10 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
         JsonNode schema = t.path("inputSchema");
         ToolSpec spec = new ToolSpec(toolName, t.path("description").asText(""), schema.isObject() ? schema : null);
         next.put(toolName, new Registered(spec, original, null));
+        shown.add(toolName);
       }
       sync(next);
-      state.tools = List.copyOf(next.keySet());
+      state.tools = List.copyOf(shown);
     }
 
     /** A tool registered for the server: what the model sees, the server's name for it, and its registration. */

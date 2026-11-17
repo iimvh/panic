@@ -22,6 +22,7 @@ import panic.tools.Risk;
  *   <li>{@code risk}: the {@link Risk} of every tool of the server, for the permission policy (default
  *       {@code network}: the policy asks the user unless told otherwise).</li>
  *   <li>{@code enabled}: false keeps the entry without starting it (default true).</li>
+ *   <li>{@code includeTools}, {@code excludeTools}: which of its tools the agent gets (default all).</li>
  * </ul>
  *
  * {@code dir}: where images a tool returns (screenshots) are saved (default {@code .panic/mcp}).
@@ -59,10 +60,13 @@ public record McpConfig(Map<String, Server> servers, String dir, int timeoutSeco
    * {@code stdio} (a local process: {@code command}, {@code args}, {@code env}, {@code cwd}), {@code http} (MCP
    * Streamable HTTP at {@code url}) or {@code sse} (the older HTTP+SSE transport at {@code url}); left out, it is
    * {@code http} when there is a {@code url}, {@code stdio} otherwise. {@code headers} go with every HTTP request
-   * ({@code "Authorization": "Bearer ${TOKEN}"}).
+   * ({@code "Authorization": "Bearer ${TOKEN}"}). {@code includeTools} (only these) and {@code excludeTools} (not
+   * these) name the server's tools the agent gets, as OpenAI Agents SDK's {@code tool_filter} and the per-tool
+   * switches of Cursor and VS Code.
    */
   public record Server(String type, String command, List<String> args, Map<String, String> env, String cwd,
-      String url, Map<String, String> headers, String risk, Boolean enabled) {
+      String url, Map<String, String> headers, String risk, Boolean enabled, List<String> includeTools,
+      List<String> excludeTools) {
 
     private static final List<String> TYPES = List.of("stdio", "http", "sse");
 
@@ -101,16 +105,26 @@ public record McpConfig(Map<String, Server> servers, String dir, int timeoutSeco
       cwd = cwd == null || cwd.isBlank() ? "." : cwd.strip();
       risk = Risk.of(risk == null || risk.isBlank() ? "network" : risk).wire();
       if (enabled == null) enabled = true;
+      includeTools = includeTools == null ? null : List.copyOf(includeTools);
+      excludeTools = excludeTools == null ? List.of() : List.copyOf(excludeTools);
     }
 
     /** A local server: {@code command} with {@code args}. */
     public Server(String command, List<String> args) {
-      this(null, command, args, null, null, null, null, null, null);
+      this(null, command, args, null, null, null, null, null, null, null, null);
     }
 
     /** A remote server of {@code type} ({@code http} or {@code sse}) at {@code url}. */
     public static Server remote(String type, String url, Map<String, String> headers) {
-      return new Server(type, null, null, null, null, url, headers, null, null);
+      return new Server(type, null, null, null, null, url, headers, null, null, null, null);
+    }
+
+    /**
+     * Whether the agent gets the server's tool {@code tool} (its name on the server): it is in
+     * {@code includeTools} when that is set, and not in {@code excludeTools}.
+     */
+    public boolean offers(String tool) {
+      return (includeTools == null || includeTools.contains(tool)) && !excludeTools.contains(tool);
     }
 
     /** Whether the server is a local process (stdio) rather than reached over HTTP. */

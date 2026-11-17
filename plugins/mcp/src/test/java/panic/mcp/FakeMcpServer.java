@@ -52,6 +52,7 @@ public final class FakeMcpServer {
           result.put("protocolVersion", params.path("protocolVersion").asText());
           result.set("capabilities", Json.object().set("tools", Json.object().put("listChanged", true)));
           result.set("serverInfo", Json.object().put("name", "fake").put("version", "0.1"));
+          result.put("instructions", "Use echo to repeat text.");
         }
         case "tools/list" -> {
           ArrayNode tools = result.putArray("tools");

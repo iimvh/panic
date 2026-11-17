@@ -17,8 +17,10 @@ tool calls. The loop that asks the model and feeds results back belongs to the a
 `workspace`, asked with the conversation the user talks to, so a sub-agent works where its parent does), or
 `root` when the conversation has no project. `root` is resolved against the app's working directory. A path must stay inside the
 root after normalization and after following symlinks, so `../`, absolute paths and links that point out are
-refused. `read_file` returns at most `maxBytes` characters and tells the model which `offset` to continue
-from. Files with a NUL byte in their first 8 KiB are treated as binary and refused.
+refused. `read_file` returns each line as `cat -n` does (the line number right-aligned in 6 columns, a tab, the
+line), like the `view` command of Anthropic's text editor tool and Claude Code's Read, so the model can cite lines
+and copy `old_str` exactly. It returns at most `maxBytes` characters (numbers included) and tells the model which
+`offset` to continue from. Files with a NUL byte in their first 8 KiB are treated as binary and refused.
 
 `write_file {path, content, append?}` creates or replaces a file, or appends to it, and creates missing
 directories. The deepest existing directory on the way must be inside the root once symlinks are followed. The
@@ -35,6 +37,9 @@ rewrite of the file (and a long `write_file` is where broken JSON arguments come
 - `replace_all: true` replaces every occurrence. An empty `new_str` deletes. An empty `old_str`, or one equal to
   `new_str`, is refused.
 - A file with `\r\n` line endings is matched when the model writes `\n`, and keeps its `\r\n`.
+- The description says to copy `old_str` from after the tab of `read_file`'s lines. If the model copies the line
+  numbers anyway (every line of `old_str` starts with `   12<tab>`) and that does not match, they are stripped
+  (from `new_str` too, when all its lines have them) and the match is tried again.
 - The same guards as `write_file`: the file must exist inside the root (it is never created), must not be a
   symlink or a directory or binary, and the edited file may not exceed `maxWriteBytes`. It is written in place
   with `NOFOLLOW_LINKS`.

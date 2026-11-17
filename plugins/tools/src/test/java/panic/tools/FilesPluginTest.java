@@ -54,9 +54,9 @@ class FilesPluginTest {
 
   @Test
   void readsFilesWithOffsetAndLimit() {
-    assertEquals(ToolResult.ok("one\ntwo\nthree\n"), call("read_file", "{\"path\":\"a.txt\"}"));
-    assertEquals(ToolResult.ok("inside\n"), call("read_file", "{\"path\":\"sub/../sub/b.txt\"}"));
-    assertEquals(ToolResult.ok("two\n… [more lines; continue with offset=3]"),
+    assertEquals(ToolResult.ok("     1\tone\n     2\ttwo\n     3\tthree\n"), call("read_file", "{\"path\":\"a.txt\"}"));
+    assertEquals(ToolResult.ok("     1\tinside\n"), call("read_file", "{\"path\":\"sub/../sub/b.txt\"}"));
+    assertEquals(ToolResult.ok("     2\ttwo\n… [more lines; continue with offset=3]"),
         call("read_file", "{\"path\":\"a.txt\",\"offset\":2,\"limit\":1}"));
     assertRefused(call("read_file", "{\"path\":\"a.txt\",\"offset\":9}"), "has only 3 lines");
     assertRefused(call("read_file", "{\"path\":\"nope.txt\"}"), "not found: nope.txt");
@@ -65,8 +65,8 @@ class FilesPluginTest {
 
   @Test
   void cutsLongFiles() throws IOException {
-    files.update(new FilesConfig(workspace.toString(), 10, 0, 0));
-    assertEquals(ToolResult.ok("one\ntwo\n… [truncated at 10 chars; continue with offset=3]"),
+    files.update(new FilesConfig(workspace.toString(), 25, 0, 0));
+    assertEquals(ToolResult.ok("     1\tone\n     2\ttwo\n… [truncated at 25 chars; continue with offset=3]"),
         call("read_file", "{\"path\":\"a.txt\"}"));
   }
 
@@ -105,7 +105,7 @@ class FilesPluginTest {
   @Test
   void rootFollowsTheConfig() {
     files.update(new FilesConfig(dir.toString(), 0, 0, 0));
-    assertEquals(ToolResult.ok("outside\n"), call("read_file", "{\"path\":\"secret.txt\"}"));
+    assertEquals(ToolResult.ok("     1\toutside\n"), call("read_file", "{\"path\":\"secret.txt\"}"));
     files.update(new FilesConfig(dir.resolve("missing").toString(), 0, 0, 0));
     assertRefused(call("list_dir", "{}"), "workspace root does not exist");
   }
@@ -189,6 +189,19 @@ class FilesPluginTest {
     assertTrue(Files.notExists(workspace.resolve("missing.txt")));
     assertRefused(edit("sub", "a", "b", null), "is a directory");
     assertRefused(call("edit_file", "{\"path\":\"a.txt\",\"old_str\":\"two\"}"), "new_str");
+  }
+
+  @Test
+  void editForgivesLineNumbersCopiedFromReadFile() throws IOException {
+    String shown = call("read_file", "{\"path\":\"a.txt\",\"offset\":2,\"limit\":1}").content();
+    String line = shown.substring(0, shown.indexOf('\n'));
+    assertEquals("     2\ttwo", line);
+    assertEquals(ToolResult.ok("edited a.txt: replaced 1 occurrence (first at line 2)"), edit("a.txt", line, "     2\tTWO", null));
+    assertEquals("one\nTWO\nthree\n", Files.readString(workspace.resolve("a.txt")));
+    edit("a.txt", "     1\tone\n     2\tTWO", "uno\ndos", null);
+    assertEquals("uno\ndos\nthree\n", Files.readString(workspace.resolve("a.txt")), "a clean new_str is kept as is");
+    assertEquals("x", FilesPlugin.withoutLineNumbers("  12\tx"));
+    assertEquals(null, FilesPlugin.withoutLineNumbers("12\tx\nno prefix"));
   }
 
   @Test

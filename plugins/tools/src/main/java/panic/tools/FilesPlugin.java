@@ -139,7 +139,9 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
     @Override
     public ToolSpec spec() {
       return new ToolSpec("read_file",
-          "Read a text file of the workspace. Long files are cut; continue with offset (1-based line number).",
+          "Read a text file of the workspace. Each line comes as its line number, a tab, then the line as it is in "
+              + "the file (like cat -n); the number and tab are not part of the file. Long files are cut; continue "
+              + "with offset (1-based line number).",
           Json.parseOrNull("""
               {"type":"object","properties":{
                 "path":{"type":"string","description":"path relative to the workspace root"},
@@ -180,11 +182,12 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
           if (taken == limit) {
             return ToolResult.ok(out + "… [more lines; continue with offset=" + line + "]");
           }
-          if (out.length() + text.length() + 1 > cfg.maxBytes()) {
+          String shown = numbered(line, text);
+          if (out.length() + shown.length() + 1 > cfg.maxBytes()) {
             return ToolResult.ok(out + "… [truncated at " + cfg.maxBytes() + " chars; continue with offset="
                 + line + "]");
           }
-          out.append(text).append('\n');
+          out.append(shown).append('\n');
           taken++;
         }
       } catch (IOException e) {
@@ -195,6 +198,27 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
       }
       return ToolResult.ok(out.toString());
     }
+  }
+
+  /** {@code text} as line {@code n} of {@code cat -n}: the number right-aligned in 6 columns, a tab, the line. */
+  static String numbered(int n, String text) {
+    return String.format(java.util.Locale.ROOT, "%6d\t%s", n, text);
+  }
+
+  /** A {@code cat -n} prefix (spaces, a number, a tab) at the start of a line. */
+  private static final java.util.regex.Pattern LINE_PREFIX = java.util.regex.Pattern.compile("(?m)^ *\\d+\t");
+
+  /**
+   * {@code text} without the line-number prefixes {@code read_file} adds, when every line has one; null otherwise.
+   * A model that copies them into {@code old_str} still means the file's text.
+   */
+  static String withoutLineNumbers(String text) {
+    String[] lines = text.split("\n", -1);
+    for (int i = 0; i < lines.length; i++) {
+      if (lines[i].isEmpty() && i == lines.length - 1) continue; // a trailing newline
+      if (!LINE_PREFIX.matcher(lines[i]).lookingAt()) return null;
+    }
+    return LINE_PREFIX.matcher(text).replaceAll("");
   }
 
   private record ListDir(Context host, Path root, FilesConfig cfg) implements Tool {
@@ -294,7 +318,8 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
     public ToolSpec spec() {
       return new ToolSpec("edit_file",
           "Change part of an existing text file: replace old_str, which must match the file exactly (whitespace and "
-              + "indentation included) and occur exactly once, with new_str. Include enough surrounding lines to make "
+              + "indentation included) and occur exactly once, with new_str. Copy old_str from what follows the tab "
+              + "of each read_file line: never include the line number and tab. Include enough surrounding lines to make "
               + "old_str unique, or set replace_all to change every occurrence. Read the file first so old_str is "
               + "copied, not guessed. Prefer this to write_file for any change to an existing file.",
           Json.parseOrNull("""
@@ -339,6 +364,16 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
         if (count(text, crlfOld) > 0) {
           oldStr = crlfOld;
           newStr = newStr.replace("\n", "\r\n");
+          count = count(text, oldStr);
+        }
+      }
+      if (count == 0) {
+        // poka-yoke: line numbers copied from read_file are not part of the file
+        String bareOld = withoutLineNumbers(oldStr);
+        String bareNew = bareOld == null ? null : withoutLineNumbers(newStr);
+        if (bareOld != null && !bareOld.isEmpty() && count(text, bareOld) > 0) {
+          oldStr = bareOld;
+          if (bareNew != null) newStr = bareNew;
           count = count(text, oldStr);
         }
       }

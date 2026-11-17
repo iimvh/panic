@@ -230,20 +230,31 @@ class McpPluginTest {
     assertTrue(names().isEmpty());
   }
 
+  private static McpConfig.Server server(String type, String command, String url, String risk) {
+    return new McpConfig.Server(type, command, null, null, null, url, null, risk, null);
+  }
+
   @Test
   void configIsCheckedAndLooksLikeMcpJson() {
-    assertThrows(IllegalArgumentException.class,
-        () -> new McpConfig.Server("http", "x", null, null, null, null, null));
-    assertThrows(IllegalArgumentException.class, () -> new McpConfig.Server(null, " ", null, null, null, null, null));
-    assertThrows(IllegalArgumentException.class,
-        () -> new McpConfig.Server(null, "x", null, null, null, "dangerous", null));
+    assertThrows(IllegalArgumentException.class, () -> server("http", "x", null, null));
+    assertThrows(IllegalArgumentException.class, () -> server(null, " ", null, null));
+    assertThrows(IllegalArgumentException.class, () -> server(null, "x", null, "dangerous"));
+    assertThrows(IllegalArgumentException.class, () -> server("websocket", null, "http://h/mcp", null));
+    assertThrows(IllegalArgumentException.class, () -> server("stdio", "x", "http://h/mcp", null));
+    assertThrows(IllegalArgumentException.class, () -> server("sse", null, "ftp://h/mcp", null));
+    assertThrows(IllegalArgumentException.class, () -> server("http", null, null, null));
     assertThrows(IllegalArgumentException.class,
         () -> new McpConfig(Map.of("bad name", new McpConfig.Server("x", null)), null, 0, 0));
     McpConfig.Server s = new McpConfig.Server("stdio", "npx", List.of("-y", "chrome-devtools-mcp@latest"), null, null,
-        null, null);
+        null, null, null, null);
     assertEquals("network", s.risk());
     assertTrue(s.enabled());
+    assertTrue(s.local());
     assertEquals(List.of("npx", "-y", "chrome-devtools-mcp@latest"), s.commandLine());
+    McpConfig.Server remote = server(null, null, "https://mcp.example.com/mcp", null);
+    assertEquals("http", remote.type(), "a url without a type is Streamable HTTP");
+    assertFalse(remote.local());
+    assertEquals("sse", server("SSE", null, "http://localhost:1/sse", null).type());
     assertEquals("mcp__chrome-devtools__take_screenshot", McpPlugin.toolName("chrome-devtools", "take_screenshot"));
     assertEquals(64, McpPlugin.toolName("s", "x".repeat(100)).length());
   }

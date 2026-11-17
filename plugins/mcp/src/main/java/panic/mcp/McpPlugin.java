@@ -6,17 +6,17 @@ import context.ConfigPlugin;
 import context.Context;
 import context.PluginHandle;
 import core.Disposable;
+import core.CancelledException;
 import core.Signal;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,18 +36,20 @@ import panic.tools.Tools;
 import panic.util.Json;
 
 /**
- * Gives the agent the tools of Model Context Protocol servers (stdio transport), the way Claude Code extends its
- * tools: each tool of server {@code s} becomes a {@link Tool} named {@code mcp__s__<tool>} with the server's
- * {@code inputSchema}, and the {@link McpConfig.Server#risk} of its server, so the permission policy asks for it
- * like for any other tool. Command {@code mcp} lists the servers and restarts one.
+ * Gives the agent the tools of Model Context Protocol servers, the way Claude Code extends its tools: each tool of
+ * server {@code s} becomes a {@link Tool} named {@code mcp__s__<tool>} with the server's {@code inputSchema}, and
+ * the {@link McpConfig.Server#risk} of its server, so the permission policy asks for it like for any other tool.
+ * Servers are local processes (stdio) or remote (Streamable HTTP, or the older HTTP+SSE), see {@link Transport}.
+ * Command {@code mcp} lists the servers and restarts one.
  *
- * Lifecycle: each enabled server is a sub-plugin of this one with two tasks, one reading the server's stdout and
- * one running the session ({@code initialize}, {@code notifications/initialized}, {@code tools/list}, again on
- * {@code notifications/tools/list_changed}). Its tools exist while the server runs: they are removed when it
- * exits, and a call waiting on it then fails. Disposing the plugin (a config change, the app stopping) stops every
- * server as the MCP spec says for stdio (close its input, then SIGTERM, then SIGKILL, children included). A
- * cancelled tool call sends {@code notifications/cancelled}; a call that passes {@link McpConfig#timeoutSeconds}
- * is cancelled the same way. Requires nothing.
+ * Lifecycle: each enabled server is a sub-plugin of this one whose task {@code session} connects
+ * ({@code initialize}, {@code notifications/initialized}, {@code tools/list}, again on
+ * {@code notifications/tools/list_changed}); the transport may add a reading task of its own. A local server that
+ * exits takes its tools with it, and a call waiting on it fails. A remote one that drops is connected again with
+ * backoff, keeping its tools meanwhile (a call says it is reconnecting). Disposing the plugin (a config change, the
+ * app stopping) closes every connection: a local server is stopped as the MCP spec says for stdio, a remote session
+ * is ended with a DELETE. A cancelled tool call sends {@code notifications/cancelled}; a call that passes
+ * {@link McpConfig#timeoutSeconds} is cancelled the same way. Requires nothing.
  */
 public final class McpPlugin implements ConfigPlugin<McpConfig> {
 
@@ -142,7 +144,7 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
     private final State state;
     private final Consumer<String> warn;
     private final BlockingQueue<Event> events = new LinkedBlockingQueue<>();
-    private final List<Disposable> registered = new ArrayList<>();
+    private final Map<String, Registered> registered = new LinkedHashMap<>();
     private volatile McpClient client;
 
     Session(Context ctx, McpConfig cfg, String name, McpConfig.Server server, State state, Consumer<String> warn) {
@@ -161,14 +163,71 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
       });
     }
 
+    /** How many connections in a row may fail before a remote server is given up (Claude Code tries 5 times). */
+    static final int MAX_RECONNECTS = 5;
+
+    private Transport transport() {
+      return switch (server.type()) {
+        case "http" -> new HttpTransport(server);
+        case "sse" -> new SseTransport(server);
+        default -> new StdioTransport(server);
+      };
+    }
+
+    /**
+     * Connects and serves until the connection ends, then, for a remote server, connects again: at once after a
+     * connection that worked, then after 1, 2, 4, 8 s; {@link #MAX_RECONNECTS} failures in a row give it up. A
+     * local server that exits stays down (as in Claude Code) until {@code mcp restart}.
+     */
     private void run(Signal signal) {
+      int failures = 0;
+      // the tools stay while a remote server reconnects (a call then says so), and go when the session ends
+      try {
+        while (true) {
+          Transport transport = transport();
+          Outcome outcome = connect(transport, signal);
+          if (signal.isCancelled()) return;
+          if (!transport.reconnects()) {
+            if (outcome.lost() != null) {
+              Event lost = outcome.lost();
+              state.status = lost.status();
+              state.detail = lost.detail();
+              warn.accept("mcp: server " + name + " " + lost.status() + (lost.detail() == null ? "" : ": " + lost.detail()));
+            } else {
+              failed(outcome.why());
+            }
+            return;
+          }
+          failures = outcome.wasReady() ? 0 : failures + 1;
+          if (failures >= MAX_RECONNECTS) {
+            failed(outcome.why() + " (gave up after " + MAX_RECONNECTS + " attempts; mcp restart " + name + ")");
+            return;
+          }
+          state.status = "reconnecting";
+          state.detail = outcome.why();
+          if (outcome.wasReady()) warn.accept("mcp: server " + name + " " + outcome.why() + "; reconnecting");
+          if (failures > 0) TimeUnit.SECONDS.sleep(1L << (failures - 1));
+        }
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt(); // cancelled: the plugin is going away
+      } finally {
+        state.tools = List.of();
+        unregister();
+      }
+    }
+
+    /** How a connection ended: {@code lost} when it was lost, else {@code why} it failed. */
+    private record Outcome(boolean wasReady, Event lost, String why) {
+    }
+
+    /** One connection, from opening it to its end. Throws InterruptedException when the plugin goes away. */
+    private Outcome connect(Transport transport, Signal signal) throws InterruptedException {
       long startup = TimeUnit.SECONDS.toMillis(cfg.startupSeconds());
-      Transport transport = new StdioTransport(server);
       McpClient c = new McpClient(transport, n -> {
         if (n.method().equals("notifications/tools/list_changed")) events.offer(Event.RELIST);
       });
-      client = c;
-      Event lost = null;
+      events.clear();
+      boolean ready = false;
       try {
         transport.open(ctx, new Transport.Listener() {
           @Override
@@ -178,43 +237,71 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
 
           @Override
           public void lost(String status, String detail) {
-            c.close("the server stopped");
+            c.close(detail == null ? "the server stopped" : detail);
             events.offer(new Event("lost", status, detail));
           }
         }, signal, startup);
         JsonNode init = c.request("initialize", initialize(), signal, startup);
         c.notify("notifications/initialized", null);
         JsonNode info = init.path("serverInfo");
-        state.detail = info.isObject()
+        String about = info.isObject()
             ? info.path("name").asText("?") + " " + info.path("version").asText("") + ", protocol "
                 + init.path("protocolVersion").asText("?")
             : null;
+        synchronized (this) {
+          client = c;
+          notifyAll(); // calls waiting for a new session
+        }
         list(signal, startup);
+        state.detail = about;
         state.status = "ready";
+        ready = true;
         while (true) {
           Event event = events.take();
           if (event != Event.RELIST) {
-            lost = event;
-            break;
+            return new Outcome(true, event, event.status() + (event.detail() == null ? "" : ": " + event.detail()));
           }
           list(signal, startup);
         }
       } catch (McpException e) {
         String tail = transport.log();
-        failed(e.getMessage() + (tail.isEmpty() ? "" : " | " + tail));
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt(); // cancelled: the plugin is going away
+        Event lost = events.stream().filter(ev -> ev != Event.RELIST).findFirst().orElse(null);
+        if (lost != null && !transport.reconnects()) return new Outcome(ready, lost, null);
+        return new Outcome(ready, null, e.getMessage() + (tail.isEmpty() ? "" : " | " + tail));
+      } catch (CancelledException e) {
+        throw new InterruptedException("cancelled");
       } finally {
         // the connection first: calls still waiting on it fail, so removing the tools does not wait for them
         c.close("the server stopped");
         transport.close();
-        if (lost != null && !signal.isCancelled()) {
-          state.status = lost.status();
-          state.detail = lost.detail();
-          state.tools = List.of();
-          warn.accept("mcp: server " + name + " " + lost.status() + (lost.detail() == null ? "" : ": " + lost.detail()));
+      }
+    }
+
+    /**
+     * The client of a session newer than {@code old} once it has initialized, or null when none comes within
+     * {@link McpConfig#startupSeconds} or {@code signal} is cancelled.
+     */
+    private McpClient next(McpClient old, Signal signal) {
+      long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(cfg.startupSeconds());
+      Disposable wake = signal.onCancel(() -> {
+        synchronized (this) {
+          notifyAll();
         }
-        unregister();
+      });
+      try {
+        synchronized (this) {
+          while (client == old) {
+            long left = TimeUnit.NANOSECONDS.toMillis(end - System.nanoTime());
+            if (left <= 0 || signal.isCancelled()) return null;
+            wait(left);
+          }
+          return client;
+        }
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return null;
+      } finally {
+        wake.dispose();
       }
     }
 
@@ -243,35 +330,81 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
         page.path("tools").forEach(tools::add);
         cursor = page.path("nextCursor").asText(null);
       } while (cursor != null && !cursor.isEmpty());
-      unregister();
-      Set<String> names = new HashSet<>();
-      List<String> shown = new ArrayList<>();
+      Map<String, Registered> next = new LinkedHashMap<>();
       for (JsonNode t : tools) {
         String original = t.path("name").asText("");
         if (original.isEmpty()) continue;
         String toolName = toolName(name, original);
-        if (!names.add(toolName)) {
+        if (next.containsKey(toolName)) {
           warn.accept("mcp: server " + name + ": tool " + original + " skipped, its name clashes as " + toolName);
           continue;
         }
         JsonNode schema = t.path("inputSchema");
-        String description = t.path("description").asText("");
-        ToolSpec spec = new ToolSpec(toolName, description, schema.isObject() ? schema : null);
-        synchronized (registered) {
-          registered.add(Tools.register(ctx, new McpTool(spec, original, Risk.of(server.risk()), this)));
-        }
-        shown.add(toolName);
+        ToolSpec spec = new ToolSpec(toolName, t.path("description").asText(""), schema.isObject() ? schema : null);
+        next.put(toolName, new Registered(spec, original, null));
       }
-      state.tools = List.copyOf(shown);
+      sync(next);
+      state.tools = List.copyOf(next.keySet());
+    }
+
+    /** A tool registered for the server: what the model sees, the server's name for it, and its registration. */
+    private record Registered(ToolSpec spec, String original, Disposable registration) {
+    }
+
+    /**
+     * Makes the registered tools those of {@code next}. A tool that did not change keeps its registration: removing
+     * one waits for its calls and drops their results, so a list that changes while a call runs (the server says so
+     * before it answers) must not touch the tool being called.
+     */
+    private void sync(Map<String, Registered> next) {
+      List<Disposable> gone = new ArrayList<>();
+      synchronized (registered) {
+        for (var it = registered.entrySet().iterator(); it.hasNext(); ) {
+          var e = it.next();
+          Registered now = next.get(e.getKey());
+          if (now == null || !now.spec().equals(e.getValue().spec()) || !now.original().equals(e.getValue().original())) {
+            gone.add(e.getValue().registration());
+            it.remove();
+          }
+        }
+      }
+      gone.forEach(Disposable::dispose);
+      synchronized (registered) {
+        next.forEach((toolName, r) -> {
+          if (registered.containsKey(toolName)) return;
+          Disposable d = Tools.register(ctx, new McpTool(r.spec(), r.original(), Risk.of(server.risk()), this));
+          registered.put(toolName, new Registered(r.spec(), r.original(), d));
+        });
+      }
     }
 
     private void unregister() {
       List<Disposable> old;
       synchronized (registered) {
-        old = List.copyOf(registered);
+        old = registered.values().stream().map(Registered::registration).toList();
         registered.clear();
       }
       old.forEach(Disposable::dispose);
+    }
+
+    /**
+     * Sends a request on the current session. When the server forgot the session (an HTTP 404), the spec asks for a
+     * new one: the request is sent once more as soon as the session has initialized again.
+     */
+    JsonNode request(String method, JsonNode params, Signal signal, long timeoutMillis) {
+      McpClient c = client;
+      if (c == null) throw new McpException("not connected");
+      if (state.status.equals("reconnecting")) {
+        throw new McpException("reconnecting (" + state.detail + "); try again in a moment");
+      }
+      try {
+        return c.request(method, params, signal, timeoutMillis);
+      } catch (McpException e) {
+        if (e.code() != HttpSupport.SESSION_EXPIRED) throw e;
+        McpClient fresh = next(c, signal);
+        if (fresh == null) throw new McpException("the server ended the session and no new one started in time");
+        return fresh.request(method, params, signal, timeoutMillis);
+      }
     }
 
     /** {@code tools/call}: the result as text for the model; images are saved to files. */
@@ -280,7 +413,7 @@ public final class McpPlugin implements ConfigPlugin<McpConfig> {
       params.set("arguments", args == null || !args.isObject() ? Json.object() : args);
       JsonNode result;
       try {
-        result = client.request("tools/call", params, tc.signal(), TimeUnit.SECONDS.toMillis(cfg.timeoutSeconds()));
+        result = request("tools/call", params, tc.signal(), TimeUnit.SECONDS.toMillis(cfg.timeoutSeconds()));
       } catch (McpException e) {
         return ToolResult.error("MCP server " + name + ": " + e.getMessage());
       }

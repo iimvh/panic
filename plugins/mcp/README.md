@@ -2,7 +2,8 @@
 
 Tools from [Model Context Protocol](https://modelcontextprotocol.io) servers. Claude Code extends its tools the same
 way: a browser server such as `chrome-devtools-mcp` lets the agent open the page it built, take a snapshot or a
-screenshot, and see what a passing `npm run build` cannot show (a style that did not load, text over a heading).
+screenshot, and see what a passing `npm run build` cannot show (a style that did not load, text over a heading). A
+remote server (GitHub, Sentry, documentation search) is reached over HTTP.
 
 ## Plugins
 
@@ -20,14 +21,27 @@ screenshot, and see what a passing `npm run build` cannot show (a style that did
       "args": ["-y", "chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222"],
       "env": {},
       "risk": "network"
+    },
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {"CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}"}
     }
   }
 }
 ```
 
 Each entry of `servers` has the shape of an entry of Claude Code's `.mcp.json` (`mcpServers`), so it can be copied
-across: `type` (only `stdio`, the default), `command`, `args` (no shell), `env` (added to the app's environment;
-`${ENV}` works as everywhere in `panic.json`), `cwd` (default `.`). Panic adds:
+across:
+
+- `type`: `stdio` (a local process), `http` (MCP Streamable HTTP) or `sse` (the older HTTP+SSE transport, which
+  Claude Code still supports and calls deprecated). Left out, it is `http` when there is a `url`, else `stdio`.
+- stdio: `command`, `args` (no shell), `env` (added to the app's environment), `cwd` (default `.`).
+- http and sse: `url` (http or https) and `headers`, sent with every request. `${ENV}` works in them as everywhere
+  in `panic.json`, which is how a token gets there (`"Authorization": "Bearer ${GITHUB_TOKEN}"`). OAuth is not
+  supported: a server that needs it answers 401, and the status says to set `headers`.
+
+Panic adds:
 
 - `risk`: the risk of every tool of the server for the permission policy (`read`, `write`, `exec`, `network`;
   default `network`, which the default policy asks about). Allow single tools with
@@ -35,17 +49,29 @@ across: `type` (only `stdio`, the default), `command`, `args` (no shell), `env` 
 - `enabled`: `false` keeps the entry without starting the server.
 
 `dir` is where images returned by tools are saved, `timeoutSeconds` a tool call's time limit, `startupSeconds` how
-long `initialize` and `tools/list` may take (`npx` may download the server first). A bad entry (unknown `type` or
-`risk`, no `command`, a server name other than letters, digits, `_` and `-`) is a config error.
+long `initialize` and `tools/list` may take (`npx` may download the server first). A bad entry is a config error: an
+unknown `type` or `risk`, no `command` for stdio, no http(s) `url` for http or sse, a `url` with stdio or a
+`command` with http, a server name other than letters, digits, `_` and `-`.
 
 ## How it works
 
-- **Transport:** stdio only. Panic starts the server as a child process and speaks JSON-RPC 2.0, one message per
-  line (`McpClient`, Jackson only). The server's stderr goes to a temporary log, whose end is shown when it fails.
-- **Lifecycle** (MCP spec): `initialize` (protocol `2025-06-18`, no client capabilities), then
-  `notifications/initialized`, then `tools/list` (every page). `notifications/tools/list_changed` lists the tools
-  again. A `ping` from the server is answered; other requests from it (sampling, roots, elicitation) get "method not
-  found", since the client declares none.
+- **Protocol:** JSON-RPC 2.0 with Jackson only (`McpClient`), over a `Transport`. `initialize` (protocol
+  `2025-06-18`, no client capabilities), then `notifications/initialized`, then `tools/list` (every page).
+  `notifications/tools/list_changed` lists the tools again; a tool that did not change keeps its registration, so a
+  call in progress is not disturbed. A `ping` from the server is answered; other requests from it (sampling, roots,
+  elicitation) get "method not found", since the client declares none.
+- **stdio** (`StdioTransport`): Panic starts the server as a child process, one message per line. The server's
+  stderr goes to a temporary log, whose end is shown when it fails.
+- **Streamable HTTP** (`HttpTransport`, spec 2025-06-18): every message is a POST accepting `application/json` and
+  `text/event-stream`. An answer that is an event stream is read as it comes and may carry the server's own requests
+  and notifications before the response. The `Mcp-Session-Id` given with the answer to `initialize` goes with every
+  later request, with `MCP-Protocol-Version`. A GET stream carries what the server sends on its own
+  (`list_changed`); a server without one answers 405, which is fine, and a stream that ends is opened again with
+  `Last-Event-ID`. A 404 in a session means the server forgot it: the session initializes again and the request is
+  sent once more, as the spec asks. Bodies are read by the HTTP client's own threads, so no plugin thread waits on
+  a stream.
+- **HTTP+SSE** (`SseTransport`, spec 2024-11-05): a GET stream whose `endpoint` event names where to POST; every
+  answer comes on the stream. The endpoint must be on the same origin as `url`, since the headers go to it.
 - **Tools:** each tool becomes `mcp__<server>__<tool>` (Claude Code's naming; characters a model API refuses become
   `_`, cut at 64), with the server's description and `inputSchema`. Calls go through the permission policy like any
   other tool.
@@ -55,10 +81,14 @@ long `initialize` and `tools/list` may take (`npx` may download the server first
 - **Cancellation and time limits:** a cancelled call (the turn is stopped) or one that passes `timeoutSeconds` sends
   `notifications/cancelled` to the server. The tool declares `timeoutSeconds + 5` as its own limit, so
   `chat.toolTimeoutSeconds` does not cut it first.
-- **Ownership:** each server is a sub-plugin of `mcp` (`server-<name>`) with two tasks: one reads the server's
-  stdout, one runs the session. When the server exits, its tools go away and calls waiting on it fail. Disposing
-  `mcp` (a config change, the app stopping) stops every server the way the spec says for stdio: close its input,
-  wait, SIGTERM, wait, SIGKILL, then whatever it started.
+- **When a server goes away:** a local server that exits takes its tools with it and stays down until `mcp restart`
+  (as in Claude Code). A remote one that drops is connected again, at once and then after 1, 2, 4 and 8 s; after 5
+  failed attempts in a row it is `failed`. Meanwhile its tools stay, and a call answers that the server is
+  reconnecting (Claude Code also reconnects remote servers with backoff).
+- **Ownership:** each server is a sub-plugin of `mcp` (`server-<name>`) whose task `session` runs the connection;
+  stdio adds a task reading stdout, Streamable HTTP one reading the GET stream. Disposing `mcp` (a config change,
+  the app stopping) closes every connection: a local server is stopped the way the spec says for stdio (close its
+  input, wait, SIGTERM, wait, SIGKILL, then whatever it started), a remote session is ended with a DELETE.
 
 ## Keys used
 
@@ -70,5 +100,5 @@ long `initialize` and `tools/list` may take (`npx` may download the server first
 
 | Command | Does |
 | --- | --- |
-| `mcp [list]` | Each server with its state (`starting`, `ready`, `failed`, `exited (exit N)`, `disabled`), the server's name and protocol or why it stopped, and its tools |
-| `mcp restart <name>` | Stops the server and starts it again (after it crashed, or to pick up a new version) |
+| `mcp [list]` | Each server with its state (`starting`, `ready`, `reconnecting`, `failed`, `exited (exit N)`, `disabled`), the server's name and protocol or why it stopped, and its tools |
+| `mcp restart <name>` | Stops the server and starts it again (after it crashed or gave up, or to pick up a new version) |

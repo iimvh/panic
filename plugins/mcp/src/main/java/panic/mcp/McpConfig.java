@@ -1,7 +1,10 @@
 package panic.mcp;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 import panic.tools.Risk;
@@ -14,7 +17,8 @@ import panic.tools.Risk;
  *   <li>{@code command}, {@code args}: the program to start (no shell); {@code env}: variables added to the
  *       app's environment for it; {@code cwd}: where it runs (relative to the app's working directory; default
  *       {@code .}).</li>
- *   <li>{@code type}: only {@code stdio} (or left out) is supported for now.</li>
+ *   <li>{@code type}: {@code stdio}, {@code http} or {@code sse}; {@code url} and {@code headers} for the last
+ *       two (see {@link Server}).</li>
  *   <li>{@code risk}: the {@link Risk} of every tool of the server, for the permission policy (default
  *       {@code network}: the policy asks the user unless told otherwise).</li>
  *   <li>{@code enabled}: false keeps the entry without starting it (default true).</li>
@@ -50,25 +54,68 @@ public record McpConfig(Map<String, Server> servers, String dir, int timeoutSeco
     if (startupSeconds <= 0) startupSeconds = 60;
   }
 
-  /** One server, as in {@code .mcp.json}, plus Panic's {@code risk} and {@code enabled}. */
+  /**
+   * One server, as in {@code .mcp.json}, plus Panic's {@code risk} and {@code enabled}. {@code type} is
+   * {@code stdio} (a local process: {@code command}, {@code args}, {@code env}, {@code cwd}), {@code http} (MCP
+   * Streamable HTTP at {@code url}) or {@code sse} (the older HTTP+SSE transport at {@code url}); left out, it is
+   * {@code http} when there is a {@code url}, {@code stdio} otherwise. {@code headers} go with every HTTP request
+   * ({@code "Authorization": "Bearer ${TOKEN}"}).
+   */
   public record Server(String type, String command, List<String> args, Map<String, String> env, String cwd,
-      String risk, Boolean enabled) {
+      String url, Map<String, String> headers, String risk, Boolean enabled) {
+
+    private static final List<String> TYPES = List.of("stdio", "http", "sse");
+
     public Server {
-      if (type != null && !type.isBlank() && !type.strip().equals("stdio")) {
-        throw new IllegalArgumentException("type '" + type + "': only stdio servers are supported");
+      boolean hasUrl = url != null && !url.isBlank();
+      type = type == null || type.isBlank() ? (hasUrl ? "http" : "stdio") : type.strip().toLowerCase(Locale.ROOT);
+      if (!TYPES.contains(type)) {
+        throw new IllegalArgumentException("type '" + type + "': one of " + String.join(", ", TYPES));
       }
-      type = "stdio";
-      if (command == null || command.isBlank()) throw new IllegalArgumentException("command is missing");
-      command = command.strip();
+      if (type.equals("stdio")) {
+        if (command == null || command.isBlank()) throw new IllegalArgumentException("command is missing");
+        if (hasUrl) throw new IllegalArgumentException("url is for http and sse servers, not stdio");
+        command = command.strip();
+        url = null;
+      } else {
+        if (!hasUrl) throw new IllegalArgumentException("url is missing (type " + type + ")");
+        if (command != null && !command.isBlank()) {
+          throw new IllegalArgumentException("command is for stdio servers, not " + type);
+        }
+        url = url.strip();
+        URI uri;
+        try {
+          uri = new URI(url);
+        } catch (URISyntaxException e) {
+          throw new IllegalArgumentException("url '" + url + "': " + e.getMessage());
+        }
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+        if (!(scheme.equals("http") || scheme.equals("https")) || uri.getHost() == null) {
+          throw new IllegalArgumentException("url '" + url + "': not an http(s) URL");
+        }
+        command = null;
+      }
       args = args == null ? List.of() : List.copyOf(args);
       env = env == null ? Map.of() : Map.copyOf(env);
+      headers = headers == null ? Map.of() : Map.copyOf(headers);
       cwd = cwd == null || cwd.isBlank() ? "." : cwd.strip();
       risk = Risk.of(risk == null || risk.isBlank() ? "network" : risk).wire();
       if (enabled == null) enabled = true;
     }
 
+    /** A local server: {@code command} with {@code args}. */
     public Server(String command, List<String> args) {
-      this(null, command, args, null, null, null, null);
+      this(null, command, args, null, null, null, null, null, null);
+    }
+
+    /** A remote server of {@code type} ({@code http} or {@code sse}) at {@code url}. */
+    public static Server remote(String type, String url, Map<String, String> headers) {
+      return new Server(type, null, null, null, null, url, headers, null, null);
+    }
+
+    /** Whether the server is a local process (stdio) rather than reached over HTTP. */
+    public boolean local() {
+      return type.equals("stdio");
     }
 
     /** The command line: {@code command} then {@code args}. */

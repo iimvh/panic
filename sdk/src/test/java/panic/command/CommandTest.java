@@ -41,6 +41,8 @@ class CommandTest {
   @Test
   void rejectsBadSpecs() {
     assertThrows(IllegalArgumentException.class, () -> spec("Bad"));
+    assertThrows(IllegalArgumentException.class, () -> spec("_x"));
+    assertEquals("mcp__docs__review-code", spec("mcp__docs__review-code [args...]").name());
     assertThrows(IllegalArgumentException.class, () -> spec("x [a] <b>"));
     assertThrows(IllegalArgumentException.class, () -> spec("x [a...] [b]"));
     assertThrows(IllegalArgumentException.class, () -> spec("x <a> <a>"));

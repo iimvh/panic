@@ -23,7 +23,8 @@ public final class Command {
     }
   }
 
-  private static final Pattern NAME = Pattern.compile("[a-z][a-z0-9-]*");
+  /** Lowercase, digits, {@code -} and {@code _} (MCP prompts are commands named {@code mcp__server__prompt}). */
+  private static final Pattern NAME = Pattern.compile("[a-z][a-z0-9_-]*");
   private static final Pattern PARAM = Pattern.compile("([<\\[])([a-zA-Z][a-zA-Z0-9-]*)(\\.\\.\\.)?([>\\]])");
 
   private final String name;

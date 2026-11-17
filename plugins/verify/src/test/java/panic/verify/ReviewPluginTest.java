@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import context.ConfigHandle;
 import context.Context;
 import context.Root;
 import core.Signal;
@@ -28,11 +29,14 @@ import panic.util.CancelToken;
 import panic.llm.ChatRequest;
 import panic.llm.Completion;
 import panic.llm.Llm;
+import panic.llm.LlmException;
 import panic.llm.Message;
 import panic.llm.Provider;
 import panic.llm.Role;
 import panic.llm.ToolCall;
 import panic.llm.Usage;
+import panic.trace.Span;
+import panic.trace.Trace;
 import panic.tools.PermissionsConfig;
 import panic.tools.PermissionsPlugin;
 import panic.todo.TodoConfig;
@@ -58,6 +62,9 @@ class ReviewPluginTest {
       return this;
     }
 
+    /** The reviewer's model call fails with {@code e} instead of answering. */
+    volatile RuntimeException reviewerFails;
+
     @Override
     public Provider provider() {
       throw new UnsupportedOperationException();
@@ -77,6 +84,7 @@ class ReviewPluginTest {
     public Completion stream(ChatRequest r, Signal s, Consumer<String> onDelta) {
       if (!r.messages().isEmpty() && r.messages().get(0).content().equals(ReviewPlugin.PROMPT)) {
         reviewer.add(r);
+        if (reviewerFails != null) throw reviewerFails;
         String v = verdicts.size() > 1 ? verdicts.poll() : verdicts.peek();
         return new Completion(v, "m", "stop", new Usage(7, 2));
       }
@@ -99,6 +107,7 @@ class ReviewPluginTest {
 
   private final Root root = Context.root("t");
   private final TwoModels llm = new TwoModels();
+  private ConfigHandle<ReviewConfig> review;
 
   @BeforeEach
   void setUp() {
@@ -110,7 +119,7 @@ class ReviewPluginTest {
     root.plugin("permissions", new PermissionsPlugin(),
         new PermissionsConfig(null, Map.of("check", "allow", "todo_write", "allow"), 0));
     root.plugin("todo", new TodoPlugin(w -> { }), new TodoConfig(dir.resolve("todo").toString(), 0));
-    root.plugin("review", new ReviewPlugin(), ReviewConfig.DEFAULT);
+    review = root.plugin("review", new ReviewPlugin(), ReviewConfig.DEFAULT);
     root.plugin("chat", new ChatPlugin(), ChatConfig.DEFAULT);
   }
 
@@ -185,13 +194,59 @@ class ReviewPluginTest {
     assertEquals(2, llm.reviewer.size());
   }
 
+  private final List<Chat.Reviewed> heard = new CopyOnWriteArrayList<>();
+
+  private Chat.Reply askHeard(String text) {
+    return Chat.ask(root, new Chat.Ask("c", text, new CancelToken(), d -> { }, null, heard::add)).orElseThrow();
+  }
+
   @Test
-  void aReviewerThatCannotDecideAcceptsTheAnswer() {
+  void aReviewerThatCannotDecideAcceptsTheAnswerButSaysSo() {
     llm.agent(r -> calls(plan("says hi"))).agent(r -> answer("hi"));
     llm.verdict("I am not sure.");
-    Chat.Reply reply = ask("greet me");
+    Chat.Reply reply = askHeard("greet me");
     assertEquals(Chat.DONE, reply.stop());
     assertNull(reply.review());
     assertEquals(1, llm.reviewer.size());
+    assertEquals(1, heard.size());
+    assertTrue(heard.get(0).error().contains("no verdict") && heard.get(0).error().contains("I am not sure."),
+        heard.get(0).error());
+  }
+
+  @Test
+  void aFailedReviewerCallIsReportedNotSwallowed() {
+    llm.reviewerFails = new LlmException(400, "top_p must be 1 when using greedy sampling");
+    llm.agent(r -> calls(plan("says hi"))).agent(r -> answer("hi"));
+    List<Span> spans = new CopyOnWriteArrayList<>();
+    root.plugin("spans", ctx -> {
+      ctx.on(Trace.SPAN, spans::add);
+      return null;
+    });
+    Chat.Reply reply = askHeard("greet me");
+    assertEquals(Chat.DONE, reply.stop());
+    assertEquals("hi", reply.text());
+    assertTrue(heard.get(0).failed());
+    assertTrue(heard.get(0).error().contains("top_p must be 1"), heard.get(0).error());
+    Span review = spans.stream().filter(s -> s.name().equals("review")).findFirst().orElseThrow();
+    assertEquals(Span.Status.ERROR, review.status());
+    assertTrue(review.error().contains("top_p must be 1"), review.error());
+  }
+
+  @Test
+  void theReviewerSendsOnlyWhatIsConfigured() {
+    llm.agent(r -> calls(plan("says hi"))).agent(r -> answer("hi"));
+    llm.verdict("{\"pass\": true}");
+    ask("greet me");
+    ChatRequest sent = llm.reviewer.get(0);
+    assertNull(sent.temperature(), "no temperature unless configured: the model's default applies");
+    assertNull(sent.model());
+    assertEquals(512, sent.maxTokens());
+    assertTrue(sent.tools().isEmpty());
+
+    review.update(new ReviewConfig(null, 100, 0, 0.3));
+    llm.reviewer.clear();
+    ask("greet me again");
+    assertEquals(0.3, llm.reviewer.get(0).temperature());
+    assertEquals(100, llm.reviewer.get(0).maxTokens());
   }
 }

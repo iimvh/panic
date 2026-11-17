@@ -8,7 +8,7 @@ acceptance criteria of `plugins/todo`, they keep the agent from calling work don
 | Name | Config (`panic.json` section) | Requires | Provides / registers |
 | --- | --- | --- | --- |
 | `checks` | `ChecksConfig { dir = ".", checks = {}, maxOutput = 8000 }`, each check `{ command: [...], timeoutSeconds = 600 }` | none | tool `check` (exec), when at least one check is configured; command `checks` |
-| `review` | `ReviewConfig { prompt = (built in), maxTokens = 512, maxTranscript = 12000 }` | `Llm.KEY` | answers hook `Chat.REVIEW` |
+| `review` | `ReviewConfig { prompt = (built in), maxTokens = 512, maxTranscript = 12000, temperature = null }` | `Llm.KEY` | answers hook `Chat.REVIEW` |
 
 ## `check`: external ground truth
 
@@ -48,9 +48,13 @@ characters, the newest `maxTranscript` characters kept) and the final answer. It
 `{"pass": bool, "reason": "..."}` and takes the first JSON object in the reply.
 
 A rejection goes back to the model (see `chat.maxReviews` in `plugins/chat`); the turn stops as `rejected` when
-the retries are used up. A reply that is not a verdict, or a failed model call, gives no verdict: a broken
-reviewer never blocks an answer. The review uses the same LLM as the chat (temperature 0); its tokens count in
-the turn's usage.
+the retries are used up. A failed model call, or a reply that is not a verdict, throws (`ReviewException`):
+`chat` lets the answer stand, but ends the `review` span as ERROR with the message and reports the failure to the
+asker (the web UI shows "Review failed: ..."), so a broken check is visible instead of passing silently.
+
+The review uses the same LLM as the chat; its tokens count in the turn's usage. It sends only `maxTokens` and,
+when set, `temperature`: null (the default) lets the model use its own default, because some models reject
+`temperature: 0` (for example "top_p must be 1 when using greedy sampling").
 
 ## Keys used
 

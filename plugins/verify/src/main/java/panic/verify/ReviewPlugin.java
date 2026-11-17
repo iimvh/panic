@@ -25,9 +25,10 @@ import panic.todo.Todo;
  * the criteria, what the agent did (tool calls and results) and the answer, under its own prompt, so it does not
  * share the agent's view of its own work.
  *
- * No criteria means no verdict (the answer stands and nothing is spent). A reply that is not a verdict, or a
- * failed model call, is no verdict either: the reviewer never blocks an answer by breaking. Requires
- * {@link Llm#KEY}; a cancelled ask cancels the call.
+ * No criteria means no verdict (the answer stands and nothing is spent). A failed model call, or a reply that is
+ * not a verdict, throws {@link ReviewException}: chat lets the answer stand but records the failure (an ERROR
+ * {@code review} span, a {@link Chat.Reviewed} with the error), so a broken check shows instead of passing
+ * silently. Requires {@link Llm#KEY}; a cancelled ask cancels the call.
  */
 public final class ReviewPlugin implements ConfigPlugin<ReviewConfig> {
 
@@ -55,15 +56,34 @@ public final class ReviewPlugin implements ConfigPlugin<ReviewConfig> {
     List<String> criteria = criteria(ctx, review.conversationId());
     if (criteria.isEmpty()) return null;
     ChatRequest request = new ChatRequest(List.of(Message.system(cfg.prompt()),
-        Message.user(brief(review, criteria, cfg.maxTranscript()))), null, 0.0, cfg.maxTokens());
+        Message.user(brief(review, criteria, cfg.maxTranscript()))), null, cfg.temperature(), cfg.maxTokens());
     Completion c;
     try {
       c = llm.complete(request, review.signal());
     } catch (LlmException e) {
       review.signal().throwIfCancelled();
-      return null;
+      throw new ReviewException("the reviewer's model call failed: " + e.getMessage(), e);
     }
-    return verdict(c.text(), c);
+    Chat.Verdict verdict = verdict(c.text(), c);
+    if (verdict == null) {
+      String text = c.text() == null ? "" : c.text().strip();
+      throw new ReviewException("the reviewer gave no verdict: "
+          + (text.isEmpty() ? "(empty reply)" : text.length() <= 200 ? text : text.substring(0, 200) + " …"));
+    }
+    return verdict;
+  }
+
+  /** The reviewer could not judge: its model call failed or its reply holds no verdict. */
+  public static final class ReviewException extends RuntimeException {
+    private static final long serialVersionUID = 1L;
+
+    ReviewException(String message) {
+      super(message);
+    }
+
+    ReviewException(String message, Throwable cause) {
+      super(message, cause);
+    }
   }
 
   private static List<String> criteria(Context ctx, String conversationId) {

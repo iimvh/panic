@@ -161,4 +161,90 @@ class FilesPluginTest {
     assertRefused(call("write_file", "{\"path\":\"big.txt\",\"content\":\"12345\"}"), "the most write_file takes is 4");
     assertTrue(Files.notExists(workspace.resolve("big.txt")));
   }
+
+  private ToolResult edit(String path, String oldStr, String newStr, Boolean all) {
+    var args = panic.util.Json.object().put("path", path).put("old_str", oldStr).put("new_str", newStr);
+    if (all != null) args.put("replace_all", all);
+    return call("edit_file", args.toString());
+  }
+
+  @Test
+  void editReplacesAStringThatOccursOnce() throws IOException {
+    assertEquals(ToolResult.ok("edited a.txt: replaced 1 occurrence (first at line 2)"), edit("a.txt", "two\n", "2\n", null));
+    assertEquals("one\n2\nthree\n", Files.readString(workspace.resolve("a.txt")));
+    edit("a.txt", "one\n", "", null);
+    assertEquals("2\nthree\n", Files.readString(workspace.resolve("a.txt")), "an empty new_str deletes");
+  }
+
+  @Test
+  void editRefusesWhatItCannotPlaceExactly() throws IOException {
+    assertRefused(edit("a.txt", "four", "4", null), "old_str not found in a.txt");
+    assertRefused(edit("a.txt", "  two", "2", null), "read_file the part again");
+    Files.writeString(workspace.resolve("dup.txt"), "x = 1\nx = 1\nx = 1\n");
+    assertRefused(edit("dup.txt", "x = 1", "x = 2", null), "occurs 3 times");
+    assertEquals("x = 1\nx = 1\nx = 1\n", Files.readString(workspace.resolve("dup.txt")), "nothing changed");
+    assertRefused(edit("a.txt", "", "x", null), "old_str is empty");
+    assertRefused(edit("a.txt", "two", "two", null), "nothing to change");
+    assertRefused(edit("missing.txt", "a", "b", null), "not found: missing.txt");
+    assertTrue(Files.notExists(workspace.resolve("missing.txt")));
+    assertRefused(edit("sub", "a", "b", null), "is a directory");
+    assertRefused(call("edit_file", "{\"path\":\"a.txt\",\"old_str\":\"two\"}"), "new_str");
+  }
+
+  @Test
+  void editReplacesEveryOccurrenceWhenAsked() throws IOException {
+    Files.writeString(workspace.resolve("dup.txt"), "x = 1\ny = 1\nx = 1\n");
+    assertEquals(ToolResult.ok("edited dup.txt: replaced 2 occurrences (first at line 1)"), edit("dup.txt", "x = 1", "x = 2", true));
+    assertEquals("x = 2\ny = 1\nx = 2\n", Files.readString(workspace.resolve("dup.txt")));
+  }
+
+  @Test
+  void editKeepsWindowsLineEndings() throws IOException {
+    Files.writeString(workspace.resolve("crlf.txt"), "a\r\nb\r\nc\r\n");
+    assertTrue(!edit("crlf.txt", "a\nb\n", "a\nB\n", null).isError());
+    assertEquals("a\r\nB\r\nc\r\n", Files.readString(workspace.resolve("crlf.txt")));
+  }
+
+  @Test
+  void editStaysInsideTheWorkspaceAndNeverWritesThroughALink() throws IOException {
+    assertRefused(edit("../secret.txt", "outside", "x", null), "outside the workspace");
+    Files.createSymbolicLink(workspace.resolve("up"), dir);
+    assertRefused(edit("up/secret.txt", "outside", "x", null), "outside the workspace");
+    Files.createSymbolicLink(workspace.resolve("inner.txt"), workspace.resolve("a.txt"));
+    assertRefused(edit("inner.txt", "two", "2", null), "symbolic link");
+    assertEquals("outside\n", Files.readString(dir.resolve("secret.txt")));
+    assertEquals("one\ntwo\nthree\n", Files.readString(workspace.resolve("a.txt")));
+  }
+
+  @Test
+  void editIsLimitedLikeWrites() throws IOException {
+    files.update(new FilesConfig(workspace.toString(), 0, 0, 16));
+    assertRefused(edit("a.txt", "two", "a much longer line", null), "the most the file tools write is 16");
+    assertEquals("one\ntwo\nthree\n", Files.readString(workspace.resolve("a.txt")));
+  }
+
+  @Test
+  void editIsAskedLikeAnyWrite() throws IOException {
+    root.dispose();
+    Root asking = Context.root("asking");
+    try {
+      asking.plugin("files", new FilesPlugin(), new FilesConfig(workspace.toString(), 0, 0, 0));
+      java.util.List<Tools.Approval> asked = new java.util.concurrent.CopyOnWriteArrayList<>();
+      asking.plugin("user", ctx -> {
+        ctx.hook(Tools.APPROVE, a -> {
+          asked.add(a);
+          return Tools.Decision.DENY;
+        });
+        return null;
+      });
+      ToolResult r = Tools.call(asking, new ToolCall("id", "edit_file",
+          "{\"path\":\"a.txt\",\"old_str\":\"two\",\"new_str\":\"2\"}"), new ToolContext("c", new CancelToken()));
+      assertTrue(r.isError(), r.content());
+      assertEquals(1, asked.size());
+      assertEquals(Risk.WRITE, asked.get(0).risk());
+      assertEquals("one\ntwo\nthree\n", Files.readString(workspace.resolve("a.txt")));
+    } finally {
+      asking.dispose();
+    }
+  }
 }

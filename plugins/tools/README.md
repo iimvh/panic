@@ -9,7 +9,7 @@ tool calls. The loop that asks the model and feeds results back belongs to the a
 | --- | --- | --- | --- |
 | `tools` | none | none | commands `tools`, `tool` |
 | `permissions` | `PermissionsConfig { risks = {read: allow, write: ask, exec: ask, network: ask}, tools = {}, askTimeoutSeconds = 120, bypassPermissions = false }` | none | hooks `Tools.POLICY`, `Tools.BYPASS`; command `bypass` |
-| `files` | `FilesConfig { root = ".", maxBytes = 65536, maxEntries = 200, maxWriteBytes = 1048576 }` | none | tools `read_file`, `list_dir` (read), `write_file` (write) |
+| `files` | `FilesConfig { root = ".", maxBytes = 65536, maxEntries = 200, maxWriteBytes = 1048576 }` | none | tools `read_file`, `list_dir` (read), `write_file`, `edit_file` (write) |
 | `clock` | none | none | tool `time` |
 | `shell` | `ShellConfig { dir = ".", timeoutSeconds = 120, maxTimeoutSeconds = 600, maxOutput = 8000, maxBackground = 4, deny = (defaults) }` | none | tools `exec` (exec), `exec_output` (read), `exec_stop` (exec); answers `Tools.GATE` for `exec`; command `jobs` |
 
@@ -23,7 +23,22 @@ from. Files with a NUL byte in their first 8 KiB are treated as binary and refus
 `write_file {path, content, append?}` creates or replaces a file, or appends to it, and creates missing
 directories. The deepest existing directory on the way must be inside the root once symlinks are followed. The
 target itself must not be a symlink (even one pointing inside) or a directory, and it is opened with
-`NOFOLLOW_LINKS`. Content over `maxWriteBytes` bytes is refused.
+`NOFOLLOW_LINKS`. Content over `maxWriteBytes` bytes is refused. Its description sends the model to `edit_file`
+for changes to an existing file.
+
+`edit_file {path, old_str, new_str, replace_all?}` changes part of an existing file, like the `str_replace` command
+of Anthropic's text editor tool and Claude Code's Edit tool: a one-line change costs the model that line, not a
+rewrite of the file (and a long `write_file` is where broken JSON arguments come from).
+
+- `old_str` must match the file exactly and occur exactly once. Not found: an error that tells the model to read
+  the part again and copy it. Found N times: an error with N, telling it to add context or set `replace_all`.
+- `replace_all: true` replaces every occurrence. An empty `new_str` deletes. An empty `old_str`, or one equal to
+  `new_str`, is refused.
+- A file with `\r\n` line endings is matched when the model writes `\n`, and keeps its `\r\n`.
+- The same guards as `write_file`: the file must exist inside the root (it is never created), must not be a
+  symlink or a directory or binary, and the edited file may not exceed `maxWriteBytes`. It is written in place
+  with `NOFOLLOW_LINKS`.
+- The result is short: `edited <path>: replaced N occurrence(s) (first at line L)`.
 
 ## Shell commands (`shell`)
 

@@ -23,8 +23,10 @@ import panic.util.Json;
 import panic.llm.ToolSpec;
 
 /**
- * File tools confined to a workspace root: {@code read_file} and {@code list_dir} (risk read) and
- * {@code write_file} (risk write, so the permission policy asks the user by default). A path is resolved
+ * File tools confined to a workspace root: {@code read_file} and {@code list_dir} (risk read), {@code write_file}
+ * and {@code edit_file} (risk write, so the permission policy asks the user by default). {@code edit_file} replaces
+ * an exact string, like the {@code str_replace} command of Anthropic's text editor tool and Claude Code's Edit tool,
+ * so a small change does not cost the model a rewrite of the whole file. A path is resolved
  * against the root and must stay inside it once normalized and once symlinks are followed, so {@code ../},
  * absolute paths and links pointing out are refused. A write never follows a link at the target itself. The
  * root is resolved on every call, so it may be created after the plugin starts.
@@ -41,6 +43,7 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
     Tools.register(ctx, new ReadFile(ctx, root, cfg));
     Tools.register(ctx, new ListDir(ctx, root, cfg));
     Tools.register(ctx, new WriteFile(ctx, root, cfg));
+    Tools.register(ctx, new EditFile(ctx, root, cfg));
     return null;
   }
 
@@ -245,7 +248,8 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
     @Override
     public ToolSpec spec() {
       return new ToolSpec("write_file",
-          "Write a text file of the workspace, creating it (and its directories) or replacing its content.",
+          "Write a text file of the workspace, creating it (and its directories) or replacing all its content. "
+          + "Use it for new files or a full rewrite; to change part of an existing file, use edit_file.",
           Json.parseOrNull("""
               {"type":"object","properties":{
                 "path":{"type":"string","description":"path relative to the workspace root"},
@@ -276,6 +280,104 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
         return ToolResult.error("cannot write " + path + ": " + e.getMessage());
       }
       return ToolResult.ok((append ? "appended " : "wrote ") + bytes.length + " bytes to " + path);
+    }
+  }
+
+  private record EditFile(Context host, Path root, FilesConfig cfg) implements Tool {
+
+    @Override
+    public Risk risk() {
+      return Risk.WRITE;
+    }
+
+    @Override
+    public ToolSpec spec() {
+      return new ToolSpec("edit_file",
+          "Change part of an existing text file: replace old_str, which must match the file exactly (whitespace and "
+              + "indentation included) and occur exactly once, with new_str. Include enough surrounding lines to make "
+              + "old_str unique, or set replace_all to change every occurrence. Read the file first so old_str is "
+              + "copied, not guessed. Prefer this to write_file for any change to an existing file.",
+          Json.parseOrNull("""
+              {"type":"object","properties":{
+                "path":{"type":"string","description":"path relative to the workspace root"},
+                "old_str":{"type":"string","description":"the exact text to replace"},
+                "new_str":{"type":"string","description":"the text to put in its place (may be empty to delete)"},
+                "replace_all":{"type":"boolean","description":"replace every occurrence (default false)"}},
+               "required":["path","old_str","new_str"],"additionalProperties":false}"""));
+    }
+
+    @Override
+    public ToolResult call(JsonNode args, ToolContext ctx) {
+      return guarded(() -> edit(args, ctx));
+    }
+
+    private ToolResult edit(JsonNode args, ToolContext ctx) {
+      String path = args.path("path").asText();
+      String oldStr = args.path("old_str").asText();
+      String newStr = args.path("new_str").asText();
+      boolean all = args.path("replace_all").asBoolean(false);
+      if (oldStr.isEmpty()) return ToolResult.error("old_str is empty; to create a file use write_file");
+      if (oldStr.equals(newStr)) return ToolResult.error("old_str and new_str are the same; nothing to change");
+      Path workspace = Workspace.root(host, ctx.origin(), root);
+      Path existing = resolve(workspace, path); // must exist, inside the root
+      if (Files.isDirectory(existing)) return ToolResult.error(path + " is a directory");
+      Path file = resolveForWrite(workspace, path); // and not be a link
+      String text;
+      try {
+        byte[] bytes = Files.readAllBytes(file);
+        for (byte b : bytes) {
+          if (b == 0) return ToolResult.error(path + " is a binary file");
+        }
+        text = new String(bytes, StandardCharsets.UTF_8);
+      } catch (IOException e) {
+        return ToolResult.error("cannot read " + path + ": " + e.getMessage());
+      }
+      int count = count(text, oldStr);
+      if (count == 0 && text.contains("\r\n") && !oldStr.contains("\r\n")) {
+        // the model writes \n; the file uses \r\n
+        String crlfOld = oldStr.replace("\n", "\r\n");
+        if (count(text, crlfOld) > 0) {
+          oldStr = crlfOld;
+          newStr = newStr.replace("\n", "\r\n");
+          count = count(text, oldStr);
+        }
+      }
+      if (count == 0) {
+        return ToolResult.error("old_str not found in " + path + ". It must match the file exactly, whitespace and "
+            + "indentation included: read_file the part again and copy it.");
+      }
+      if (count > 1 && !all) {
+        return ToolResult.error("old_str occurs " + count + " times in " + path + "; add surrounding lines to make it "
+            + "unique, or set replace_all: true to change all of them.");
+      }
+      int line = 1 + (int) text.substring(0, text.indexOf(oldStr)).chars().filter(c -> c == '\n').count();
+      String edited = all ? text.replace(oldStr, newStr) : replaceOnce(text, oldStr, newStr);
+      byte[] out = edited.getBytes(StandardCharsets.UTF_8);
+      if (out.length > cfg.maxWriteBytes()) {
+        return ToolResult.error("the edited file would be " + out.length + " bytes; the most the file tools write is "
+            + cfg.maxWriteBytes());
+      }
+      ctx.signal().throwIfCancelled();
+      try {
+        Files.write(file, out, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING,
+            LinkOption.NOFOLLOW_LINKS);
+      } catch (IOException e) {
+        return ToolResult.error("cannot write " + path + ": " + e.getMessage());
+      }
+      int replaced = all ? count : 1;
+      return ToolResult.ok("edited " + path + ": replaced " + replaced + (replaced == 1 ? " occurrence" : " occurrences")
+          + " (first at line " + line + ")");
+    }
+
+    private static int count(String text, String part) {
+      int n = 0;
+      for (int i = text.indexOf(part); i >= 0; i = text.indexOf(part, i + part.length())) n++;
+      return n;
+    }
+
+    private static String replaceOnce(String text, String oldStr, String newStr) {
+      int at = text.indexOf(oldStr);
+      return text.substring(0, at) + newStr + text.substring(at + oldStr.length());
     }
   }
 }

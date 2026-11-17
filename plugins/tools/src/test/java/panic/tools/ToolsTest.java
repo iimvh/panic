@@ -128,6 +128,49 @@ class ToolsTest {
   }
 
   @Test
+  void aGateKeepsToolsOutOfAConversationWhileItRuns() {
+    offer("echoer", echo(""));
+    ConfigHandle<Boolean> gate = root.plugin("gate", (ctx, on) -> {
+      if (on) ctx.hook(Tools.GATE, g -> "c".equals(g.conversationId()) ? new Tools.Refusal("plan mode") : null);
+      return null;
+    }, true);
+    assertTrue(Tools.specs(root, "c").isEmpty());
+    assertEquals(List.of("echo"), Tools.specs(root, "other").stream().map(ToolSpec::name).toList());
+    assertEquals(List.of("echo"), Tools.specs(root).stream().map(ToolSpec::name).toList());
+    assertEquals(ToolResult.error("echo: refused: plan mode"), call("echo", "{\"text\":\"hi\"}"));
+    // a sub-agent's call is gated by the conversation the user talks to
+    ToolContext sub = new ToolContext("c~x-1", new CancelToken(), null, "c", "x", null, null, p -> { });
+    assertTrue(Tools.call(root, new ToolCall("id", "echo", "{\"text\":\"hi\"}"), sub).isError());
+
+    gate.update(false);
+    assertEquals(ToolResult.ok("c:hi"), call("echo", "{\"text\":\"hi\"}"));
+  }
+
+  @Test
+  void aGateMayKeepTheToolOfferedAndRefuseItsCalls() {
+    offer("echoer", echo(""));
+    root.plugin("gate", ctx -> {
+      ctx.hook(Tools.GATE, g -> new Tools.Refusal("plan first", false));
+      return null;
+    });
+    assertEquals(List.of("echo"), Tools.specs(root, "c").stream().map(ToolSpec::name).toList(), "still offered");
+    assertEquals(ToolResult.error("echo: refused: plan first"), call("echo", "{\"text\":\"hi\"}"));
+  }
+
+  @Test
+  void aBrokenGateKeepsTheToolOut() {
+    offer("echoer", echo(""));
+    root.plugin("gate", (ctx, on) -> {
+      ctx.hook(Tools.GATE, g -> {
+        throw new IllegalStateException("broken");
+      });
+      return null;
+    }, true);
+    assertTrue(Tools.specs(root, "c").isEmpty());
+    assertTrue(call("echo", "{\"text\":\"hi\"}").content().startsWith("echo: refused: tool gate failed"));
+  }
+
+  @Test
   void firstToolOfANameWins() {
     offer("one", echo("first"));
     offer("two", echo("second"));

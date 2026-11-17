@@ -11,6 +11,7 @@ tool calls. The loop that asks the model and feeds results back belongs to the a
 | `permissions` | `PermissionsConfig { risks = {read: allow, write: ask, exec: ask, network: ask}, tools = {}, askTimeoutSeconds = 120, bypassPermissions = false }` | none | hooks `Tools.POLICY`, `Tools.BYPASS`; command `bypass` |
 | `files` | `FilesConfig { root = ".", maxBytes = 65536, maxEntries = 200, maxWriteBytes = 1048576 }` | none | tools `read_file`, `list_dir` (read), `write_file` (write) |
 | `clock` | none | none | tool `time` |
+| `shell` | `ShellConfig { dir = ".", timeoutSeconds = 120, maxTimeoutSeconds = 600, maxOutput = 8000, maxBackground = 4, deny = (defaults) }` | none | tools `exec` (exec), `exec_output` (read), `exec_stop` (exec); answers `Tools.GATE` for `exec`; command `jobs` |
 
 `files` sees only one root: the folder of the conversation's project (key `Workspace.ROOT`, answered by plugin
 `workspace`, asked with the conversation the user talks to, so a sub-agent works where its parent does), or
@@ -23,6 +24,47 @@ from. Files with a NUL byte in their first 8 KiB are treated as binary and refus
 directories. The deepest existing directory on the way must be inside the root once symlinks are followed. The
 target itself must not be a symlink (even one pointing inside) or a directory, and it is opened with
 `NOFOLLOW_LINKS`. Content over `maxWriteBytes` bytes is refused.
+
+## Shell commands (`shell`)
+
+The agent runs shell commands in the folder of the conversation's project (`Workspace.ROOT`), or in `dir` when it
+has none:
+
+- **`exec {command, cwd?, timeoutSeconds?, background?}`** runs `command` through `sh -c` (`cmd /c` on Windows).
+  - It runs with no input, and stdout and stderr go together to a temporary log.
+  - `cwd` is a folder inside the project. One that leads out, even through a link, is refused.
+  - The result is `exit N (1.2s)` and the last `maxOutput` characters of the output.
+  - A non-zero exit, or `timeoutSeconds` passing (default `timeoutSeconds`, at most `maxTimeoutSeconds`), is an
+    error result, so the agent reads the failure and goes on. On a timeout the process and everything it started
+    are killed, and so they are when the call is cancelled.
+  - The tool asks for `maxTimeoutSeconds + 10` as its own limit, so `chat.toolTimeoutSeconds` does not cut it.
+- **`background: true`** starts a job for a command that does not end by itself, such as a dev server or a
+  watcher.
+  - `exec` watches it for 5 seconds and returns `started job <id> (pid N)` with its first output (a server's
+    address). A job that ended in that time is reported with its exit status.
+  - At most `maxBackground` jobs run at once per conversation.
+  - Each job is a task of the plugin, so a config change or the app stopping kills them all.
+- **`exec_output {id}`** (read) gives a job's state (`running`, or `exit N`) and the end of its output.
+- **`exec_stop {id}`** (exec) kills it and everything it started. Both see only the jobs of the conversation that
+  asks.
+- **Approval.** `exec` and `exec_stop` have risk `exec`: the default policy asks the user for every command (the
+  REPL shows `$ command`, the web UI the command line). Bypass mode or `permissions.tools.exec: "allow"` lets them
+  run unasked, and plan mode refuses them until a plan is approved.
+- **Deny rules.** A command that matches a `deny` pattern (a regex, case-insensitive, found anywhere in the command
+  line) is refused by a `Tools.GATE` before anyone is asked, even in bypass mode. The default list
+  (`ShellConfig.DEFAULT_DENY`) covers `sudo`/`su`/`doas`, `rm` of `/`, `~` or system folders, `mkfs`, `dd` to a
+  device, `shutdown`/`reboot`, fork bombs and `curl`/`wget` piped into a shell. A `deny` list in the config
+  replaces it, and a pattern that does not compile is a config error.
+- **These are guardrails, not a sandbox.** A command runs with the app's user and environment, so keep approvals on
+  where a mistake would hurt.
+- **Sub-agents** may use it too, approved in the user's conversation.
+
+`jobs` lists every job (`id  state  age  command  (in dir, chat id)`), and `jobs stop <id>` stops one. Jobs are not
+stopped when their conversation is deleted: stop them with `jobs stop` (this module cannot hear about conversations,
+which live in `plugins/chat`).
+
+`Processes` (public) holds what tools that run processes share: `shell(command)`, `kill(process)` (with its
+descendants), `nullDevice()` and `tail(log, max)`. `check` of `plugins/verify` uses it too.
 
 ## Public keys: workspaces
 
@@ -38,8 +80,14 @@ the plugin that answers (`workspace`, `folder-picker` in `plugins/workspace`); w
 ## Permissions
 
 Every tool declares a `Risk`: `read`, `write`, `exec` or `network`. Each call passes a gate inside the
-registered `tool.run` hook, after its arguments are checked and before the tool runs, so no caller can skip it:
+registered `tool.run` hook, before the tool runs, so no caller can skip it:
 
+0. The `Tools.GATE` hook (collected) may keep the tool out of the conversation the user talks to (`origin`), for
+   example while it is in plan mode (`plugins/planner`). Any `Refusal` returns `<tool>: refused: <reason>`, before
+   the arguments are checked or anyone is asked; bypass mode does not lift it. A gate that throws refuses too.
+   `Tools.specs(ctx, conversationId)` leaves out the tools refused with `hide` (and those of a gate that throws).
+   A refusal without `hide` keeps the tool offered, so the model learns the reason when it calls it instead of
+   guessing why it has no way to act.
 1. The `Tools.POLICY` hook gives the rule for the call: the tool's own entry in `permissions.tools`, otherwise
    the entry for its risk in `permissions.risks`. When `permissions` is not running (disabled, or restarting
    on a config change), `Verdict.fallback` applies: `read` is allowed, everything else is asked.
@@ -71,6 +119,7 @@ to its section restarts only it and applies from the next call.
 | `Tools.LIST` | hook `Listing → Info(ToolSpec, Risk, timeoutSeconds)` | Every tool available right now (`collect`). Use `Tools.specs(ctx)` (what the model sees), `Tools.infos(ctx)` (with risks and time limits) or `Tools.info(ctx, name)`. They sort and drop duplicate names (first wins) |
 | `Tools.RUN` | hook `Invocation(ToolCall, ToolContext) → ToolResult` | Runs a call through the permission gate. Use `Tools.call(ctx, call, toolCtx)` |
 | `Tools.POLICY` | hook `Check(ToolCall, Risk, conversationId) → Verdict(Permission, askTimeoutSeconds)` | The rule for a call (`conversationId` is the conversation the user talks to, null when none). Answered by `permissions`, which applies bypass mode. `Tools.verdict(ctx, call, risk[, conversationId])` applies the fallback |
+| `Tools.GATE` | hook `Gate(conversationId, name, Risk, arguments?) → Refusal(reason, hide)`, collected; `arguments` is the call's raw JSON when a call is checked, null in a listing | Refuses a tool's calls in a conversation (a mode like plan mode); `hide` (the default of `Refusal(reason)`) also leaves it out of `Tools.specs(ctx, conversationId)`. `Tools.refusal(ctx, conversationId, info)` gives the first reason |
 | `Tools.BYPASS` | hook `BypassQuery(conversationId) → Bypass(on, byDefault)` | Whether a conversation bypasses approvals. Answered by `permissions`; front-ends show it |
 | `Tools.APPROVE` | hook `Approval(conversationId, ToolCall, Risk, Signal, agent?) → Decision` | Asks the user. `conversationId` is the call's `origin`, the conversation the user talks to, also for a sub-agent's call (`agent` names it). Front-ends answer only for their own conversations and return null otherwise. A blocking answer must honour `signal` |
 

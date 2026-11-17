@@ -181,6 +181,19 @@ class PermissionsPluginTest {
   }
 
   @Test
+  void aGateWinsOverBypassAndNobodyIsAsked() {
+    approver(a -> Tools.Decision.ALLOW);
+    policy(new PermissionsConfig(null, null, 0, true));
+    root.plugin("gate", ctx -> {
+      ctx.hook(Tools.GATE, g -> g.risk() == Risk.READ ? null : new Tools.Refusal("read only"));
+      return null;
+    });
+    assertEquals(ToolResult.error("change: refused: read only"), call("change"));
+    assertEquals(ToolResult.ok("look ran"), call("look"));
+    assertTrue(asked.isEmpty());
+  }
+
+  @Test
   void aDenyRuleStillWinsInBypassMode() {
     policy(new PermissionsConfig(Map.of("network", "deny"), Map.of("run", "deny"), 0, true));
     root.plugin("net", ctx -> {

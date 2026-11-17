@@ -111,6 +111,40 @@ public final class Tools {
   public record Bypass(boolean on, boolean byDefault) {
   }
 
+  /**
+   * May the tool {@code name} (of {@code risk}) be offered to and run in {@code conversationId} (the conversation
+   * the user talks to, {@link ToolContext#origin})? A mode such as plan mode answers with a {@link Refusal}.
+   * {@code arguments} is the call's raw JSON when a call is checked (a rule on what a command does), null when the
+   * tools are listed.
+   */
+  public record Gate(String conversationId, String name, Risk risk, String arguments) {
+    public Gate {
+      Objects.requireNonNull(name, "name");
+      Objects.requireNonNull(risk, "risk");
+    }
+
+    /** A listing: no call, so no {@code arguments}. */
+    public Gate(String conversationId, String name, Risk risk) {
+      this(conversationId, name, risk, null);
+    }
+  }
+
+  /**
+   * Why a {@link Gate} keeps a tool out: shown to the model in the error result of a call. {@code hide}: the tool
+   * is also left out of what the model is offered. A mode that wants the model to learn why (plan mode) keeps it
+   * visible, so a call gets the reason instead of the model guessing why it cannot act.
+   */
+  public record Refusal(String reason, boolean hide) {
+    public Refusal {
+      Objects.requireNonNull(reason, "reason");
+    }
+
+    /** A refusal that also hides the tool. */
+    public Refusal(String reason) {
+      this(reason, true);
+    }
+  }
+
   /** The user's answer to an {@link Approval}. */
   public enum Decision { ALLOW, DENY }
 
@@ -124,6 +158,12 @@ public final class Tools {
   /** Whether a conversation bypasses approvals; answered by {@code permissions}, so front-ends can show it. */
   public static final HookKey<BypassQuery, Bypass> BYPASS = HookKey.of("tool.bypass", BypassQuery.class,
       Bypass.class);
+  /**
+   * Collected for every call and listing of a conversation: any {@link Refusal} refuses a call, before the policy
+   * is asked (bypass mode does not lift it), and one with {@code hide} leaves the tool out of the listing too.
+   * Answer null to let the tool through.
+   */
+  public static final HookKey<Gate, Refusal> GATE = HookKey.of("tool.gate", Gate.class, Refusal.class);
   /**
    * Answered by front-ends, only for the conversations they are talking to (return null for others). No
    * answer means {@link Decision#DENY}.
@@ -165,6 +205,43 @@ public final class Tools {
     return infos(ctx).stream().map(Info::spec).toList();
   }
 
+  /**
+   * What the model of {@code conversationId} (the conversation the user talks to) may be offered right now: the
+   * tools no {@link #GATE} hides there (a tool refused without {@code hide} is offered, and its calls refused).
+   */
+  public static List<ToolSpec> specs(Context ctx, String conversationId) {
+    return infos(ctx).stream().filter(i -> !hidden(ctx, conversationId, i)).map(Info::spec).toList();
+  }
+
+  /** Whether a {@link #GATE} hides {@code info} from {@code conversationId}; a gate that throws hides it. */
+  private static boolean hidden(Context ctx, String conversationId, Info info) {
+    try {
+      return ctx.collect(GATE, new Gate(conversationId, info.spec().name(), info.risk())).stream()
+          .anyMatch(Refusal::hide);
+    } catch (RuntimeException e) {
+      return true;
+    }
+  }
+
+  /**
+   * The first reason a {@link #GATE} gives to keep {@code info} out of {@code conversationId}, if any. A gate that
+   * throws keeps the tool out too: a mode that cannot answer must not open the way to every tool.
+   */
+  public static Optional<String> refusal(Context ctx, String conversationId, Info info) {
+    return refusal(ctx, conversationId, info, null);
+  }
+
+  /** As {@link #refusal(Context, String, Info)}, for a call with {@code arguments} (raw JSON). */
+  public static Optional<String> refusal(Context ctx, String conversationId, Info info, String arguments) {
+    List<Refusal> refusals;
+    try {
+      refusals = ctx.collect(GATE, new Gate(conversationId, info.spec().name(), info.risk(), arguments));
+    } catch (RuntimeException e) {
+      return Optional.of("tool gate failed: " + e.getMessage());
+    }
+    return refusals.stream().map(Refusal::reason).findFirst();
+  }
+
   public static Optional<ToolSpec> find(Context ctx, String name) {
     return info(ctx, name).map(Info::spec);
   }
@@ -193,6 +270,8 @@ public final class Tools {
 
   private static ToolResult run(Context owner, Tool tool, Info info, Invocation inv) {
     String name = info.spec().name();
+    Optional<String> refused = refusal(owner, inv.context().origin(), info, inv.call().arguments());
+    if (refused.isPresent()) return ToolResult.error(name + ": refused: " + refused.get());
     JsonNode args = Json.parseOrNull(inv.call().arguments());
     if (args == null) return ToolResult.error(name + ": arguments are not valid JSON: " + inv.call().arguments());
     List<String> problems = Schema.validate(info.spec().parameters(), args);

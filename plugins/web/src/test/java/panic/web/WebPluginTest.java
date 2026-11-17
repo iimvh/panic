@@ -63,6 +63,10 @@ import panic.trace.Trace;
 
 class WebPluginTest {
 
+  /** Where plan files go: these conversations have no project. */
+  @org.junit.jupiter.api.io.TempDir
+  java.nio.file.Path plans;
+
   /**
    * Streams "Hel" "lo <model>"; with {@code block}, waits after the first delta until cancelled or until
    * {@code released}.
@@ -71,6 +75,8 @@ class WebPluginTest {
     volatile CountDownLatch block;
     /** When set, a question is first answered with a call to the {@code echo} tool. */
     volatile boolean useTool;
+    /** With {@link #useTool}: the call made instead of {@code echo {text: ping}}. */
+    volatile ToolCall call;
     /** With {@link #useTool}: the call also comes in two pieces before the completion. */
     volatile boolean streamCalls;
     final CountDownLatch cancelled = new CountDownLatch(1);
@@ -114,8 +120,9 @@ class WebPluginTest {
     @Override
     public Completion stream(ChatRequest r, Signal s, Consumer<String> onDelta) {
       if (useTool && r.messages().get(r.messages().size() - 1).role() == Role.USER) {
+        ToolCall c = call;
         return new Completion("", r.model(), "tool_calls", new Usage(1, 1),
-            List.of(new ToolCall("t1", "echo", "{\"text\":\"ping\"}")));
+            List.of(c != null ? c : new ToolCall("t1", "echo", "{\"text\":\"ping\"}")));
       }
       onDelta.accept("Hel");
       CountDownLatch b = block;
@@ -359,6 +366,14 @@ class WebPluginTest {
 
   /** Asks in session t and answers the approval question with {@code allow}; returns every event. */
   private List<Event> chatAndApprove(boolean allow) throws Exception {
+    return chatAndAnswer("approve", "/api/approve", "\"allow\":" + allow);
+  }
+
+  /**
+   * Asks in session t and answers the first SSE {@code event} by posting {@code {session, id, <answer>}} to
+   * {@code endpoint} (after checking another session may not); returns every event.
+   */
+  private List<Event> chatAndAnswer(String event, String endpoint, String answer) throws Exception {
     HttpRequest req = HttpRequest.newBuilder(URI.create(base + "/api/chat"))
         .POST(HttpRequest.BodyPublishers.ofString("{\"session\":\"t\",\"text\":\"hi\"}"))
         .header("Content-Type", "application/json").build();
@@ -370,12 +385,12 @@ class WebPluginTest {
       while (lines.hasNext()) {
         String line = lines.next();
         all.append(line).append('\n');
-        if (!answered && line.startsWith("data: ") && all.toString().endsWith("event: approve\n" + line + "\n")) {
+        if (!answered && line.startsWith("data: ") && all.toString().endsWith("event: " + event + "\n" + line + "\n")) {
           JsonNode q = Json.parseOrNull(line.substring(6));
-          assertEquals(404, send("POST", "/api/approve", "{\"session\":\"other\",\"id\":\"" + q.path("id").asText()
-              + "\",\"allow\":true}").statusCode(), "only the session that asked may answer");
-          assertEquals(200, send("POST", "/api/approve", "{\"session\":\"t\",\"id\":\"" + q.path("id").asText()
-              + "\",\"allow\":" + allow + "}").statusCode());
+          assertEquals(404, send("POST", endpoint, "{\"session\":\"other\",\"id\":\"" + q.path("id").asText()
+              + "\"," + answer + "}").statusCode(), "only the session that asked may answer");
+          assertEquals(200, send("POST", endpoint, "{\"session\":\"t\",\"id\":\"" + q.path("id").asText()
+              + "\"," + answer + "}").statusCode());
           answered = true;
         }
       }
@@ -654,6 +669,101 @@ class WebPluginTest {
     assertFalse(Json.parseOrNull(get("/api/permissions?session=other").body()).path("bypass").asBoolean());
     assertEquals(400, get("/api/permissions?session=..").statusCode());
     assertEquals(405, send("PUT", "/api/permissions", "{}").statusCode());
+  }
+
+  @Test
+  void planModeComesFromThePlannerHookAnd503WithoutAnswer() throws Exception {
+    assertEquals(503, get("/api/mode?session=s").statusCode());
+    root.plugin("planner", new panic.planner.PlannerPlugin(), new panic.planner.PlannerConfig(false, null, 0, null, plans.toString()));
+    JsonNode off = Json.parseOrNull(get("/api/mode?session=s").body());
+    assertFalse(off.path("plan").asBoolean());
+    assertFalse(off.path("default").asBoolean());
+    send("POST", "/api/command", "{\"session\":\"s\",\"line\":\"plan on\"}");
+    assertTrue(Json.parseOrNull(get("/api/mode?session=s").body()).path("plan").asBoolean());
+    assertFalse(Json.parseOrNull(get("/api/mode?session=other").body()).path("plan").asBoolean());
+    assertEquals(400, get("/api/mode?session=..").statusCode());
+    assertEquals(405, send("PUT", "/api/mode", "{}").statusCode());
+  }
+
+  /** Session t in plan mode, with a model that first proposes a plan. */
+  private void planning() throws Exception {
+    root.plugin("planner", new panic.planner.PlannerPlugin(), new panic.planner.PlannerConfig(false, null, 0, null, plans.toString()));
+    send("POST", "/api/command", "{\"session\":\"t\",\"line\":\"plan on\"}");
+    fake.useTool = true;
+    fake.call = new ToolCall("p1", panic.planner.Planner.EXIT_TOOL,
+        "{\"plan\":\"# Plan\\nfix it\",\"items\":[\"look\",\"fix\"],\"criteria\":[\"fixed\"]}");
+  }
+
+  @Test
+  void theBrowserApprovesAPlan() throws Exception {
+    planning();
+    List<Event> ev = chatAndAnswer("plan", "/api/plan", "\"approve\":true");
+    assertEquals(List.of("tool", "plan", "tool", "delta", "delta", "done"), ev.stream().map(Event::name).toList());
+    JsonNode q = ev.get(1).data();
+    assertEquals("# Plan\nfix it", q.path("plan").asText());
+    assertEquals("[\"look\",\"fix\"]", q.path("items").toString());
+    assertEquals("[\"fixed\"]", q.path("criteria").toString());
+    assertEquals("ok", ev.get(2).data().path("status").asText());
+    assertFalse(Json.parseOrNull(get("/api/mode?session=t").body()).path("plan").asBoolean(), "plan mode ended");
+  }
+
+  @Test
+  void theBrowserSendsAPlanBackWithFeedback() throws Exception {
+    planning();
+    List<Event> ev = chatAndAnswer("plan", "/api/plan", "\"approve\":false,\"feedback\":\"smaller\"");
+    assertEquals("error", ev.get(2).data().path("status").asText());
+    assertTrue(ev.get(2).data().path("content").asText().contains("did not approve the plan: smaller"));
+    assertTrue(Json.parseOrNull(get("/api/mode?session=t").body()).path("plan").asBoolean(), "still planning");
+    assertEquals(404, send("POST", "/api/plan", "{\"session\":\"t\",\"id\":\"nope\",\"approve\":true}").statusCode());
+    assertEquals(405, get("/api/plan").statusCode());
+  }
+
+  /** A model that first asks the user which cache to use. */
+  private void questioning() {
+    root.plugin("ask-user", new panic.interact.AskUserPlugin(), panic.interact.AskUserConfig.DEFAULT);
+    fake.useTool = true;
+    fake.call = new ToolCall("q1", panic.interact.AskUser.TOOL, "{\"questions\":[{\"question\":\"Which cache?\","
+        + "\"header\":\"Cache\",\"options\":[{\"label\":\"Redis\",\"description\":\"shared\"},{\"label\":\"Memory\"}]}]}");
+  }
+
+  @Test
+  void theBrowserAnswersTheAgentsQuestions() throws Exception {
+    questioning();
+    List<Event> ev = chatAndAnswer("question", "/api/answer", "\"answers\":[{\"selected\":[\"Redis\"],\"other\":\"v7\"}]");
+    assertEquals(List.of("tool", "question", "tool", "delta", "delta", "done"), ev.stream().map(Event::name).toList());
+    JsonNode q = ev.get(1).data().path("questions").get(0);
+    assertEquals("Which cache?", q.path("question").asText());
+    assertEquals("Cache", q.path("header").asText());
+    assertFalse(q.path("multiSelect").asBoolean());
+    assertEquals("shared", q.path("options").get(0).path("description").asText());
+    assertEquals("ok", ev.get(2).data().path("status").asText());
+    assertEquals("The user answered:\n\"Which cache?\" → Redis (other: v7)", ev.get(2).data().path("content").asText());
+  }
+
+  @Test
+  void badAnswersAreRefusedAndTheQuestionStaysOpen() throws Exception {
+    questioning();
+    List<Integer> codes = new java.util.concurrent.CopyOnWriteArrayList<>();
+    HttpRequest req = HttpRequest.newBuilder(URI.create(base + "/api/chat"))
+        .POST(HttpRequest.BodyPublishers.ofString("{\"session\":\"t\",\"text\":\"hi\"}")).build();
+    HttpResponse<InputStream> r = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
+    try (BufferedReader in = new BufferedReader(new InputStreamReader(r.body(), StandardCharsets.UTF_8))) {
+      String id = null;
+      for (String line; (line = in.readLine()) != null; ) {
+        if (id == null && line.startsWith("data: ") && line.contains("\"questions\"")) {
+          id = Json.parseOrNull(line.substring(6)).path("id").asText();
+          String head = "{\"session\":\"t\",\"id\":\"" + id + "\",";
+          codes.add(send("POST", "/api/answer", head + "\"answers\":[]}").statusCode());
+          codes.add(send("POST", "/api/answer", head + "\"answers\":[{\"selected\":[\"Nope\"]}]}").statusCode());
+          codes.add(send("POST", "/api/answer", head + "\"answers\":[{\"selected\":[\"Redis\",\"Memory\"]}]}").statusCode());
+          codes.add(send("POST", "/api/answer", head + "\"answers\":[{\"selected\":[]}]}").statusCode()); // skip
+        }
+        if (line.startsWith("data: ") && line.contains("did not answer (skipped)")) codes.add(0);
+      }
+    }
+    assertEquals(List.of(400, 400, 400, 200, 0), codes);
+    assertEquals(404, send("POST", "/api/answer", "{\"session\":\"t\",\"id\":\"nope\",\"answers\":[]}").statusCode());
+    assertEquals(405, get("/api/answer").statusCode());
   }
 
   @Test

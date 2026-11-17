@@ -39,6 +39,8 @@ import panic.llm.ModelInfo;
 import panic.llm.Providers;
 import panic.llm.ToolCall;
 import panic.llm.ToolCallDelta;
+import panic.interact.AskUser;
+import panic.planner.Planner;
 import panic.tools.Tools;
 import panic.tools.Workspace;
 import panic.trace.Span;
@@ -46,7 +48,7 @@ import panic.trace.Trace;
 
 /**
  * The HTTP API. Like the CLI it owns no feature: everything goes through hooks (chat.ask, llm.config,
- * llm.current, llm.providers, tool.approve, trace.get, trace.list) and commands, so it reflects exactly what is
+ * llm.current, llm.providers, tool.approve, planner.approve, planner.mode, ask_user.ask, trace.get, trace.list) and commands, so it reflects exactly what is
  * running.
  */
 final class Api {
@@ -64,9 +66,14 @@ final class Api {
   /** The open command stream of each session: where approval questions of commands go. */
   private final Map<String, SseResponse> streams = new ConcurrentHashMap<>();
   /** Approval questions waiting for {@code POST /api/approve}, by id. */
-  private final Map<String, Pending> pending = new ConcurrentHashMap<>();
+  private final Map<String, Pending<Tools.Decision>> pending = new ConcurrentHashMap<>();
+  /** Proposed plans waiting for {@code POST /api/plan}, by id. */
+  private final Map<String, Pending<Planner.Answer>> plans = new ConcurrentHashMap<>();
+  /** The agent's questions waiting for {@code POST /api/answer}, by id, with the request to check answers against. */
+  private final Map<String, Pending<AskUser.Answers>> questions = new ConcurrentHashMap<>();
+  private final Map<String, AskUser.Request> asked = new ConcurrentHashMap<>();
 
-  private record Pending(String session, CompletableFuture<Tools.Decision> answer) {
+  private record Pending<T>(String session, CompletableFuture<T> answer) {
   }
 
   Api(Context ctx, Duration heartbeat, Duration detach) {
@@ -87,6 +94,7 @@ final class Api {
         else only(ex, method, "GET", () -> conversations(ex));
       }
       case "/api/permissions" -> only(ex, method, "GET", () -> permissions(ex));
+      case "/api/mode" -> only(ex, method, "GET", () -> mode(ex));
       case "/api/workspaces" -> only(ex, method, "GET", () -> workspaces(ex));
       case "/api/trace" -> only(ex, method, "GET", () -> trace(ex));
       case "/api/chat" -> only(ex, method, "POST", () -> chat(ex, signal));
@@ -94,6 +102,8 @@ final class Api {
       case "/api/stop" -> only(ex, method, "POST", () -> stop(ex));
       case "/api/command" -> only(ex, method, "POST", () -> command(ex, signal));
       case "/api/approve" -> only(ex, method, "POST", () -> approval(ex));
+      case "/api/plan" -> only(ex, method, "POST", () -> planAnswer(ex));
+      case "/api/answer" -> only(ex, method, "POST", () -> questionAnswer(ex));
       case "/api/settings" -> only(ex, method, "PUT", () -> settings(ex));
       default -> {
         if (!path.startsWith("/api/")) return false;
@@ -196,6 +206,21 @@ final class Api {
       return;
     }
     Http.json(ex, 200, Json.object().put("bypass", bypass.get().on()).put("default", bypass.get().byDefault()));
+  }
+
+  /**
+   * Whether the session is in plan mode (read-only research, then a plan to approve): {@code {plan, default}},
+   * {@code default} being what the config says for every chat. {@code 503} when nobody answers (no {@code planner}
+   * plugin). Switching goes through {@code POST /api/command} ({@code plan on|off}).
+   */
+  private void mode(HttpExchange ex) throws IOException {
+    String session = session(Http.query(ex).get("session"));
+    Optional<Planner.Mode> mode = Hooks.bail(ctx, Planner.MODE, new Planner.ModeQuery(session));
+    if (mode.isEmpty()) {
+      Http.error(ex, 503, "plan mode is not available");
+      return;
+    }
+    Http.json(ex, 200, Json.object().put("plan", mode.get().on()).put("default", mode.get().byDefault()));
   }
 
   /**
@@ -510,19 +535,30 @@ final class Api {
    * leaves denies. A cancelled call is thrown. Other sessions get no answer (null).
    */
   Tools.Decision approve(Tools.Approval a) {
-    Run run = runs.get(a.conversationId());
-    SseResponse sse = run == null ? streams.get(a.conversationId()) : null;
-    if (run == null && sse == null) return null;
+    if (!runs.containsKey(a.conversationId()) && !streams.containsKey(a.conversationId())) return null;
     String id = UUID.randomUUID().toString();
-    CompletableFuture<Tools.Decision> answer = new CompletableFuture<>();
-    pending.put(id, new Pending(a.conversationId(), answer));
-    Disposable cancelled = a.signal().onCancel(() -> answer.cancel(false));
-    Disposable left = sse == null ? () -> { } : sse.gone().onCancel(() -> answer.complete(Tools.Decision.DENY));
+    ObjectNode question = Json.object().put("id", id).put("callId", a.call().id()).put("name", a.call().name())
+        .put("arguments", a.call().arguments()).put("risk", a.risk().wire());
+    if (a.agent() != null) question.put("agent", a.agent());
+    return ask(a.conversationId(), a.signal(), id, pending, "approve", question, Tools.Decision.DENY);
+  }
+
+  /**
+   * Asks the browser of {@code session} (its answer in flight, else its command stream) with SSE {@code event} and
+   * waits for its answer to {@code id}, kept in {@code waiting} meanwhile. A browser that leaves a command stream,
+   * or no browser at all, answers {@code gone}; a cancelled {@code signal} is thrown.
+   */
+  private <T> T ask(String session, Signal signal, String id, Map<String, Pending<T>> waiting, String event,
+      ObjectNode question, T gone) {
+    Run run = runs.get(session);
+    SseResponse sse = run == null ? streams.get(session) : null;
+    if (run == null && sse == null) return gone; // ended since it was checked
+    CompletableFuture<T> answer = new CompletableFuture<>();
+    waiting.put(id, new Pending<>(session, answer));
+    Disposable cancelled = signal.onCancel(() -> answer.cancel(false));
+    Disposable left = sse == null ? () -> { } : sse.gone().onCancel(() -> answer.complete(gone));
     try {
-      ObjectNode question = Json.object().put("id", id).put("callId", a.call().id()).put("name", a.call().name())
-          .put("arguments", a.call().arguments()).put("risk", a.risk().wire());
-      if (a.agent() != null) question.put("agent", a.agent());
-      if (run != null) run.publish("approve", question); else sse.send("approve", question);
+      if (run != null) run.publish(event, question); else sse.send(event, question);
       return answer.get();
     } catch (CancellationException e) {
       throw new CancelledException("approval cancelled");
@@ -530,18 +566,110 @@ final class Api {
       Thread.currentThread().interrupt();
       throw new CancelledException("approval interrupted");
     } catch (ExecutionException e) {
-      return Tools.Decision.DENY;
+      return gone;
     } finally {
-      pending.remove(id);
+      waiting.remove(id);
       left.dispose();
       cancelled.dispose();
     }
   }
 
+  /**
+   * Answers {@link Planner#APPROVE} like {@link #approve}: sends SSE {@code plan {id, plan, items, criteria}} and
+   * waits for {@code POST /api/plan}. Logged with an answer's events, so a page that reloads shows it again; a
+   * browser that leaves a command stream answers nothing. Other sessions get no answer (null).
+   */
+  Planner.Answer plan(Planner.Proposal p) {
+    if (!runs.containsKey(p.conversationId()) && !streams.containsKey(p.conversationId())) return null;
+    ObjectNode question = Json.object().put("id", p.id()).put("plan", p.plan());
+    ArrayNode items = question.putArray("items");
+    p.items().forEach(items::add);
+    ArrayNode criteria = question.putArray("criteria");
+    p.criteria().forEach(criteria::add);
+    return ask(p.conversationId(), p.signal(), p.id(), plans, "plan", question, null); // a browser gone: no answer
+  }
+
+  /** {@code {session, id, approve, feedback?}}: the user's answer to a proposed plan. */
+  private void planAnswer(HttpExchange ex) throws IOException {
+    JsonNode body = Http.body(ex);
+    String session = session(body.path("session").asText(null));
+    Pending<Planner.Answer> p = plans.get(body.path("id").asText(""));
+    if (p == null || !p.session().equals(session)) {
+      Http.error(ex, 404, "no such plan (answered, expired or cancelled)");
+      return;
+    }
+    String feedback = body.path("feedback").asText("");
+    if (feedback.length() > MAX_TEXT) throw new Http.BadRequest("feedback too long");
+    p.answer().complete(body.path("approve").asBoolean(false) ? Planner.Answer.APPROVED
+        : Planner.Answer.rejected(feedback));
+    Http.json(ex, 200, Json.object().put("ok", true));
+  }
+
+  /**
+   * Answers {@link AskUser#ASK} like {@link #approve}: sends SSE {@code question {id, questions: [{question, header,
+   * multiSelect, options: [{label, description}]}]}} and waits for {@code POST /api/answer}. Replayed on resume; a
+   * browser that leaves a command stream answers nothing. Other sessions get no answer (null).
+   */
+  AskUser.Answers question(AskUser.Request r) {
+    if (!runs.containsKey(r.conversationId()) && !streams.containsKey(r.conversationId())) return null;
+    ObjectNode out = Json.object().put("id", r.id());
+    ArrayNode qs = out.putArray("questions");
+    for (AskUser.Question q : r.questions()) {
+      ObjectNode n = qs.addObject().put("question", q.question()).put("header", q.header())
+          .put("multiSelect", q.multiSelect());
+      ArrayNode opts = n.putArray("options");
+      for (AskUser.Option o : q.options()) opts.addObject().put("label", o.label()).put("description", o.description());
+    }
+    asked.put(r.id(), r);
+    try {
+      return ask(r.conversationId(), r.signal(), r.id(), questions, "question", out, null);
+    } finally {
+      asked.remove(r.id());
+    }
+  }
+
+  /**
+   * {@code {session, id, answers: [{selected: [label], other?}]}}: one answer per question, in order. Labels must
+   * be the question's options, and a single-select question takes at most one; all empty skips.
+   */
+  private void questionAnswer(HttpExchange ex) throws IOException {
+    JsonNode body = Http.body(ex);
+    String session = session(body.path("session").asText(null));
+    String id = body.path("id").asText("");
+    Pending<AskUser.Answers> p = questions.get(id);
+    AskUser.Request r = asked.get(id);
+    if (p == null || r == null || !p.session().equals(session)) {
+      Http.error(ex, 404, "no such question (answered, expired or cancelled)");
+      return;
+    }
+    JsonNode answers = body.path("answers");
+    if (!answers.isArray() || answers.size() != r.questions().size()) {
+      throw new Http.BadRequest("answers: one per question (" + r.questions().size() + ")");
+    }
+    List<AskUser.Answer> out = new java.util.ArrayList<>();
+    for (int i = 0; i < answers.size(); i++) {
+      AskUser.Question q = r.questions().get(i);
+      List<String> selected = new java.util.ArrayList<>();
+      for (JsonNode l : answers.get(i).path("selected")) {
+        String label = l.asText();
+        if (q.options().stream().noneMatch(o -> o.label().equals(label))) {
+          throw new Http.BadRequest("answers[" + i + "]: unknown option '" + label + "'");
+        }
+        if (!selected.contains(label)) selected.add(label);
+      }
+      if (!q.multiSelect() && selected.size() > 1) throw new Http.BadRequest("answers[" + i + "]: pick one option");
+      String other = answers.get(i).path("other").asText("");
+      if (other.length() > MAX_TEXT) throw new Http.BadRequest("answers[" + i + "]: text too long");
+      out.add(new AskUser.Answer(selected, other));
+    }
+    p.answer().complete(new AskUser.Answers(out));
+    Http.json(ex, 200, Json.object().put("ok", true));
+  }
+
   private void approval(HttpExchange ex) throws IOException {
     JsonNode body = Http.body(ex);
     String session = session(body.path("session").asText(null));
-    Pending p = pending.get(body.path("id").asText(""));
+    Pending<Tools.Decision> p = pending.get(body.path("id").asText(""));
     if (p == null || !p.session().equals(session)) {
       Http.error(ex, 404, "no such approval (answered, expired or cancelled)");
       return;

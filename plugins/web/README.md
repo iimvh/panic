@@ -7,7 +7,7 @@ The web front-end: an HTTP + SSE API and the SvelteKit UI from `ui/` (built by G
 
 | Name | Config | Requires | Provides / registers |
 | --- | --- | --- | --- |
-| `web` | `WebConfig { enabled, host, port, detachSeconds }` (default off, `127.0.0.1:8080`, 120) | none | an HTTP server while enabled; hook `Tools.APPROVE` |
+| `web` | `WebConfig { enabled, host, port, detachSeconds }` (default off, `127.0.0.1:8080`, 120) | none | an HTTP server while enabled; hooks `Tools.APPROVE`, `Planner.APPROVE`, `AskUser.ASK` |
 
 Every request runs as a task of the plugin (`ctx.spawn`). Disposing it (config change or shutdown)
 cancels the answers in flight, waits for them, then stops the server. An SSE heartbeat notices a browser
@@ -22,6 +22,7 @@ that left: a command is cancelled, an answer goes on without it (see [Resuming](
 | `GET /api/history?session=` | hook `Conversations.HISTORY`: `user {content}`, `assistant {content, toolCalls[]}`, `tool {toolCallId, status: ok/error, content}` (content cut like `tool` events), `review {reason}` for a rejection sent back to the model (`Chat.REVIEW_FEEDBACK_PREFIX`; errors are told by `Chat.TOOL_ERROR_PREFIX`). Turns already compacted into the summary are left out. A sub-agent's steps are not in it: its `agent` call and result (the sub-agent's answer) are, and the trace of the turn holds the sub-agent's work. With a tracer (hook `Trace.LIST`), `user` entries whose turn was traced add `traceId` (see [Traces](#traces)) |
 | `GET /api/conversations` | hook `Conversations.LIST`: `[{id, title, updatedAt}]`, newest first. Only conversations whose id is a valid session id; sub-agents' conversations are not listed |
 | `GET /api/permissions?session=` | hook `Tools.BYPASS`: `{bypass, default}`, whether the session runs in bypass mode (tool calls that would ask the user just run) and what the config says for every chat. `503` when nobody answers (no `permissions` plugin). Switching goes through `POST /api/command` (`bypass on \| off`) |
+| `GET /api/mode?session=` | hook `Planner.MODE`: `{plan, default}`, whether the session is in plan mode (read-only research, then a plan to approve) and what the config says for every chat. `503` when nobody answers (no `planner` plugin). Switching goes through `POST /api/command` (`plan on \| off`) |
 | `GET /api/workspaces` | hook `Workspace.LIST`: `{projects: [{path, name, conversations: [id]}], hidden: [id]}`; `hidden` are the chats of removed projects, which the page does not list. `503` when nobody answers (no `workspace` plugin). Projects are changed through `POST /api/command` (`workspace add \| use \| remove \| pick ...`) |
 | `DELETE /api/conversations?session=` | hook `Conversations.REMOVE`: the conversation, its sub-agents' conversations, and (through `Conversations.DELETED`) its plan and traces. `409` while an answer runs in it, `404` when there is nothing to delete |
 | `POST /api/chat {session, text}` → SSE `start`, `delta`, `tool_delta`, `tool`, `review`, `done`, ... | `Chat.ask`, events in the order they happen (`tool_delta`: `{index, id?, name?, arguments}` from `onToolDelta`, a piece of a call the model is still writing; `tool`: `{id, name, arguments, status: running/ok/error, content?, parent?, agent?}` from `onStep`, with `parent` (the id of the call that runs it) and `agent` for a sub-agent's call; `agent_delta`: `{parent, agent, text}` from `onAgentDelta`, a sub-agent's text; `review`: `{attempt, pass, reason}` from `onReview`; `done` adds `stop`, `toolCalls`, `traceId` and `review` when the answer was reviewed) |
@@ -30,6 +31,8 @@ that left: a command is cancelled, an answer goes on without it (see [Resuming](
 | `POST /api/stop {session}` | cancels the session's answer (`404` when none runs) |
 | `POST /api/command {session, line}` → SSE | `Commands.run` |
 | `POST /api/approve {session, id, allow}` | answers an SSE `approve` (`404` when it is unknown, already answered or expired) |
+| `POST /api/plan {session, id, approve, feedback?}` | answers an SSE `plan`: approve it, or send it back with `feedback` (`404` when it is unknown, already answered or expired) |
+| `POST /api/answer {session, id, answers: [{selected: [label], other?}]}` | answers an SSE `question`, one answer per question in order (`400` for a wrong count, an unknown label, or several picks on a single-select question; all empty skips; `404` when it is unknown, already answered or expired) |
 | `PUT /api/settings {provider?, model?}` | the `provider` / `model` commands |
 
 ### Resuming
@@ -63,6 +66,17 @@ for a command a browser that leaves denies the call. A cancelled call or an `ask
 the wait.
 Sessions without an open stream are not answered (another front-end may answer them, otherwise the call is
 denied).
+
+It answers `Planner.APPROVE` (plan mode, `plugins/planner`) the same way: `plan {id, plan, items, criteria}` on the
+stream, then `POST /api/plan` with `approve` and an optional `feedback`. The UI shows the plan (markdown, steps,
+criteria) with Approve and "Keep planning" until the `exit_plan_mode` call's finished `tool` event arrives. "Keep
+planning" sends the plan back only with feedback. It is replayed on resume like `approve`. A browser that leaves a
+command stream answers nothing.
+
+It also answers `AskUser.ASK` (the agent's questions, `plugins/interact`): `question {id, questions: [{question, header,
+multiSelect, options: [{label, description}]}]}` on the stream, then `POST /api/answer`. The UI shows a card with
+the options (radio or checkbox) and an "Other" text field, and Submit / Skip buttons, until the `ask_user` call's
+finished `tool` event arrives. It is replayed on resume. A browser that leaves a command stream answers nothing.
 
 New UI features call new endpoints here, and those endpoints use hooks and commands of the plugin that
 owns the feature. Never add feature logic to this module.

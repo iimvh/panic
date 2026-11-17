@@ -6,6 +6,8 @@ plugins {
 dependencies {
     api(project(":chat")) // Chat.ASK, Conversations hooks
     api(project(":tools")) // Tools.APPROVE
+    api(project(":planner")) // keys only: Planner.APPROVE, Planner.MODE
+    api(project(":interact")) // keys only: AskUser.ASK
     api(project(":llm")) // Llm.KEY, providers and message types
 }
 

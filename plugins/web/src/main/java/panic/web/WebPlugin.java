@@ -12,6 +12,8 @@ import java.time.Duration;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
+import panic.interact.AskUser;
+import panic.planner.Planner;
 import panic.tools.Tools;
 
 /**
@@ -22,7 +24,9 @@ import panic.tools.Tools;
  * that arrive while it is going away get 503.
  *
  * It answers {@code Tools.APPROVE} for sessions that have a chat or command stream open: the browser is
- * asked over SSE and answers with {@code POST /api/approve}.
+ * asked over SSE and answers with {@code POST /api/approve}. It answers {@code Planner.APPROVE} the same way
+ * (SSE {@code plan}, {@code POST /api/plan}), and {@code AskUser.ASK}, the agent's questions (SSE
+ * {@code question}, {@code POST /api/answer}).
  */
 public final class WebPlugin implements ConfigPlugin<WebConfig> {
 
@@ -46,6 +50,8 @@ public final class WebPlugin implements ConfigPlugin<WebConfig> {
     if (!cfg.enabled()) return null;
     Api api = new Api(ctx, heartbeat, Duration.ofSeconds(cfg.detachSeconds()));
     ctx.hook(Tools.APPROVE, api::approve);
+    ctx.hook(Planner.APPROVE, api::plan);
+    ctx.hook(AskUser.ASK, api::question);
     StaticFiles files = new StaticFiles();
     ctx.effect("server", signal -> {
       HttpServer server;

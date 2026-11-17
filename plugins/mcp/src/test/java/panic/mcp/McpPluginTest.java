@@ -112,8 +112,9 @@ class McpPluginTest {
   @Test
   void everyToolOfEveryPageIsRegisteredWithTheServersRisk() throws Exception {
     startFake();
-    assertEquals(List.of("mcp__fake__bad_name", "mcp__fake__broken", "mcp__fake__die", "mcp__fake__echo",
-        "mcp__fake__grow", "mcp__fake__picture", "mcp__fake__wait"), names());
+    await(() -> names().contains(McpResources.READ), "the resource tools are offered");
+    assertEquals(List.of("list_mcp_resources", "mcp__fake__bad_name", "mcp__fake__broken", "mcp__fake__die",
+        "mcp__fake__echo", "mcp__fake__grow", "mcp__fake__picture", "mcp__fake__wait", "read_mcp_resource"), names());
     Tools.Info echo = Tools.infos(root).stream().filter(i -> i.spec().name().equals("mcp__fake__echo")).findFirst()
         .orElseThrow();
     assertEquals(Risk.NETWORK, echo.risk());
@@ -259,6 +260,44 @@ class McpPluginTest {
     Chat.Section mcp = sections.stream().filter(x -> x.name().equals(McpPlugin.SECTION)).findFirst().orElseThrow();
     assertTrue(mcp.text().contains("### fake\nUse echo to repeat text."), mcp.text());
     assertTrue(mcp.text().startsWith("The following MCP servers have provided instructions"), mcp.text());
+  }
+
+  @Test
+  void resourcesAreListedAndReadThroughTwoReadOnlyTools() throws Exception {
+    startFake();
+    await(() -> names().contains(McpResources.READ), "the resource tools are offered");
+    Tools.Info list = Tools.info(root, McpResources.LIST).orElseThrow();
+    assertEquals(Risk.READ, list.risk());
+
+    ToolResult listed = call(McpResources.LIST, "{}");
+    assertFalse(listed.isError(), listed.content());
+    assertTrue(listed.content().contains("fake:\n  file:///notes.txt  notes  (text/plain) - Meeting notes."),
+        listed.content());
+    assertTrue(listed.content().contains("  file:///logo.png  logo  (image/png)"), "every page: " + listed.content());
+    assertTrue(listed.content().contains("  template db://users/{id}  user"), listed.content());
+
+    assertEquals("buy milk", call(McpResources.READ, "{\"server\":\"fake\",\"uri\":\"file:///notes.txt\"}").content());
+    ToolResult blob = call(McpResources.READ, "{\"server\":\"fake\",\"uri\":\"file:///logo.png\"}");
+    assertTrue(blob.content().contains("[resource saved to "), blob.content());
+    try (Stream<Path> files = Files.list(dir.resolve("media").resolve("fake"))) {
+      assertEquals(3, Files.size(files.findFirst().orElseThrow()));
+    }
+    ToolResult missing = call(McpResources.READ, "{\"server\":\"fake\",\"uri\":\"file:///none\"}");
+    assertTrue(missing.isError() && missing.content().contains("Resource not found"), missing.content());
+    ToolResult unknown = call(McpResources.READ, "{\"server\":\"nope\",\"uri\":\"x\"}");
+    assertTrue(unknown.isError() && unknown.content().contains("servers with resources: fake"), unknown.content());
+    assertTrue(call(McpResources.LIST, "{\"server\":\"nope\"}").isError());
+
+    assertTrue(run("mcp", "resources").contains("file:///notes.txt"), run("mcp", "resources"));
+    assertEquals("buy milk", run("mcp", "read fake file:///notes.txt").strip());
+  }
+
+  @Test
+  void theResourceToolsGoWithTheLastServerThatHasResources() {
+    startFake();
+    await(() -> names().contains(McpResources.LIST), "offered");
+    call("mcp__fake__die", "{}");
+    await(() -> !names().contains(McpResources.LIST), "gone with the server");
   }
 
   @Test

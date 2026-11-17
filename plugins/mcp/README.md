@@ -9,7 +9,7 @@ remote server (GitHub, Sentry, documentation search) is reached over HTTP.
 
 | Name | Config (`panic.json` section) | Requires | Provides / registers |
 | --- | --- | --- | --- |
-| `mcp` | `McpConfig { servers = {}, dir = ".panic/mcp", timeoutSeconds = 120, startupSeconds = 60 }` | none | one tool per tool of each running server, `mcp__<server>__<tool>`; command `mcp` |
+| `mcp` | `McpConfig { servers = {}, dir = ".panic/mcp", timeoutSeconds = 120, startupSeconds = 60 }` | none | one tool per tool of each running server, `mcp__<server>__<tool>`; `list_mcp_resources` and `read_mcp_resource` while a server offers resources; command `mcp` |
 
 ## Config
 
@@ -82,6 +82,13 @@ unknown `type` or `risk`, no `command` for stdio, no http(s) `url` for http or s
 - **Instructions:** what a server says in `instructions` when it initializes goes into the system prompt, in the
   section `MCP Server Instructions` (`### <server>` each, at most 2000 characters per server), while the server is
   ready. Claude Code does the same.
+- **Resources** (`McpResources`): data a server exposes by URI (files, records, documents). As in Claude Code
+  (`ListMcpResourcesTool`, `ReadMcpResourceTool`), two tools serve every server, present while at least one ready
+  server declares the `resources` capability: `list_mcp_resources {server?}` lists resources and URI templates
+  (every page), `read_mcp_resource {server, uri}` reads one (text as is, binary saved under `dir/<server>/`). Both
+  are risk `read`, so the default policy runs them without asking, like Claude Code; ask for them with
+  `"permissions": {"tools": {"read_mcp_resource": "ask"}}`. Nothing is cached, so a changed list needs no
+  notification; subscriptions are not used.
 - **Results:** text content is passed on as is. Images and audio are saved under `dir/<server>/` and the result
   names the file (models without vision cannot read them; use a text tool such as chrome-devtools-mcp's
   `take_snapshot` to inspect a page). `isError: true` makes an error result.
@@ -109,4 +116,6 @@ unknown `type` or `risk`, no `command` for stdio, no http(s) `url` for http or s
 | Command | Does |
 | --- | --- |
 | `mcp [list]` | Each server with its state (`starting`, `ready`, `reconnecting`, `failed`, `exited (exit N)`, `disabled`), the server's name and protocol or why it stopped, and its tools |
+| `mcp resources [server]` | The resources and URI templates of every server that offers them, or of one |
+| `mcp read <server> <uri>` | Prints a resource (binary content is saved to a file) |
 | `mcp restart <name>` | Stops the server and starts it again (after it crashed or gave up, or to pick up a new version) |

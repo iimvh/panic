@@ -50,9 +50,41 @@ public final class FakeMcpServer {
       switch (method) {
         case "initialize" -> {
           result.put("protocolVersion", params.path("protocolVersion").asText());
-          result.set("capabilities", Json.object().set("tools", Json.object().put("listChanged", true)));
+          ObjectNode caps = Json.object();
+          caps.set("tools", Json.object().put("listChanged", true));
+          caps.set("resources", Json.object());
+          result.set("capabilities", caps);
           result.set("serverInfo", Json.object().put("name", "fake").put("version", "0.1"));
           result.put("instructions", "Use echo to repeat text.");
+        }
+        case "resources/list" -> {
+          ArrayNode resources = result.putArray("resources");
+          if (!params.has("cursor")) {
+            resources.addObject().put("uri", "file:///notes.txt").put("name", "notes").put("mimeType", "text/plain")
+                .put("description", "Meeting notes.");
+            result.put("nextCursor", "2");
+          } else {
+            resources.addObject().put("uri", "file:///logo.png").put("name", "logo").put("mimeType", "image/png");
+          }
+        }
+        case "resources/templates/list" -> result.putArray("resourceTemplates").addObject()
+            .put("uriTemplate", "db://users/{id}").put("name", "user");
+        case "resources/read" -> {
+          String uri = params.path("uri").asText();
+          ArrayNode contents = result.putArray("contents");
+          switch (uri) {
+            case "file:///notes.txt" -> contents.addObject().put("uri", uri).put("mimeType", "text/plain")
+                .put("text", "buy milk");
+            case "file:///logo.png" -> contents.addObject().put("uri", uri).put("mimeType", "image/png")
+                .put("blob", Base64.getEncoder().encodeToString(new byte[] {1, 2, 3}));
+            default -> {
+              ObjectNode err = Json.object().put("jsonrpc", "2.0");
+              err.set("id", id);
+              err.set("error", Json.object().put("code", -32002).put("message", "Resource not found: " + uri));
+              out.println(err);
+              continue;
+            }
+          }
         }
         case "tools/list" -> {
           ArrayNode tools = result.putArray("tools");

@@ -9,7 +9,8 @@ import panic.command.Commands;
 import panic.command.UsageException;
 
 /**
- * The permission policy for tool calls: answers {@link Tools#POLICY} from {@link PermissionsConfig}. It
+ * The permission policy for tool calls: answers {@link Tools#POLICY} from {@link PermissionsConfig}: its
+ * {@code rules} per command first (deny, ask, allow, after Claude Code), then the rule of the tool or its risk. It
  * requires nothing and nothing requires it, so changing its section restarts only this plugin and the next
  * call follows the new rules. While it is stopped, {@link Tools.Verdict#fallback} applies (read allow, else
  * ask), so a gap never opens the gate.
@@ -26,10 +27,12 @@ public final class PermissionsPlugin implements ConfigPlugin<PermissionsConfig> 
   public Disposable apply(Context ctx, PermissionsConfig cfg) {
     // only conversations that differ from the config default are kept
     Map<String, Boolean> overrides = new ConcurrentHashMap<>();
+    PermissionRules rules = cfg.rules().compiled();
     ctx.hook(Tools.POLICY, check -> {
-      Permission rule = cfg.permission(check.call().name(), check.risk());
+      PermissionRules.Match match = rules.decide(check.call().name(), check.call().arguments());
+      Permission rule = match != null ? match.permission() : cfg.permission(check.call().name(), check.risk());
       if (rule == Permission.ASK && bypassed(cfg, overrides, check.conversationId())) rule = Permission.ALLOW;
-      return new Tools.Verdict(rule, cfg.askTimeoutSeconds());
+      return new Tools.Verdict(rule, cfg.askTimeoutSeconds(), match == null ? null : match.rule().text());
     });
     ctx.hook(Tools.BYPASS, q ->
         new Tools.Bypass(bypassed(cfg, overrides, q.conversationId()), cfg.bypassPermissions()));

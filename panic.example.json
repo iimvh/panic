@@ -63,7 +63,12 @@
     "risks": { "read": "allow", "write": "ask", "exec": "ask", "network": "ask" },
     "tools": { "todo_write": "allow" },
     "askTimeoutSeconds": 120,
-    "bypassPermissions": false
+    "bypassPermissions": false,
+    "rules": {
+      "allow": ["exec(ls *)", "exec(npm run build)", "exec(npm test *)", "exec(git status)", "exec(git diff *)"],
+      "ask": ["exec(git push *)"],
+      "deny": ["exec(kill *)", "exec(pkill *)", "exec(killall *)"]
+    }
   },
   "web": { "enabled": false, "host": "127.0.0.1", "port": 8080, "detachSeconds": 120 }
 }

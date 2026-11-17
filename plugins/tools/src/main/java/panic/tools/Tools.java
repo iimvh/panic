@@ -71,14 +71,21 @@ public final class Tools {
     }
   }
 
-  /** The policy's answer. {@code askTimeoutSeconds} bounds the wait for the user when it is {@code ASK}. */
-  public record Verdict(Permission permission, int askTimeoutSeconds) {
+  /**
+   * The policy's answer. {@code askTimeoutSeconds} bounds the wait for the user when it is {@code ASK};
+   * {@code rule} names the rule that decided (shown in a denial), null when it was the tool's or risk's default.
+   */
+  public record Verdict(Permission permission, int askTimeoutSeconds, String rule) {
 
     public static final int DEFAULT_ASK_TIMEOUT_SECONDS = 120;
 
     public Verdict {
       Objects.requireNonNull(permission, "permission");
       if (askTimeoutSeconds <= 0) askTimeoutSeconds = DEFAULT_ASK_TIMEOUT_SECONDS;
+    }
+
+    public Verdict(Permission permission, int askTimeoutSeconds) {
+      this(permission, askTimeoutSeconds, null);
     }
 
     /** The rule when no policy plugin runs: reading is allowed, anything else needs the user. */
@@ -281,7 +288,8 @@ public final class Tools {
     Verdict verdict = verdict(owner, inv.call(), info.risk(), inv.context().origin());
     switch (verdict.permission()) {
       case DENY -> {
-        return ToolResult.error(name + ": denied by policy");
+        return ToolResult.error(name + ": denied by policy" + (verdict.rule() == null ? ""
+            : " (rule " + verdict.rule() + "); do not try another way to do the same, tell the user if it is needed"));
       }
       case ASK -> {
         if (approve(owner, inv, info.risk(), verdict.askTimeoutSeconds()) != Decision.ALLOW) {

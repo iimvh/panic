@@ -205,6 +205,90 @@ class PermissionsPluginTest {
     assertEquals(ToolResult.ok("change ran"), call("change"));
   }
 
+  /** {@code sh {command}}: an exec tool that records the commands it runs. */
+  private final List<String> commands = new CopyOnWriteArrayList<>();
+
+  private void shell() {
+    root.plugin("sh-tool", ctx -> {
+      Tools.register(ctx, new Tool() {
+        @Override
+        public ToolSpec spec() {
+          return new ToolSpec("sh", "", Json.parseOrNull(
+              "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}},\"required\":[\"command\"]}"));
+        }
+
+        @Override
+        public Risk risk() {
+          return Risk.EXEC;
+        }
+
+        @Override
+        public ToolResult call(JsonNode args, ToolContext ctx) {
+          commands.add(args.path("command").asText());
+          return ToolResult.ok("ran");
+        }
+      });
+      return null;
+    });
+  }
+
+  private ToolResult sh(String command) {
+    return call("sh", Json.object().put("command", command).toString(), "c");
+  }
+
+  private static PermissionsConfig rules(boolean bypass, List<String> allow, List<String> ask, List<String> deny) {
+    return new PermissionsConfig(null, null, 0, bypass, new PermissionsConfig.Rules(allow, ask, deny));
+  }
+
+  @Test
+  void commandRulesDecideBeforeTheToolsRule() {
+    shell();
+    approver(a -> Tools.Decision.DENY);
+    policy(rules(false, List.of("sh(npm run *)", "sh(ls *)"), List.of(), List.of("sh(kill *)")));
+    assertEquals(ToolResult.ok("ran"), sh("npm run build"));
+    assertEquals(ToolResult.ok("ran"), sh("ls -la && npm run test"));
+    assertTrue(asked.isEmpty());
+    assertEquals(ToolResult.error("sh: denied by the user"), sh("npm run build && rm -rf dist"),
+        "one part no rule allows: the user is asked");
+    assertEquals(1, asked.size());
+    ToolResult denied = sh("lsof -ti:5174 | xargs kill -9");
+    assertTrue(denied.isError() && denied.content().contains("denied by policy (rule sh(kill *))"), denied.content());
+    assertEquals(1, asked.size(), "a deny is never asked");
+    assertEquals(List.of("npm run build", "ls -la && npm run test"), commands);
+  }
+
+  @Test
+  void bypassAllowsWhatAnAskRuleAsksButNotWhatADenyRuleDenies() {
+    shell();
+    approver(a -> Tools.Decision.DENY);
+    policy(rules(true, List.of(), List.of("sh(git push *)"), List.of("sh(kill *)", "sh(pkill *)")));
+    assertEquals(ToolResult.ok("ran"), sh("git push origin main"));
+    assertEquals(ToolResult.ok("ran"), sh("rm -rf dist"));
+    assertTrue(sh("kill -9 123").isError());
+    assertTrue(sh("npm run dev & pkill node").isError());
+    assertTrue(asked.isEmpty());
+  }
+
+  @Test
+  void anAskRuleBeatsTheToolsAllow() {
+    shell();
+    approver(a -> Tools.Decision.ALLOW);
+    policy(new PermissionsConfig(null, Map.of("sh", "allow"), 0, false,
+        new PermissionsConfig.Rules(null, List.of("sh(git push *)"), null)));
+    sh("git status");
+    assertTrue(asked.isEmpty());
+    sh("git push");
+    assertEquals(1, asked.size());
+  }
+
+  @Test
+  void badCommandRulesAreConfigErrors() {
+    assertThrows(IllegalArgumentException.class,
+        () -> new PermissionsConfig.Rules(List.of("*"), null, null));
+    assertThrows(IllegalArgumentException.class,
+        () -> new PermissionsConfig.Rules(null, List.of("exec(npm"), null));
+  }
+
   @Test
   void bypassIsSwitchedPerChatAndBeatsTheConfigDefaultBothWays() {
     approver(a -> Tools.Decision.DENY);

@@ -130,7 +130,8 @@ public final class ShellPlugin implements ConfigPlugin<ShellConfig> {
     @Override
     public ToolSpec spec() {
       return new ToolSpec(EXEC, "Run a shell command (sh -c) in the project folder of this chat and get its exit "
-          + "status and the end of its output (stdout and stderr). The user approves each command. Use it to install "
+          + "status and the end of its output (stdout and stderr). The user approves commands their rules do not "
+          + "allow; to stop a background job use exec_stop, not kill. Use it to install "
           + "dependencies, build, test or run the project, not to read or write files (use the file tools). A "
           + "command that does not end by itself (a dev server such as `npm run dev`, a watcher) must run with "
           + "background: true; then read its output with " + OUTPUT + " and stop it with " + STOP + ". Commands get "

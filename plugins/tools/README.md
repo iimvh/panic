@@ -8,7 +8,7 @@ tool calls. The loop that asks the model and feeds results back belongs to the a
 | Name | Config (`panic.json` section) | Requires | Provides / registers |
 | --- | --- | --- | --- |
 | `tools` | none | none | commands `tools`, `tool` |
-| `permissions` | `PermissionsConfig { risks = {read: allow, write: ask, exec: ask, network: ask}, tools = {}, askTimeoutSeconds = 120, bypassPermissions = false }` | none | hooks `Tools.POLICY`, `Tools.BYPASS`; command `bypass` |
+| `permissions` | `PermissionsConfig { risks = {read: allow, write: ask, exec: ask, network: ask}, tools = {}, askTimeoutSeconds = 120, bypassPermissions = false, rules = {allow: [], ask: [], deny: []} }` | none | hooks `Tools.POLICY`, `Tools.BYPASS`; command `bypass` |
 | `files` | `FilesConfig { root = ".", maxBytes = 65536, maxEntries = 200, maxWriteBytes = 1048576 }` | none | tools `read_file`, `list_dir` (read), `write_file`, `edit_file` (write) |
 | `clock` | none | none | tool `time` |
 | `shell` | `ShellConfig { dir = ".", timeoutSeconds = 120, maxTimeoutSeconds = 600, maxOutput = 8000, maxBackground = 4, deny = (defaults) }` | none | tools `exec` (exec), `exec_output` (read), `exec_stop` (exec); answers `Tools.GATE` for `exec`; command `jobs` |
@@ -103,18 +103,55 @@ registered `tool.run` hook, before the tool runs, so no caller can skip it:
    `Tools.specs(ctx, conversationId)` leaves out the tools refused with `hide` (and those of a gate that throws).
    A refusal without `hide` keeps the tool offered, so the model learns the reason when it calls it instead of
    guessing why it has no way to act.
-1. The `Tools.POLICY` hook gives the rule for the call: the tool's own entry in `permissions.tools`, otherwise
-   the entry for its risk in `permissions.risks`. When `permissions` is not running (disabled, or restarting
-   on a config change), `Verdict.fallback` applies: `read` is allowed, everything else is asked.
-2. `allow` runs the call. `deny` returns `<tool>: denied by policy`.
+1. The `Tools.POLICY` hook gives the rule for the call: a [command rule](#command-rules) of `permissions.rules`
+   when one applies, else the tool's own entry in `permissions.tools`, otherwise the entry for its risk in
+   `permissions.risks`. When `permissions` is not running (disabled, or restarting on a config change),
+   `Verdict.fallback` applies: `read` is allowed, everything else is asked.
+2. `allow` runs the call. `deny` returns `<tool>: denied by policy`, plus the rule (`(rule exec(kill *)); do not
+   try another way ...`) when a command rule denied it.
 3. `ask` calls the `Tools.APPROVE` hook and waits at most `askTimeoutSeconds`. Front-ends (`cli`, `web`) answer
    it for the conversations they talk to. No answer, a timeout or `DENY` returns `<tool>: denied by the user`.
    A cancelled caller is thrown (`CancelledException`).
 
+### Command rules
+
+Per-tool rules are too coarse for `exec`: either every command is asked, or none is. `permissions.rules` follows
+Claude Code's permission rules (`Bash(npm run *)`), with Panic's tool names:
+
+```json
+"permissions": {
+  "rules": {
+    "allow": ["exec(npm run *)", "exec(ls *)", "exec(git status)", "mcp__chrome-devtools__*"],
+    "ask": ["exec(git push *)"],
+    "deny": ["exec(kill *)", "exec(pkill *)", "exec(killall *)"]
+  }
+}
+```
+
+- **A rule** is `tool` (every call of it; `tool(*)` too) or `tool(pattern)`, where the pattern is matched against
+  the call's `command` argument (`exec`; a tool without one is never matched by a pattern). `*` matches any text,
+  spaces included; no `*` means one exact command. A trailing ` *` that is the only wildcard is a word boundary
+  that also matches the bare command: `exec(ls *)` matches `ls` and `ls -la`, not `lsof`; `exec(ls:*)` is the
+  same. Runs of spaces count as one.
+- **Order:** deny, then ask, then allow; the first list with a match decides, whatever the specificity (an allow
+  cannot carve an exception out of a deny). No match falls through to `tools` and `risks`.
+- **Compound commands** are split at `&&`, `||`, `;`, `|`, `|&`, `&` and newlines (not inside quotes, and not at
+  redirects such as `2>&1`). Deny and ask apply when any part matches, also inside `$(...)`, backticks and `( )`
+  subshells. Allow applies only when every part matches an allow rule, and never to a command with a
+  substitution or subshell, or one that does not parse (an open quote, a trailing `&&`): those are asked.
+- **Wrappers** are looked through: `timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command`, `builtin`, `noglob`,
+  and `xargs` when it has no options (`lsof -ti:5174 | xargs kill -9` is a `kill`). Deny and ask also look past
+  leading assignments (`FOO=1 kill 1`); allow does not, so `NODE_OPTIONS=... npm test` is asked.
+- **Tool names** may end in `*`; `mcp__<server>` is every tool of that server. An allow wildcard must follow a
+  literal `mcp__<server>__`, so no allow rule opens every tool. A bad rule is a config error.
+- Rules read the command text only: `exec(kill *)` does not stop `/bin/kill`. `shell.deny` stays the hard limit.
+  To stop its own background jobs the agent has `exec_stop`, so denying `kill` costs it nothing it needs.
+
 ### Bypass mode (YOLO)
 
 `permissions.bypassPermissions: true` (default `false`) turns every `ask` into `allow`, so nothing waits for the
-user. A rule that says `deny` (in `permissions.tools` or `permissions.risks`) still denies: bypass only removes the
+user (an `ask` command rule too). A rule that says `deny` (in `permissions.rules`, `permissions.tools` or
+`permissions.risks`) still denies: bypass only removes the
 questions, it never overrides an explicit refusal. A conversation can also switch it for itself with command
 `bypass on | off | status` (the web UI has a header switch, the REPL prompt reads `[bypass] > `). That choice wins
 over the config default in both directions, applies to the sub-agents of that conversation, and is kept in memory
@@ -133,7 +170,7 @@ to its section restarts only it and applies from the next call.
 | `Tools.register(ctx, tool)` | registers hooks in `ctx` | Declares a `Tool`. It exists while the plugin does, and disposal waits for a call in progress |
 | `Tools.LIST` | hook `Listing → Info(ToolSpec, Risk, timeoutSeconds)` | Every tool available right now (`collect`). Use `Tools.specs(ctx)` (what the model sees), `Tools.infos(ctx)` (with risks and time limits) or `Tools.info(ctx, name)`. They sort and drop duplicate names (first wins) |
 | `Tools.RUN` | hook `Invocation(ToolCall, ToolContext) → ToolResult` | Runs a call through the permission gate. Use `Tools.call(ctx, call, toolCtx)` |
-| `Tools.POLICY` | hook `Check(ToolCall, Risk, conversationId) → Verdict(Permission, askTimeoutSeconds)` | The rule for a call (`conversationId` is the conversation the user talks to, null when none). Answered by `permissions`, which applies bypass mode. `Tools.verdict(ctx, call, risk[, conversationId])` applies the fallback |
+| `Tools.POLICY` | hook `Check(ToolCall, Risk, conversationId) → Verdict(Permission, askTimeoutSeconds, rule)` (`rule`: the command rule that decided, or null) | The rule for a call (`conversationId` is the conversation the user talks to, null when none). Answered by `permissions`, which applies bypass mode. `Tools.verdict(ctx, call, risk[, conversationId])` applies the fallback |
 | `Tools.GATE` | hook `Gate(conversationId, name, Risk, arguments?) → Refusal(reason, hide)`, collected; `arguments` is the call's raw JSON when a call is checked, null in a listing | Refuses a tool's calls in a conversation (a mode like plan mode); `hide` (the default of `Refusal(reason)`) also leaves it out of `Tools.specs(ctx, conversationId)`. `Tools.refusal(ctx, conversationId, info)` gives the first reason |
 | `Tools.BYPASS` | hook `BypassQuery(conversationId) → Bypass(on, byDefault)` | Whether a conversation bypasses approvals. Answered by `permissions`; front-ends show it |
 | `Tools.APPROVE` | hook `Approval(conversationId, ToolCall, Risk, Signal, agent?) → Decision` | Asks the user. `conversationId` is the call's `origin`, the conversation the user talks to, also for a sub-agent's call (`agent` names it). Front-ends answer only for their own conversations and return null otherwise. A blocking answer must honour `signal` |

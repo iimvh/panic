@@ -25,8 +25,8 @@ conversation drops its entry (`Conversations.DELETED`).
 ## The folder dialog
 
 A browser cannot give a page the absolute path of a folder, so `workspace pick` asks the server, which runs next
-to the user: Windows opens a PowerShell `FolderBrowserDialog`, macOS `osascript`, other systems `zenity` or
-`kdialog`. The call blocks until the dialog closes, `timeoutSeconds` pass or the command is cancelled, and then
+to the user: Windows opens a PowerShell `FolderBrowserDialog`, macOS `osascript`, other systems `zenity`,
+`kdialog` or `yad` (the first one installed). The call blocks until the dialog closes, `timeoutSeconds` pass or the command is cancelled, and then
 the dialog is closed. No answer (cancelled, or no dialog program) makes the command say to type the path
 (`workspace add <path>`), which front-ends show as a text field. Turn it off with `"folder-picker": {"enabled":
 false}` when Panic runs on a machine the user does not sit at.

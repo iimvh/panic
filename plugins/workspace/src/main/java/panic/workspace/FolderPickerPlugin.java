@@ -19,8 +19,8 @@ import panic.tools.Workspace;
 /**
  * Answers {@link Workspace#PICK} by opening the operating system's folder dialog on the machine Panic runs on:
  * a browser cannot hand a page the absolute path of a folder, but the server runs next to the user. Windows uses
- * a PowerShell {@code FolderBrowserDialog}, macOS {@code osascript}, other systems {@code zenity} or
- * {@code kdialog}. The handler blocks the caller (the command that asked) until the dialog closes, the
+ * a PowerShell {@code FolderBrowserDialog}, macOS {@code osascript}, other systems {@code zenity},
+ * {@code kdialog} or {@code yad} (the first one installed). The handler blocks the caller (the command that asked) until the dialog closes, the
  * {@link FolderPickerConfig#timeoutSeconds} pass or the caller's signal is cancelled, and then closes the dialog,
  * so nothing outlives the request. It answers null when the user cancels, the timeout passes or no dialog can be
  * opened, and says why to its {@code warn} callback.
@@ -81,7 +81,8 @@ public final class FolderPickerPlugin implements ConfigPlugin<FolderPickerConfig
     } else {
       candidates = List.of(
           List.of("zenity", "--file-selection", "--directory", "--title=Choose a project folder"),
-          List.of("kdialog", "--getexistingdirectory", System.getProperty("user.home", "/")));
+          List.of("kdialog", "--getexistingdirectory", System.getProperty("user.home", "/")),
+          List.of("yad", "--file", "--directory", "--title=Choose a project folder"));
     }
     IOException last = new IOException("no folder dialog available");
     for (List<String> command : candidates) {

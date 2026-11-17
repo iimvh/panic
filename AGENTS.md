@@ -108,6 +108,7 @@ every pull request. A change is not done until it passes.
 - Code, comments, commit messages and docs are in English.
 - Commits use Conventional Commits (`feat(web): ...`, `fix(llm): ...`, `docs: ...`), one logical change
   per commit. Do not add AI co-author trailers.
+- Work and commit directly on `master`. Do not create feature or phase branches.
 - The UI is in `ui/` (SvelteKit SPA, Svelte 5 runes, plain scoped CSS). It talks only to the `web` plugin's
   JSON + SSE API, never to anything else.
 

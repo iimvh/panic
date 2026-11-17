@@ -11,6 +11,7 @@ public final class VerifyPlugins implements PluginSet {
   public List<PluginSpec<?>> plugins() {
     return List.of(
         PluginSpec.of("checks", ChecksConfig.class, ChecksConfig.DEFAULT, ChecksPlugin::new),
-        PluginSpec.of("review", ReviewConfig.class, ReviewConfig.DEFAULT, ReviewPlugin::new));
+        PluginSpec.of("review", ReviewConfig.class, ReviewConfig.DEFAULT, ReviewPlugin::new),
+        PluginSpec.of("stop-hooks", StopHooksConfig.class, StopHooksConfig.DEFAULT, StopHooksPlugin::new));
   }
 }

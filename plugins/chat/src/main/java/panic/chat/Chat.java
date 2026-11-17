@@ -183,17 +183,55 @@ public final class Chat {
   }
 
   /**
-   * A final answer to judge, put to {@link #REVIEW}. {@code turn} is the whole turn so far (the question, tool
-   * calls and results, the answer); {@code attempt} counts from 1. A blocking reviewer must honour {@code signal}.
+   * A final answer to judge, put to {@link #STOP} and then to {@link #REVIEW}. {@code turn} is the whole turn so far
+   * (the question, tool calls and results, the answer); {@code attempt} counts from 1. {@code evidence} is what the
+   * stop checks that passed reported (empty for {@link #STOP} itself): ground truth the harness gathered, not a
+   * claim of the model. A blocking reviewer must honour {@code signal}.
    */
   public record Review(String conversationId, String question, List<Message> turn, String answer, int attempt,
-      Signal signal) {
+      Signal signal, List<String> evidence) {
     public Review {
       Objects.requireNonNull(conversationId, "conversationId");
       Objects.requireNonNull(question, "question");
       Objects.requireNonNull(answer, "answer");
       Objects.requireNonNull(signal, "signal");
       turn = List.copyOf(turn);
+      evidence = evidence == null ? List.of() : List.copyOf(evidence);
+    }
+
+    public Review(String conversationId, String question, List<Message> turn, String answer, int attempt,
+        Signal signal) {
+      this(conversationId, question, turn, answer, attempt, signal, null);
+    }
+
+    /** This review with {@code evidence}. */
+    public Review withEvidence(List<String> evidence) {
+      return new Review(conversationId, question, turn, answer, attempt, signal, evidence);
+    }
+  }
+
+  /**
+   * What one stop check said about a final answer (after Claude Code's Stop hooks). {@code name} says which check
+   * (a command). {@code block}: the answer may not stand, and {@code reason} goes back to the model, which works on.
+   * Otherwise {@code reason} is what the check found (e.g. "passed, exit 0"), passed to the reviewer as evidence.
+   * {@code error} not null: the check could not run; it is reported and blocks nothing.
+   */
+  public record StopCheck(String name, boolean block, String reason, String error) {
+    public StopCheck {
+      Objects.requireNonNull(name, "name");
+      if (reason == null) reason = "";
+    }
+
+    public static StopCheck passed(String name, String reason) {
+      return new StopCheck(name, false, reason, null);
+    }
+
+    public static StopCheck blocked(String name, String reason) {
+      return new StopCheck(name, true, reason, null);
+    }
+
+    public static StopCheck failed(String name, String error) {
+      return new StopCheck(name, false, "", error);
     }
   }
 
@@ -261,6 +299,15 @@ public final class Chat {
   public static final HookKey<Review, Verdict> REVIEW = HookKey.of("chat.review", Review.class, Verdict.class);
   public static final EventKey<Reviewed> REVIEWED = EventKey.of("chat.reviewed", Reviewed.class);
 
+  /**
+   * Collected when the model gives a final answer, before {@link #REVIEW}: every answerer runs (as every Stop hook
+   * of Claude Code does). One that blocks rejects the answer, which goes back to the model with the reasons, like a
+   * review's rejection and within the same {@code chat.maxReviews}; the reviewer is then not asked. The findings of
+   * checks that passed go to the reviewer as {@link Review#evidence}. Register with {@link #stopCheck}: a check
+   * that throws then becomes a {@link StopCheck#error} instead of hiding the answers of the others.
+   */
+  public static final HookKey<Review, StopCheck> STOP = HookKey.of("chat.stop", Review.class, StopCheck.class);
+
   /** Emitted when a tool call of the bot starts and when it finishes (logging, auditing...). */
   public static final EventKey<Step> STEP = EventKey.of("chat.step", Step.class);
 
@@ -280,6 +327,24 @@ public final class Chat {
    */
   public static Optional<Reply> ask(Context ctx, Ask ask) {
     return Hooks.bail(ctx, ASK, ask);
+  }
+
+  /**
+   * Answers {@link #STOP} while {@code ctx} lives. {@code check} may return null to say nothing about an answer; if
+   * it throws, that is reported as a {@link StopCheck#error} named {@code name} (cancellation is thrown as is).
+   */
+  public static Disposable stopCheck(Context ctx, String name, Function<Review, StopCheck> check) {
+    Objects.requireNonNull(name, "name");
+    Objects.requireNonNull(check, "check");
+    return ctx.hook(STOP, r -> {
+      try {
+        return check.apply(r);
+      } catch (core.CancelledException e) {
+        throw e;
+      } catch (RuntimeException e) {
+        return StopCheck.failed(name, e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+      }
+    });
   }
 
   /**

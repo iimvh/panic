@@ -124,7 +124,7 @@ every pull request. A change is not done until it passes.
 | `plugins/interact` | `ask-user` | [README](plugins/interact/README.md) |
 | `plugins/mcp` | `mcp` | [README](plugins/mcp/README.md) |
 | `plugins/workspace` | `workspace`, `folder-picker` | [README](plugins/workspace/README.md) |
-| `plugins/verify` | `checks`, `review` | [README](plugins/verify/README.md) |
+| `plugins/verify` | `checks`, `review`, `stop-hooks` | [README](plugins/verify/README.md) |
 | `plugins/trace` | `tracing` | [README](plugins/trace/README.md) |
 | `plugins/agents` | `agents` | [README](plugins/agents/README.md) |
 | `plugins/cli` | `cli` | [README](plugins/cli/README.md) |

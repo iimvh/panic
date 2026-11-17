@@ -176,6 +176,30 @@ class ReviewTest {
   }
 
   @Test
+  void stopChecksAllRunAndAnyBlockSendsTheAnswerBack() {
+    chat(null);
+    reviewer(r -> new Chat.Verdict(true, "fine, " + r.evidence(), Usage.NONE));
+    root.plugin("hooks", ctx -> {
+      Chat.stopCheck(ctx, "build", r -> Chat.StopCheck.passed("build", "passed"));
+      Chat.stopCheck(ctx, "serve", r -> r.attempt() == 1 ? Chat.StopCheck.blocked("serve", "not running") : null);
+      Chat.stopCheck(ctx, "crash", r -> {
+        throw new IllegalStateException("hook crashed");
+      });
+      return null;
+    });
+    llm.then(r -> answer("first")).then(r -> answer("second"));
+    Chat.Reply reply = ask(new StringBuilder());
+    assertEquals("second", reply.text());
+    assertEquals(Chat.DONE, reply.stop());
+    assertEquals(1, reviews.size(), "the blocked answer never reached the reviewer");
+    assertEquals(List.of("build: passed"), reviews.get(0).evidence());
+    assertTrue(heard.stream().anyMatch(h -> h.failed() && h.error().equals("stop hook crash: hook crashed")),
+        heard.toString());
+    assertTrue(heard.stream().anyMatch(h -> !h.failed() && !h.verdict().pass()
+        && h.verdict().reason().equals("stop hook serve: not running")));
+  }
+
+  @Test
   void cancelDuringAReviewSavesNothing() {
     chat(null);
     CountDownLatch reviewing = new CountDownLatch(1);

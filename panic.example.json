@@ -45,6 +45,10 @@
     "checks": { "test": { "command": ["./gradlew", "check", "-PskipUi"], "timeoutSeconds": 600 } }
   },
   "review": { "maxTokens": 512 },
+  "stop-hooks": {
+    "hooks": [],
+    "onlyWithCriteria": true
+  },
   "agents": {
     "profiles": {
       "explore": {

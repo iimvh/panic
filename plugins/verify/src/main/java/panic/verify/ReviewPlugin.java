@@ -33,8 +33,8 @@ import panic.todo.Todo;
 public final class ReviewPlugin implements ConfigPlugin<ReviewConfig> {
 
   static final String PROMPT = "You are a strict, independent reviewer. Judge whether the assistant's final answer "
-      + "meets every acceptance criterion, using only the evidence in the transcript: tool results count, claims "
-      + "the assistant makes without evidence do not. Reply with JSON only: {\"pass\": true or false, \"reason\": "
+      + "meets every acceptance criterion, using only the evidence in the transcript: tool results and the checks run by the "
+      + "harness count, claims the assistant makes without evidence do not. Reply with JSON only: {\"pass\": true or false, \"reason\": "
       + "\"...\"}. When it fails, the reason names each unmet criterion and what is missing, in one or two short "
       + "sentences the assistant can act on.";
 
@@ -99,6 +99,10 @@ public final class ReviewPlugin implements ConfigPlugin<ReviewConfig> {
   static String brief(Chat.Review review, List<String> criteria, int maxTranscript) {
     StringBuilder out = new StringBuilder("Question:\n").append(review.question().strip()).append("\n\nAcceptance criteria:\n");
     for (int i = 0; i < criteria.size(); i++) out.append(i + 1).append(". ").append(criteria.get(i)).append('\n');
+    if (!review.evidence().isEmpty()) {
+      out.append("\nChecks run by the harness after the answer (ground truth):\n");
+      for (String e : review.evidence()) out.append("- ").append(clip(e)).append('\n');
+    }
     StringBuilder work = new StringBuilder();
     List<Message> turn = review.turn();
     // the first message is the question and the last one the answer: both are shown on their own

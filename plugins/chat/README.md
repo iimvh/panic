@@ -7,7 +7,7 @@ Conversation history and the chat bot, an agent loop that calls tools.
 | Name | Config | Requires | Provides / registers |
 | --- | --- | --- | --- |
 | `conversations` | `ConversationsConfig { dir = ".panic/conversations", persist = true }` | none | service `Conversations.KEY` (on disk, or in memory with `persist: false`); event `Conversations.DELETED`; hooks `Conversations.LIST`, `HISTORY`, `REMOVE`; commands `reset`, `chats`, `forget` |
-| `chat` | `ChatConfig { systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats, contextTokens, compact, maxReviews, parallelTools, clearToolResultsAt, keepToolResults }` | `Llm.KEY`, `Conversations.KEY` | hook `Chat.ASK`; events `Chat.TURN`, `Chat.STEP`, `Chat.REVIEWED`, `Trace.SPAN`; command `ask`. Collects hook `Chat.CONTEXT`, asks hook `Chat.REVIEW` |
+| `chat` | `ChatConfig { systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats, contextTokens, compact, maxReviews, parallelTools, clearToolResultsAt, keepToolResults }` | `Llm.KEY`, `Conversations.KEY` | hook `Chat.ASK`; events `Chat.TURN`, `Chat.STEP`, `Chat.REVIEWED`, `Trace.SPAN`; command `ask`. Collects hooks `Chat.CONTEXT` and `Chat.STOP`, asks hook `Chat.REVIEW` |
 
 `conversations` does not depend on the LLM, so history survives a provider or model switch (which restarts
 `chat`).
@@ -111,7 +111,8 @@ with these differences:
 | `maxSteps`, `maxTokens` | Its own limits (0 = the config's) |
 | `parentSpanId` | Its `turn` span nests under this span, in `Ask.traceId`'s trace |
 
-It is never put to `Chat.REVIEW` (the answer of the turn that asked is reviewed) and never compacts its history.
+It is never put to `Chat.STOP` or `Chat.REVIEW` (the answer of the turn that asked is) and never compacts its
+history.
 
 ## Review
 
@@ -126,6 +127,15 @@ and `onReview` / `Chat.REVIEWED` get a `Reviewed` with `verdict` null and `error
 tokens count in the turn's `usage`, and `Reply.review` holds the reason of the last verdict. Each verdict is also
 emitted as `Chat.REVIEWED`. `plugins/verify` provides a reviewer that judges against the acceptance criteria of
 the conversation's plan.
+
+**Stop checks** (after Claude Code's Stop hooks) come first: the answer is put to the `Chat.STOP` hook, which is
+*collected*, so every check runs. Register one with `Chat.stopCheck(ctx, name, review -> StopCheck)`: it returns
+`StopCheck.passed(name, finding)`, `blocked(name, reason)`, `failed(name, error)` or null, and a check that throws
+becomes `failed` instead of hiding the others' answers. If any blocks, the answer is rejected with `stop hook
+<name>: <reason>` (all blocks joined): it is reported like a rejection and sent back to the model within the same
+`maxReviews`, and `Chat.REVIEW` is not asked about that answer. Otherwise the findings of the checks that passed
+reach the reviewer as `Review.evidence`. A check that failed is reported as a failed review (`stop hook <name>:
+<error>`) and blocks nothing. `plugins/verify`'s `stop-hooks` runs configured commands this way.
 
 ## The context window
 
@@ -181,6 +191,7 @@ The trace id is `Ask.traceId` when the asker gives one (web does, to tell the UI
 | `turn` | none (root); a sub-agent's under the `tool` span that runs it | `conversationId`, `question` (first 200 chars), `questionHash` (`Trace.QUESTION_HASH`, from `Trace.questionHash`), `model`, `stop`, `steps`, `toolCalls`, `promptTokens`, `completionTokens` (whole turn), `saved`; `agent`, `origin` for a sub-agent |
 | `llm` | `turn` | `step`, `messages`, `clearedToolResults` (when any), `model`, `finishReason`, `promptTokens`, `completionTokens`, `toolCalls`, `firstTokenMicros` (first text or tool-call piece) |
 | `tool` | `turn` | `tool`, `callId`, `approvalMicros` (until the tool started), `outputChars`, `truncated`, `refused` (a repeated call, or a tool a sub-agent may not use), `timedOut`, `promptTokens` / `completionTokens` (a tool's own spending). An error result is an `ERROR` span |
+| `stop` | `turn` | `attempt`, `checks`, `blocked`, `names`, `reason` (the first block's). `ERROR` when a check failed. Only when a check answered |
 | `review` | `turn` | `attempt`, `verdict` (`pass` / `fail`), `pass`, `reason`, `promptTokens`, `completionTokens`. Only when a reviewer judged (or failed) |
 | `compaction` | `turn` | `messages` (summarised), `kept`, `condensed` (the last turn kept as question and answer), `applied`, `model`, tokens. `ERROR` when the model gave no summary |
 

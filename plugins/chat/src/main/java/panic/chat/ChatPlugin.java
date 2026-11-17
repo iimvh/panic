@@ -430,11 +430,24 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private Chat.Verdict review(String answer) {
       if (cfg.maxReviews() == 0 || ask.delegate() != null) return null; // the asker's answer is the one reviewed
       int attempt = reviews + 1;
+      Chat.Review question = new Chat.Review(ask.conversationId(), ask.text(), added, answer, attempt, signal);
+      List<Chat.StopCheck> checks = stopChecks(question);
+      List<String> blocks = checks.stream().filter(Chat.StopCheck::block)
+          .map(c -> c.name() + ": " + c.reason()).toList();
+      if (!blocks.isEmpty()) {
+        Chat.Verdict blocked = new Chat.Verdict(false, "stop hook " + String.join("; stop hook ", blocks), Usage.NONE);
+        review = blocked.reason();
+        Chat.Reviewed reviewed = new Chat.Reviewed(ask.conversationId(), attempt, blocked);
+        ask.onReview().accept(reviewed);
+        ctx.emit(Chat.REVIEWED, reviewed);
+        return blocked;
+      }
+      List<String> evidence = checks.stream().filter(c -> c.error() == null)
+          .map(c -> c.name() + ": " + c.reason()).toList();
       OpenSpan s = span.child("review").attr("attempt", attempt);
       Optional<Chat.Verdict> verdict;
       try {
-        verdict = Hooks.bail(ctx, Chat.REVIEW,
-            new Chat.Review(ask.conversationId(), ask.text(), added, answer, attempt, signal));
+        verdict = Hooks.bail(ctx, Chat.REVIEW, question.withEvidence(evidence));
       } catch (RuntimeException e) {
         fail(s, e);
         signal.throwIfCancelled();
@@ -465,6 +478,51 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       ask.onReview().accept(reviewed);
       ctx.emit(Chat.REVIEWED, reviewed);
       return verdict.get();
+    }
+
+    /**
+     * Collects {@link Chat#STOP} for {@code question}, under one {@code stop} span (none when nobody answers). A
+     * check that could not run is reported to the asker like a failed review; cancellation is thrown.
+     */
+    private List<Chat.StopCheck> stopChecks(Chat.Review question) {
+      OpenSpan s = span.child("stop").attr("attempt", question.attempt());
+      List<Chat.StopCheck> checks = new ArrayList<>();
+      List<String> errors = new ArrayList<>();
+      try {
+        checks.addAll(ctx.collect(Chat.STOP, question));
+      } catch (EmitException e) {
+        for (EmitException.Failure f : e.failures()) {
+          if (f.error() instanceof CancelledException c) {
+            fail(s, c);
+            throw c;
+          }
+          errors.add(f.source() + ": " + f.error().getMessage());
+        }
+      }
+      if (signal.isCancelled()) {
+        fail(s, new CancelledException("cancelled"));
+        signal.throwIfCancelled();
+      }
+      checks.stream().filter(c -> c.error() != null).forEach(c -> errors.add(c.name() + ": " + c.error()));
+      if (checks.isEmpty() && errors.isEmpty()) {
+        s.discard();
+        return checks;
+      }
+      long blocked = checks.stream().filter(Chat.StopCheck::block).count();
+      s.attr("checks", checks.size()).attr("blocked", blocked)
+          .attr("names", String.join(", ", checks.stream().map(Chat.StopCheck::name).toList()));
+      if (blocked > 0) {
+        s.attr("reason", cut(checks.stream().filter(Chat.StopCheck::block).map(Chat.StopCheck::reason)
+            .findFirst().orElse("")));
+      }
+      for (String error : errors) {
+        Chat.Reviewed failed = new Chat.Reviewed(ask.conversationId(), question.attempt(), null, "stop hook " + error);
+        ask.onReview().accept(failed);
+        ctx.emit(Chat.REVIEWED, failed);
+      }
+      if (errors.isEmpty()) s.end();
+      else s.fail(String.join("; ", errors));
+      return checks;
     }
 
     /**

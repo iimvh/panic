@@ -9,7 +9,7 @@ acceptance criteria of `plugins/todo`, they keep the agent from calling work don
 | --- | --- | --- | --- |
 | `checks` | `ChecksConfig { dir = ".", checks = {}, maxOutput = 8000 }`, each check `{ command: [...], timeoutSeconds = 600 }` | none | tool `check` (exec), when at least one check is configured; command `checks` |
 | `stop-hooks` | `StopHooksConfig { hooks = [], dir = ".", onlyWithCriteria = true, maxOutput = 4000 }`, each hook `{ command, timeoutSeconds = 120 }` | none | answers hook `Chat.STOP` (one check per hook) |
-| `review` | `ReviewConfig { prompt = (built in), maxTokens = 512, maxTranscript = 12000, temperature = null }` | `Llm.KEY` | answers hook `Chat.REVIEW` |
+| `review` | `ReviewConfig { prompt = (built in), maxTokens = 4096, maxTranscript = 12000, temperature = null }` | `Llm.KEY` | answers hook `Chat.REVIEW` |
 
 ## `check`: external ground truth
 
@@ -53,7 +53,9 @@ the retries are used up. A failed model call, or a reply that is not a verdict, 
 `chat` lets the answer stand, but ends the `review` span as ERROR with the message and reports the failure to the
 asker (the web UI shows "Review failed: ..."), so a broken check is visible instead of passing silently.
 
-The review uses the same LLM as the chat; its tokens count in the turn's usage. It sends only `maxTokens` and,
+The review uses the same LLM as the chat; its tokens count in the turn's usage. `maxTokens` (default 4096) must
+leave a reasoning model room to think: its thinking counts against the limit, and a reply cut there
+(`finish_reason: length`) fails with a message that says to raise it. It sends only `maxTokens` and,
 when set, `temperature`: null (the default) lets the model use its own default, because some models reject
 `temperature: 0` (for example "top_p must be 1 when using greedy sampling").
 

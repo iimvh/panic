@@ -67,6 +67,10 @@ public final class ReviewPlugin implements ConfigPlugin<ReviewConfig> {
     Chat.Verdict verdict = verdict(c.text(), c);
     if (verdict == null) {
       String text = c.text() == null ? "" : c.text().strip();
+      if ("length".equals(c.finishReason())) {
+        throw new ReviewException("the reviewer's reply was cut at review.maxTokens (" + cfg.maxTokens() + ") before "
+            + "it gave a verdict; a reasoning model spends tokens thinking first: raise review.maxTokens");
+      }
       throw new ReviewException("the reviewer gave no verdict: "
           + (text.isEmpty() ? "(empty reply)" : text.length() <= 200 ? text : text.substring(0, 200) + " …"));
     }

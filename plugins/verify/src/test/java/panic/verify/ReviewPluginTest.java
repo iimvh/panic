@@ -64,6 +64,7 @@ class ReviewPluginTest {
 
     /** The reviewer's model call fails with {@code e} instead of answering. */
     volatile RuntimeException reviewerFails;
+    volatile String reviewerFinish = "stop";
 
     @Override
     public Provider provider() {
@@ -86,7 +87,7 @@ class ReviewPluginTest {
         reviewer.add(r);
         if (reviewerFails != null) throw reviewerFails;
         String v = verdicts.size() > 1 ? verdicts.poll() : verdicts.peek();
-        return new Completion(v, "m", "stop", new Usage(7, 2));
+        return new Completion(v, "m", reviewerFinish, new Usage(7, 2));
       }
       agent.add(r);
       Function<ChatRequest, Completion> step = agentScript.size() > 1 ? agentScript.poll() : agentScript.peek();
@@ -214,6 +215,15 @@ class ReviewPluginTest {
   }
 
   @Test
+  void aVerdictCutByMaxTokensSaysToRaiseIt() {
+    llm.verdict("");
+    llm.reviewerFinish = "length";
+    llm.agent(r -> calls(plan("says hi"))).agent(r -> answer("hi"));
+    askHeard("greet me");
+    assertTrue(heard.get(0).error().contains("raise review.maxTokens"), heard.get(0).error());
+  }
+
+  @Test
   void aFailedReviewerCallIsReportedNotSwallowed() {
     llm.reviewerFails = new LlmException(400, "top_p must be 1 when using greedy sampling");
     llm.agent(r -> calls(plan("says hi"))).agent(r -> answer("hi"));
@@ -240,7 +250,7 @@ class ReviewPluginTest {
     ChatRequest sent = llm.reviewer.get(0);
     assertNull(sent.temperature(), "no temperature unless configured: the model's default applies");
     assertNull(sent.model());
-    assertEquals(512, sent.maxTokens());
+    assertEquals(4096, sent.maxTokens());
     assertTrue(sent.tools().isEmpty());
 
     review.update(new ReviewConfig(null, 100, 0, 0.3));

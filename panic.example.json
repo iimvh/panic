@@ -44,7 +44,7 @@
     "dir": ".",
     "checks": { "test": { "command": ["./gradlew", "check", "-PskipUi"], "timeoutSeconds": 600 } }
   },
-  "review": { "maxTokens": 512 },
+  "review": { "maxTokens": 4096 },
   "stop-hooks": {
     "hooks": [],
     "onlyWithCriteria": true

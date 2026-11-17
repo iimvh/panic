@@ -135,7 +135,10 @@ class WebPluginTest {
         try {
           released.await();
         } catch (InterruptedException e) {
+          // z interrupts the task before the cancel reaches the chat's own signal: the same cancellation
+          cancelled.countDown();
           Thread.currentThread().interrupt();
+          throw new core.CancelledException("interrupted");
         }
         s.throwIfCancelled();
       }
@@ -145,7 +148,8 @@ class WebPluginTest {
   }
 
   private final Fake fake = new Fake();
-  private final HttpClient http = HttpClient.newHttpClient();
+  /** HTTP/1.1 like a browser: no h2c upgrade attempt, which the JDK server does not speak. */
+  private final HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
   private Root root;
   private PluginHandle conversations;
   private ConfigHandle<Boolean> connected;
@@ -596,11 +600,11 @@ class WebPluginTest {
     HttpResponse<InputStream> r = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
     assertEquals(200, r.statusCode());
     BufferedReader in = new BufferedReader(new InputStreamReader(r.body(), StandardCharsets.UTF_8));
-    assertEquals(List.of("id: 1", "event: start"), List.of(in.readLine(), in.readLine()));
-    String start = in.readLine();
+    assertEquals(List.of("id: 1", "event: start"), List.of(line(in), line(in)));
+    String start = line(in);
     assertTrue(start.contains("\"question\":\"slow\"") && start.contains("\"traceId\":"), start);
     assertEquals(List.of("", "id: 2", "event: delta", "data: {\"text\":\"Hel\"}", ""),
-        List.of(in.readLine(), in.readLine(), in.readLine(), in.readLine(), in.readLine()));
+        List.of(line(in), line(in), line(in), line(in), line(in)));
     fake.block.await();
     return in;
   }
@@ -612,9 +616,22 @@ class WebPluginTest {
     return new BufferedReader(new InputStreamReader(r.body(), StandardCharsets.UTF_8));
   }
 
+  /**
+   * The next line of an SSE stream that is not a heartbeat: the server writes {@code ": ping"} and a blank line
+   * whenever {@code heartbeat} passes, which on a busy machine can fall between any two events.
+   */
+  private static String line(BufferedReader in) throws Exception {
+    String line = in.readLine();
+    while (line != null && line.startsWith(":")) {
+      in.readLine(); // the blank line that ends the comment
+      line = in.readLine();
+    }
+    return line;
+  }
+
   private static String rest(BufferedReader in) throws Exception {
     StringBuilder out = new StringBuilder();
-    for (String line; (line = in.readLine()) != null; ) out.append(line).append('\n');
+    for (String line; (line = line(in)) != null; ) out.append(line).append('\n');
     return out.toString();
   }
 
@@ -624,9 +641,9 @@ class WebPluginTest {
     assertFalse(fake.cancelled.await(500, TimeUnit.MILLISECONDS), "leaving does not stop the answer");
 
     try (BufferedReader in = follow("session=s&after=1")) {
-      assertEquals(List.of("id: 2", "event: delta"), List.of(in.readLine(), in.readLine()), "only what came after 1");
-      in.readLine();
-      in.readLine();
+      assertEquals(List.of("id: 2", "event: delta"), List.of(line(in), line(in)), "only what came after 1");
+      line(in);
+      line(in);
       fake.released.countDown();
       String body = rest(in);
       assertTrue(body.startsWith("id: 3\nevent: delta\ndata: {\"text\":\"lo m1\"}"), body);

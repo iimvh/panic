@@ -376,6 +376,16 @@ class AgentsPluginTest {
   }
 
   @Test
+  void theToolSaysWhenNotToDelegateAndTheSubAgentReturnsEvidence() {
+    chat(1);
+    agents(profiles(1, 4));
+    String description = Tools.find(root, AgentsPlugin.TOOL).orElseThrow().description();
+    assertTrue(description.contains("Do not use it to read a file whose path you know"), description);
+    assertTrue(description.contains("do not read again the files it quoted"), description);
+    assertTrue(AgentsPlugin.BASE_PROMPT.contains("file path") && AgentsPlugin.BASE_PROMPT.contains("quoted"));
+  }
+
+  @Test
   void configChangesRestartOnlyAgents() {
     chat(1);
     ConfigHandle<AgentsConfig> agents = agents(profiles(1, 4));

@@ -14,7 +14,7 @@ of a change) then stays out of the main context, and several sub-agents can work
 "agents": {
   "profiles": {
     "explore": {
-      "description": "Finds and reads code, then reports what it found with paths. Cannot change files.",
+      "description": "Searches the codebase broadly (many files or folders) and reports each finding with its path, line numbers and the relevant code quoted, so you need not read those files again. Read-only. Not for reading one file you know.",
       "tools": ["read_file", "list_dir"],
       "maxSteps": 12
     }
@@ -39,6 +39,24 @@ of a change) then stays out of the main context, and several sub-agents can work
 - **`timeoutSeconds`**: how long one sub-agent may run. It replaces `chat.toolTimeoutSeconds` for this tool.
 
 No profile and `general: false`: no tool is registered.
+
+## When a sub-agent pays off
+
+A sub-agent costs a model loop of its own, and its work is wasted when the caller reads the same files again.
+The tool description and the built-in prompt follow Anthropic's multi-agent guidance (the lead agent gives each
+sub-agent an objective, a scope and an output format; the sub-agent returns a condensed result) and Claude Code's
+Task/Explore tools (when not to delegate; return paths and code excerpts):
+
+- **Delegate broad work only.** The description tells the model to use `agent` for searches across many files,
+  research, or a separate part of a change, and not to read a known file or a few files through it.
+- **Say what to return.** The task should state the goal, the scope and the output wanted.
+- **Return evidence, not a story.** The built-in prompt asks for each finding's path (and lines) with the relevant
+  code quoted as is, values as they came, and what was not found.
+- **Trust the answer.** The description tells the caller not to read again the files the sub-agent quoted unless
+  it is going to change them.
+
+Profiles written with `description` only get the same prompt, so describe the profile's scope and output in it
+(see the `explore` example above).
 
 ## The `agent` tool
 

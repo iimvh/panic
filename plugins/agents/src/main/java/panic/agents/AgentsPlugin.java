@@ -49,9 +49,11 @@ public final class AgentsPlugin implements ConfigPlugin<AgentsConfig> {
 
   /** What every sub-agent is told before its role or instructions. */
   static final String BASE_PROMPT = "You are a sub-agent. Another agent gave you one task and will only see your "
-      + "final answer, not your tool calls. You cannot ask the user or the other agent anything. Do the task "
-      + "with your tools, then answer with exactly what was asked: results, facts found (names, paths, values) "
-      + "and anything you could not do. Be complete but concise.";
+      + "final answer, not your tool calls or the files you read. You cannot ask the user or the other agent "
+      + "anything. Do the task with your tools, then answer with exactly what was asked, so the other agent can act "
+      + "on it without redoing your work: for each finding, the file path (and line numbers when you know them) and "
+      + "the relevant code or text quoted as it is, not paraphrased; values and results as they came; and what you "
+      + "looked for but did not find. Leave out what does not bear on the task. Be complete but concise.";
 
   @Override
   public Disposable apply(Context ctx, AgentsConfig cfg) {
@@ -114,9 +116,13 @@ public final class AgentsPlugin implements ConfigPlugin<AgentsConfig> {
       }
       cfg.profiles().forEach((n, p) -> list.append("\n- ").append(n).append(": ").append(p.description()));
       return new ToolSpec(TOOL, "Hand a self-contained task to a sub-agent, which works on it with its own tools "
-          + "and context and answers with its result only. Use it for work that is big or separate (exploring, "
-          + "researching, a part of a larger change); several calls in one reply may run at the same time. "
-          + "Sub-agents:" + list, schema);
+          + "and context and answers with its result only. Use it for broad work whose details you do not need in "
+          + "your own context: searching many files or folders for something, researching, or a separate part of a "
+          + "larger change; several calls in one reply run at the same time. Do not use it to read a file whose "
+          + "path you know, or to look at a few files: read them yourself, it is faster and cheaper. In the task, "
+          + "state the goal, the scope (folders, what to skip) and what to return (e.g. paths with the relevant "
+          + "code quoted). Its answer is your evidence: do not read again the files it quoted unless you are going "
+          + "to change them. Sub-agents:" + list, schema);
     }
 
     @Override

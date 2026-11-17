@@ -48,7 +48,7 @@
   "agents": {
     "profiles": {
       "explore": {
-        "description": "Finds and reads code, then reports what it found with paths. Cannot change files.",
+        "description": "Searches the codebase broadly (many files or folders) and reports each finding with its path, line numbers and the relevant code quoted, so you need not read those files again. Read-only. Not for reading one file you know.",
         "tools": ["read_file", "list_dir"],
         "maxSteps": 12
       }

@@ -151,6 +151,9 @@ public final class OpenAiCompatClient implements ChatModel {
 
   // ---------------- internals ----------------
 
+  /** What an assistant message that said nothing is sent as (see {@link #body}). */
+  static final String EMPTY_ANSWER = "(empty answer)";
+
   private ObjectNode body(ChatRequest request, boolean stream) {
     if (request.model() == null || request.model().isBlank()) {
       throw new LlmException(0, providerName + ": no model selected");
@@ -162,6 +165,11 @@ public final class OpenAiCompatClient implements ChatModel {
       ObjectNode out = messages.addObject().put("role", m.role().wire());
       if (m.hasToolCalls() && m.content().isEmpty()) {
         out.putNull("content");
+      } else if (m.role() == Role.ASSISTANT && m.content().isBlank()) {
+        // a model may end a turn with nothing to say (its text all in reasoning); providers such as Mistral refuse
+        // an assistant message without content or tool calls, and dropping it would put a user message after a
+        // tool result, which they refuse too
+        out.put("content", EMPTY_ANSWER);
       } else {
         out.put("content", m.content());
       }

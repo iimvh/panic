@@ -147,6 +147,26 @@ class OpenAiCompatClientTest {
   }
 
   @Test
+  void anEmptyAnswerInTheHistoryIsSentWithPlaceholderText() throws Exception {
+    try (FakeServer server = new FakeServer(ex -> FakeServer.json(ex, 200,
+        "{\"choices\":[{\"message\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}"))) {
+      ChatRequest request = new ChatRequest(List.of(
+          Message.user("weather in Hue?"),
+          Message.assistant("", List.of(new ToolCall("c1", "weather", "{\"city\":\"Hue\"}"))),
+          Message.tool("c1", "31C, sunny"),
+          Message.assistant(""),
+          Message.user("and now?")), "m-1", null, null);
+      new OpenAiCompatClient("fake", server.url(), "k").complete(request, new CancelToken());
+
+      var messages = Json.parseOrNull(server.lastBody).path("messages");
+      assertEquals(5, messages.size(), "kept, so a user message never follows a tool result");
+      assertEquals("assistant", messages.path(3).path("role").asText());
+      assertEquals(OpenAiCompatClient.EMPTY_ANSWER, messages.path(3).path("content").asText());
+      assertTrue(messages.path(3).path("tool_calls").isMissingNode());
+    }
+  }
+
+  @Test
   void plainRequestsSendNoToolFields() throws Exception {
     try (FakeServer server = new FakeServer(ex -> FakeServer.json(ex, 200, "{\"choices\":[]}"))) {
       new OpenAiCompatClient("fake", server.url(), "k").complete(HELLO, new CancelToken());

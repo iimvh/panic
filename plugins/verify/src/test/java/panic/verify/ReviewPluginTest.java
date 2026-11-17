@@ -250,7 +250,7 @@ class ReviewPluginTest {
     ChatRequest sent = llm.reviewer.get(0);
     assertNull(sent.temperature(), "no temperature unless configured: the model's default applies");
     assertNull(sent.model());
-    assertEquals(4096, sent.maxTokens());
+    assertEquals(16_384, sent.maxTokens());
     assertTrue(sent.tools().isEmpty());
 
     review.update(new ReviewConfig(null, 100, 0, 0.3));

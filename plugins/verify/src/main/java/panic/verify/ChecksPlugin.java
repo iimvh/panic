@@ -17,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 import panic.command.Commands;
 import panic.util.Json;
 import panic.llm.ToolSpec;
+import panic.tools.Processes;
 import panic.tools.Risk;
 import panic.tools.Tool;
 import panic.tools.ToolContext;
@@ -109,12 +110,12 @@ public final class ChecksPlugin implements ConfigPlugin<ChecksConfig> {
       Process p;
       try {
         p = new ProcessBuilder(check.command()).directory(dir.toFile()).redirectErrorStream(true)
-            .redirectOutput(log.toFile()).redirectInput(ProcessBuilder.Redirect.from(new File(nullDevice())))
+            .redirectOutput(log.toFile()).redirectInput(ProcessBuilder.Redirect.from(Processes.nullDevice()))
             .start();
       } catch (IOException | RuntimeException e) {
         return ToolResult.error("check " + name + " could not start: " + e.getMessage());
       }
-      Disposable onCancel = tc.signal().onCancel(() -> kill(p));
+      Disposable onCancel = tc.signal().onCancel(() -> Processes.kill(p));
       boolean finished;
       try {
         finished = p.waitFor(check.timeoutSeconds(), TimeUnit.SECONDS);
@@ -124,10 +125,10 @@ public final class ChecksPlugin implements ConfigPlugin<ChecksConfig> {
       } finally {
         onCancel.dispose();
       }
-      if (!finished) kill(p);
+      if (!finished) Processes.kill(p);
       tc.signal().throwIfCancelled();
       String took = String.format(Locale.ROOT, "%.1fs", (System.nanoTime() - start) / 1e9);
-      String output = tail(log);
+      String output = Processes.tail(log, cfg.maxOutput());
       if (!finished) {
         return ToolResult.error("check " + name + " timed out after " + check.timeoutSeconds() + "s" + output);
       }
@@ -135,34 +136,5 @@ public final class ChecksPlugin implements ConfigPlugin<ChecksConfig> {
       String head = "check " + name + (exit == 0 ? " passed" : " failed") + " (exit " + exit + ", " + took + ")";
       return exit == 0 ? ToolResult.ok(head + output) : ToolResult.error(head + output);
     }
-
-    /** The last {@code maxOutput} characters of the log, after a newline; empty when there was no output. */
-    private String tail(Path log) {
-      String text;
-      try {
-        text = new String(Files.readAllBytes(log), StandardCharsets.UTF_8).strip();
-      } catch (IOException e) {
-        return "\n(output unreadable: " + e.getMessage() + ")";
-      }
-      if (text.isEmpty()) return "";
-      int max = cfg.maxOutput();
-      if (text.length() <= max) return "\n" + text;
-      return "\n[" + (text.length() - max) + " earlier chars cut]\n" + text.substring(text.length() - max);
-    }
-  }
-
-  /** Kills {@code p} and everything it started, and waits briefly for it to go. */
-  private static void kill(Process p) {
-    p.descendants().forEach(ProcessHandle::destroyForcibly);
-    p.destroyForcibly();
-    try {
-      p.waitFor(5, TimeUnit.SECONDS);
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-    }
-  }
-
-  private static String nullDevice() {
-    return File.separatorChar == '\\' ? "NUL" : "/dev/null";
   }
 }

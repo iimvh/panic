@@ -32,7 +32,8 @@ returns `check <name> passed|failed (exit N, 3.2s)` and the end of its output (s
   fixes things and runs the check again.
 - Risk `exec`: the default policy asks the user each time. Allow it with
   `"permissions": {"tools": {"check": "allow"}}` once you trust the configured commands.
-- The process and its children are killed when `timeoutSeconds` passes or the call is cancelled. The tool asks
+- The process and its children are killed when `timeoutSeconds` passes or the call is cancelled (with
+  `Processes` of `plugins/tools`, shared with the `exec` tool). The tool asks
   for the longest configured `timeoutSeconds` (plus 10s) as its own limit (`Tool.timeoutSeconds`), so the chat's
   `chat.toolTimeoutSeconds` (default 60) does not cut long checks.
 - No checks configured: no tool is registered.

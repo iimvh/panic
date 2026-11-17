@@ -63,7 +63,7 @@ public final class WorkspacePlugin implements ConfigPlugin<WorkspaceConfig> {
             + "of the sidebar, or the command /workspace add <path>) and to start a chat in it.";
       }
       return "You work in the project \"" + p.name() + "\", the folder " + p.path() + ". The paths of read_file, "
-          + "list_dir and write_file are relative to it and you cannot reach anything outside it; checks run there "
+          + "list_dir, write_file and edit_file are relative to it and you cannot reach anything outside it; checks run there "
           + "too. Another folder needs another project: the user adds one with the \"Add project\" button of the "
           + "sidebar or /workspace add <path>.";
     });

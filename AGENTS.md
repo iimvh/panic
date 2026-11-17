@@ -122,6 +122,7 @@ every pull request. A change is not done until it passes.
 | `plugins/todo` | `todo` | [README](plugins/todo/README.md) |
 | `plugins/planner` | `planner` | [README](plugins/planner/README.md) |
 | `plugins/interact` | `ask-user` | [README](plugins/interact/README.md) |
+| `plugins/mcp` | `mcp` | [README](plugins/mcp/README.md) |
 | `plugins/workspace` | `workspace`, `folder-picker` | [README](plugins/workspace/README.md) |
 | `plugins/verify` | `checks`, `review` | [README](plugins/verify/README.md) |
 | `plugins/trace` | `tracing` | [README](plugins/trace/README.md) |

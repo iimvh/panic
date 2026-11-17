@@ -24,6 +24,17 @@
   "planner": { "byDefault": false, "allow": [], "approveTimeoutSeconds": 900, "dir": ".panic/plans", "root": "." },
   "shell": { "dir": ".", "timeoutSeconds": 120, "maxTimeoutSeconds": 600, "maxOutput": 8000, "maxBackground": 4 },
   "ask-user": { "timeoutSeconds": 900, "maxQuestions": 4, "maxOptions": 6 },
+  "mcp": {
+    "servers": {
+      "chrome-devtools": {
+        "command": "npx",
+        "args": ["-y", "chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222"],
+        "risk": "network",
+        "enabled": false
+      }
+    },
+    "timeoutSeconds": 120
+  },
   "workspace": { "dir": ".panic/workspace" },
   "folder-picker": { "enabled": true, "timeoutSeconds": 120 },
   "tracing": { "dir": ".panic/traces", "keepDays": 30, "maxTraces": 500 },

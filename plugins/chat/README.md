@@ -7,7 +7,7 @@ Conversation history and the chat bot, an agent loop that calls tools.
 | Name | Config | Requires | Provides / registers |
 | --- | --- | --- | --- |
 | `conversations` | `ConversationsConfig { dir = ".panic/conversations", persist = true }` | none | service `Conversations.KEY` (on disk, or in memory with `persist: false`); event `Conversations.DELETED`; hooks `Conversations.LIST`, `HISTORY`, `REMOVE`; commands `reset`, `chats`, `forget` |
-| `chat` | `ChatConfig { systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats, contextTokens, compact, maxReviews, parallelTools }` | `Llm.KEY`, `Conversations.KEY` | hook `Chat.ASK`; events `Chat.TURN`, `Chat.STEP`, `Chat.REVIEWED`, `Trace.SPAN`; command `ask`. Collects hook `Chat.CONTEXT`, asks hook `Chat.REVIEW` |
+| `chat` | `ChatConfig { systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats, contextTokens, compact, maxReviews, parallelTools, clearToolResultsAt, keepToolResults }` | `Llm.KEY`, `Conversations.KEY` | hook `Chat.ASK`; events `Chat.TURN`, `Chat.STEP`, `Chat.REVIEWED`, `Trace.SPAN`; command `ask`. Collects hook `Chat.CONTEXT`, asks hook `Chat.REVIEW` |
 
 `conversations` does not depend on the LLM, so history survives a provider or model switch (which restarts
 `chat`).
@@ -17,7 +17,8 @@ Conversation history and the chat bot, an agent loop that calls tools.
 Each conversation is a JSON lines file in `dir` (resolved against the app's working directory), named after the
 conversation id (`repl.jsonl`), or `~` + the id in base64url when the id is not a short `[A-Za-z0-9_-]` name.
 Header lines come first: `{"parent": ...}` for a conversation that works for another (a sub-agent's, set by
-`chat` from `Chat.Delegate.origin`), and `{"summary": ...}` for the compaction summary. Every other line is a
+`chat` from `Chat.Delegate.origin`), `{"title": ...}` (the first question, written with it, so it stays the title
+after a compaction removes that question), and `{"summary": ...}` for the compaction summary. Every other line is a
 message (`{"role", "content", "toolCalls"?, "toolCallId"?}`).
 
 - **Loaded on first use.** A conversation is read the first time it is asked for after a start.
@@ -30,8 +31,9 @@ message (`{"role", "content", "toolCalls"?, "toolCallId"?}`).
   and a warning is printed.
 - **One process per directory.** Two apps sharing `dir` would interleave their writes.
 - **Listing** (`list()`) covers the loaded conversations and the files not loaded yet, reading a file only up to
-  its first question. It leaves out empty conversations and those with a `parent`, newest first. `Info.title`
-  is the first line of the first question, at most 80 characters.
+  its title header. It leaves out empty conversations and those with a `parent`, newest first. `Info.title` is
+  the first line of the title (`Conversation.title()`, the first question ever asked; a file written before titles
+  were kept takes its first remaining question), at most 80 characters. Clearing a conversation clears its title.
 - **Deleting** (`delete(id)`) removes the conversation and, recursively, every conversation whose `parent` it
   is (a sub-agent's), from memory and disk. It emits `Conversations.DELETED` once for each, so `todo` and
   `tracing` drop their data for it. Deleting a conversation while a turn is running in it is the caller's
@@ -50,7 +52,7 @@ until the model answers or a limit stops it:
 | --- | --- |
 | `done` | The model answered without calling a tool |
 | `max_steps` | `maxSteps` model calls were made (default 25) |
-| `budget` | The tokens of the turn reached `maxTokens` (default 0 = no budget) |
+| `budget` | The tokens of the turn reached `maxTokens` (default 400000; `0` = no budget) |
 | `rejected` | The reviewer still rejected the answer after `maxReviews` retries (or no step was left for one). `Reply.review` holds its reason |
 
 **Only hard limits stop a turn.** This follows proven harnesses:
@@ -145,6 +147,20 @@ Every request stays under `contextTokens` estimated tokens (default 32000; `0` t
   do not each pay for a summary. Its tokens count in the turn's `usage` (and `maxTokens`). If the summary call
   fails, the old turns are only left out of the request; a cancelled ask is cancelled as usual and changes
   nothing. `maxHistory` alone never triggers a summary.
+  - **What the summary keeps.** The prompt (`SUMMARY_PROMPT`) asks for the sections of Claude Code's compaction:
+    the primary request, every user message word for word, key facts, work done and current state, pending tasks
+    and the next step. Then `chat` checks it: each user message of the summarised turns that the summary does not
+    quote is added under `User messages (word for word):` (each cut at 2000 characters; a reviewer's feedback is
+    not a user message). So a long task never loses what the user asked.
+  - **Never from nothing.** When not even the last earlier turn fits half the budget (one turn with many tool
+    calls), its question and final answer are kept as a short turn after the summary (`kept` 0 is no longer
+    possible while that turn has an answer); its tool calls are covered by the summary.
+- **Tool result clearing** (after Anthropic's context editing, `clear_tool_uses`). Once a request is estimated
+  over `clearToolResultsAt` tokens (default half of `contextTokens`; `0` = never), every tool result but the
+  newest `keepToolResults` (default 3) is sent as `[tool result cleared to save context (N chars); call the tool
+  again if you need it]`. This covers the current turn too, where a long task piles up file contents and command
+  output that every model call would otherwise send again. Only the request changes: the conversation keeps the
+  results, and a result shorter than the placeholder is left as is. The `llm` span records `clearedToolResults`.
 
 ## Context sections
 
@@ -163,10 +179,10 @@ The trace id is `Ask.traceId` when the asker gives one (web does, to tell the UI
 | Span | Parent | Attributes |
 | --- | --- | --- |
 | `turn` | none (root); a sub-agent's under the `tool` span that runs it | `conversationId`, `question` (first 200 chars), `questionHash` (`Trace.QUESTION_HASH`, from `Trace.questionHash`), `model`, `stop`, `steps`, `toolCalls`, `promptTokens`, `completionTokens` (whole turn), `saved`; `agent`, `origin` for a sub-agent |
-| `llm` | `turn` | `step`, `messages`, `model`, `finishReason`, `promptTokens`, `completionTokens`, `toolCalls`, `firstTokenMicros` (first text or tool-call piece) |
+| `llm` | `turn` | `step`, `messages`, `clearedToolResults` (when any), `model`, `finishReason`, `promptTokens`, `completionTokens`, `toolCalls`, `firstTokenMicros` (first text or tool-call piece) |
 | `tool` | `turn` | `tool`, `callId`, `approvalMicros` (until the tool started), `outputChars`, `truncated`, `refused` (a repeated call, or a tool a sub-agent may not use), `timedOut`, `promptTokens` / `completionTokens` (a tool's own spending). An error result is an `ERROR` span |
 | `review` | `turn` | `attempt`, `verdict` (`pass` / `fail`), `pass`, `reason`, `promptTokens`, `completionTokens`. Only when a reviewer judged (or failed) |
-| `compaction` | `turn` | `messages` (summarised), `kept`, `applied`, `model`, tokens. `ERROR` when the model gave no summary |
+| `compaction` | `turn` | `messages` (summarised), `kept`, `condensed` (the last turn kept as question and answer), `applied`, `model`, tokens. `ERROR` when the model gave no summary |
 
 A span ends `CANCELLED` when the turn was cancelled, `ERROR` when its work threw.
 

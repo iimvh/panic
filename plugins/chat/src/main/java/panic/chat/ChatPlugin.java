@@ -28,6 +28,7 @@ import panic.util.Json;
 import panic.llm.Llm;
 import panic.llm.LlmException;
 import panic.llm.Message;
+import panic.llm.Role;
 import panic.llm.ToolCall;
 import panic.llm.ToolSpec;
 import panic.llm.Usage;
@@ -101,12 +102,26 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     return null;
   }
 
-  /** Tells the model how to summarise the turns that no longer fit. */
+  /**
+   * Tells the model how to summarise the turns that no longer fit. The sections follow Claude Code's compaction
+   * prompt: the user's requests are kept word for word, so a long task does not lose what was asked.
+   */
   static final String SUMMARY_PROMPT = "You keep the memory of a conversation between a user and an assistant "
-      + "that uses tools. Write a summary of the conversation below for the assistant to continue from. Keep "
-      + "the user's goals and requests, decisions made, facts learned (names, paths, values, results of tool "
-      + "calls) and what is still open. Leave out greetings and anything not needed later. Do not invent "
-      + "anything. Answer with the summary only.";
+      + "that uses tools. Write a summary of the conversation below for the assistant to continue from, with "
+      + "these sections:\n"
+      + "1. Primary request and intent: what the user asked for, in detail.\n"
+      + "2. User messages: every message the user wrote (not tool results), word for word, in order.\n"
+      + "3. Key facts: names, file paths, commands, values and results of tool calls that are still needed.\n"
+      + "4. Work done and current state: what was changed or decided, and what was verified (and how).\n"
+      + "5. Pending tasks and the next step.\n"
+      + "Start from the summary so far when there is one, and keep its user messages. Leave out greetings and "
+      + "anything not needed later. Do not invent anything. Answer with the summary only.";
+
+  /** Heading of the user messages that {@link #verbatim} adds when the summary left them out. */
+  static final String VERBATIM_HEADING = "User messages (word for word)";
+
+  /** What a cleared tool result says instead (Anthropic's context editing replaces them with a placeholder too). */
+  static final String CLEARED = "[tool result cleared to save context (%d chars); call the tool again if you need it]";
 
   /** Heading of the summary in the system prompt. */
   static final String SUMMARY_HEADING = "Summary of the earlier conversation";
@@ -116,6 +131,75 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
 
   /** Characters of the question (and of a review's reason) kept on a span: enough to recognise it. */
   private static final int SPAN_TEXT_CHARS = 200;
+
+  /**
+   * {@code summary} with every user message of {@code turns} it does not quote added word for word under
+   * {@link #VERBATIM_HEADING}: the model is asked to keep them, and this makes sure it did. A reviewer's
+   * feedback is the harness speaking, not the user, and is left out.
+   */
+  static String verbatim(String summary, List<Message> turns) {
+    StringBuilder missing = new StringBuilder();
+    for (Message m : turns) {
+      if (m.role() != Role.USER || m.content().startsWith(Chat.REVIEW_FEEDBACK_PREFIX)) continue;
+      String text = clip(m.content().strip());
+      if (text.isEmpty() || summary.contains(text)) continue;
+      missing.append("- ").append(text.replace("\n", "\n  ")).append('\n');
+    }
+    if (missing.isEmpty()) return summary;
+    return summary + "\n\n" + VERBATIM_HEADING + ":\n" + missing.toString().stripTrailing();
+  }
+
+  /**
+   * The last turn of {@code turns} reduced to its question and its final answer (no tool calls, which the summary
+   * covers); empty when it has no answer in words.
+   */
+  static List<Message> condensed(List<Message> turns) {
+    int start = -1;
+    for (int i = turns.size() - 1; i >= 0; i--) {
+      if (turns.get(i).role() == Role.USER) {
+        start = i;
+        break;
+      }
+    }
+    if (start < 0) return List.of();
+    Message answer = null;
+    for (int i = turns.size() - 1; i > start; i--) {
+      Message m = turns.get(i);
+      if (m.role() == Role.ASSISTANT && m.toolCalls().isEmpty() && !m.content().isBlank()) {
+        answer = m;
+        break;
+      }
+    }
+    return answer == null ? List.of() : List.of(turns.get(start), Message.assistant(answer.content()));
+  }
+
+  /**
+   * Replaces, in {@code messages}, every tool result but the newest {@code keep} by a {@link #CLEARED}
+   * placeholder, as Anthropic's {@code clear_tool_uses} context edit does: old file contents and command outputs
+   * are what fills a long turn, and the model can call the tool again. Results already short are left as they
+   * are. Returns how many were cleared.
+   */
+  static int clearToolResults(List<Message> messages, int keep) {
+    int seen = 0;
+    int count = 0;
+    for (int i = messages.size() - 1; i >= 0; i--) {
+      Message m = messages.get(i);
+      if (m.role() != Role.TOOL) continue;
+      if (++seen <= keep) continue;
+      String placeholder = String.format(java.util.Locale.ROOT, CLEARED, m.content().length());
+      if (m.content().length() <= placeholder.length()) continue;
+      messages.set(i, Message.tool(m.toolCallId(), placeholder));
+      count++;
+    }
+    return count;
+  }
+
+  static String clip(String text) {
+    if (text.length() <= SUMMARY_MESSAGE_CHARS) return text;
+    return text.substring(0, SUMMARY_MESSAGE_CHARS) + " … [" + (text.length() - SUMMARY_MESSAGE_CHARS)
+        + " chars cut]";
+  }
+
 
   /** One question, from the user's message to the bot's answer. */
   private static final class Turn {
@@ -296,6 +380,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
      */
     private Completion callModel(ChatRequest request) {
       OpenSpan call = span.child("llm").attr("step", steps).attr("messages", request.messages().size());
+      if (cleared > 0) call.attr("clearedToolResults", cleared);
       long[] first = {-1};
       Runnable mark = () -> {
         if (first[0] < 0) first[0] = call.elapsedMicros();
@@ -393,9 +478,18 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       if (system != null) messages.add(system);
       messages.addAll(fit(system, specs, 1, cfg.maxHistory()).kept());
       messages.addAll(added);
+      cleared = 0;
+      if (cfg.clearToolResultsAt() > 0) {
+        long estimate = tokens.estimate(messages) + (long) tokens.estimateTools(specs);
+        if (estimate > cfg.clearToolResultsAt()) cleared = clearToolResults(messages, cfg.keepToolResults());
+      }
       ChatRequest request = ChatRequest.of(messages);
       return specs.isEmpty() ? request : request.withTools(specs, null);
     }
+
+    /** Tool results the last request sent as placeholders (for the {@code llm} span). */
+    private int cleared;
+
 
     /**
      * The earlier turns that fit {@code share} of what the budget leaves after the system message, the tools
@@ -430,11 +524,15 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         fail(s, e);
         throw e;
       }
-      boolean applied = next != null && conversation.compact(target.dropped(), next);
+      if (next != null) next = verbatim(next, target.dropped());
+      // never start from nothing: when not even the last turn fits, keep its question and answer
+      List<Message> kept = target.kept().isEmpty() ? condensed(target.dropped()) : List.of();
+      boolean applied = next != null && conversation.compact(target.dropped(), next, kept);
       if (applied) {
         summary = next;
-        history = target.kept();
+        history = target.kept().isEmpty() ? kept : target.kept();
       }
+      s.attr("condensed", !kept.isEmpty());
       s.attr("applied", applied);
       if (next == null) s.fail("no summary; the turns are only left out of this request");
       else s.end();
@@ -490,11 +588,6 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       return out.toString();
     }
 
-    private static String clip(String text) {
-      if (text.length() <= SUMMARY_MESSAGE_CHARS) return text;
-      return text.substring(0, SUMMARY_MESSAGE_CHARS) + " … [" + (text.length() - SUMMARY_MESSAGE_CHARS)
-          + " chars cut]";
-    }
 
     /** The configured prompt followed by the sections contributed through {@link Chat#CONTEXT}. */
     private String prompt() {

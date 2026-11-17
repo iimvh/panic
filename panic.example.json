@@ -12,10 +12,12 @@
     "maxHistory": 40,
     "tools": true,
     "maxSteps": 25,
-    "maxTokens": 0,
+    "maxTokens": 400000,
     "toolTimeoutSeconds": 60,
     "contextTokens": 32000,
     "compact": true,
+    "clearToolResultsAt": 16000,
+    "keepToolResults": 3,
     "maxReviews": 1,
     "parallelTools": 1
   },

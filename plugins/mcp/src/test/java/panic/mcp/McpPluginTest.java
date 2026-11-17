@@ -318,9 +318,11 @@ class McpPluginTest {
       return null;
     });
     run("mcp__fake__review", "\"x = 1\" naming and   style");
-    assertEquals(List.of("Review: x = 1 | focus: naming and style"), asked, "quotes group, the last takes the rest");
+    assertEquals(List.of("Review: x = 1 | focus: naming and   style"), asked, "quotes group, the last takes the rest");
     run("mcp__fake__review", "y");
     assertEquals("Review: y | focus: everything", asked.get(1));
+    run("mcp__fake__review", "\"a b\"");
+    assertEquals("Review: a b | focus: everything", asked.get(2), "one quoted value stays one argument");
     UsageException missing = assertThrows(UsageException.class, () -> run("mcp__fake__review", ""));
     assertTrue(missing.usage().contains("mcp__fake__review <code> [focus]"), missing.usage());
     assertThrows(UsageException.class, () -> run("mcp__fake__summary_notes", "extra"));

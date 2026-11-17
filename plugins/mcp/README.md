@@ -92,7 +92,7 @@ unknown `type` or `risk`, no `command` for stdio, no http(s) `url` for http or s
 - **Prompts** (`McpPrompts`): templates a server offers for the user to start from. As Claude Code's slash commands
   `/mcp__<server>__<prompt> arg1 arg2`, each prompt becomes the command `mcp__<server>__<prompt>` (lowercase, other
   characters `_`). Values go to the prompt's arguments in the order it declares them; quotes group words and the
-  last argument takes the rest of the line; a required one that is missing shows the usage. The command gets the
+  last argument takes the rest of the line as typed; a required one that is missing shows the usage. The command gets the
   prompt (`prompts/get`) and runs the chat's `ask` command with its text in the same session, so the chat gets it
   as if the user had typed it. A prompt of several messages is sent as one text, each message headed by its role.
   Without a chat the text is printed. `notifications/prompts/list_changed` lists them again, keeping the commands

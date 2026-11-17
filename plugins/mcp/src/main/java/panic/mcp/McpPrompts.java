@@ -21,7 +21,8 @@ import panic.util.Json;
  * The prompts of one MCP server, as commands: Claude Code turns each into the slash command
  * {@code /mcp__<server>__<prompt> arg1 arg2}, and so does this. Running one asks the server for the prompt
  * ({@code prompts/get} with the arguments by position, in the order the prompt declares them; quotes group words,
- * and the last argument takes the rest of the line), then sends its text to the chat as if the user had typed it,
+ * and the last argument takes the rest of the line as typed), then sends its text to the chat as if the user had
+ * typed it,
  * through the {@code ask} command of the same session. Without a chat, the text is printed.
  *
  * The commands live in the server's sub-plugin, so they go with it. A list that changes
@@ -86,7 +87,7 @@ final class McpPrompts {
       next.forEach((command, p) -> {
         usages.add(usage(command, p) + describe(p));
         if (registered.containsKey(command)) return;
-        Disposable d = Commands.command(ctx, command + " [args...]", description(p), call -> run(command, p, call));
+        Disposable d = Commands.command(ctx, spec(command, p), description(p), call -> run(command, p, call));
         registered.put(command, new Registered(p, d));
       });
     }
@@ -101,6 +102,18 @@ final class McpPrompts {
       registered.clear();
     }
     old.forEach(Disposable::dispose);
+  }
+
+  /**
+   * The command's spec: one optional parameter per argument of the prompt, {@code a1} to {@code aN}, the last taking
+   * the rest of the line. The command system splits the line (quotes group words); which ones are required is
+   * checked here, so the usage can name them.
+   */
+  static String spec(String command, JsonNode prompt) {
+    int n = prompt.path("arguments").size();
+    StringBuilder spec = new StringBuilder(command);
+    for (int i = 1; i <= n; i++) spec.append(" [a").append(i).append(i == n ? "...]" : "]");
+    return spec.toString();
   }
 
   private static String usage(String command, JsonNode prompt) {
@@ -128,7 +141,7 @@ final class McpPrompts {
 
   private void run(String command, JsonNode prompt, Call call) {
     String usage = usage(command, prompt);
-    ObjectNode arguments = arguments(prompt, call.argOr("args", ""), usage);
+    ObjectNode arguments = arguments(prompt, call, usage);
     ObjectNode params = Json.object().put("name", prompt.path("name").asText());
     params.set("arguments", arguments);
     JsonNode result;
@@ -147,56 +160,21 @@ final class McpPrompts {
     if (!Commands.run(ctx, ASK, text, call.session())) call.out().println(text);
   }
 
-  /**
-   * The values typed after the command, given to the prompt's arguments in order: quotes group words, and the last
-   * argument takes what is left. A required argument without a value is a {@link UsageException}.
-   */
-  static ObjectNode arguments(JsonNode prompt, String line, String usage) {
-    List<JsonNode> declared = new ArrayList<>();
-    prompt.path("arguments").forEach(declared::add);
-    List<String> words = words(line);
-    if (declared.isEmpty() && !words.isEmpty()) throw new UsageException("this prompt takes no arguments", usage);
+  /** The values of {@code a1}..{@code aN} by the prompt's argument names; a missing required one is a usage error. */
+  private static ObjectNode arguments(JsonNode prompt, Call call, String usage) {
     ObjectNode args = Json.object();
-    for (int i = 0; i < declared.size(); i++) {
-      String name = declared.get(i).path("name").asText();
-      String value = i >= words.size() ? null
-          : i == declared.size() - 1 ? String.join(" ", words.subList(i, words.size())) : words.get(i);
-      if (value == null) {
-        if (declared.get(i).path("required").asBoolean(false)) throw new UsageException("missing " + name, usage);
+    int i = 0;
+    for (JsonNode a : prompt.path("arguments")) {
+      i++;
+      String name = a.path("name").asText();
+      String value = call.arg("a" + i);
+      if (value == null || value.isEmpty()) {
+        if (a.path("required").asBoolean(false)) throw new UsageException("missing " + name, usage);
         continue;
       }
       args.put(name, value);
     }
     return args;
-  }
-
-  /** Splits on whitespace; {@code "..."} and {@code '...'} keep words together. */
-  static List<String> words(String line) {
-    List<String> words = new ArrayList<>();
-    StringBuilder word = new StringBuilder();
-    char quote = 0;
-    boolean inWord = false;
-    for (char c : line.strip().toCharArray()) {
-      if (quote != 0) {
-        if (c == quote) {
-          quote = 0;
-        } else {
-          word.append(c);
-        }
-      } else if (c == '"' || c == '\'') {
-        quote = c;
-        inWord = true;
-      } else if (Character.isWhitespace(c)) {
-        if (inWord) words.add(word.toString());
-        word.setLength(0);
-        inWord = false;
-      } else {
-        word.append(c);
-        inWord = true;
-      }
-    }
-    if (inWord) words.add(word.toString());
-    return words;
   }
 
   /**

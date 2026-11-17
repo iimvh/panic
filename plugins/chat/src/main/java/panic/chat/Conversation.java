@@ -7,8 +7,9 @@ import panic.llm.Message;
 import panic.llm.Role;
 
 /**
- * The message history of one conversation (no system prompt: that belongs to the chat config), and the
- * summary of the older messages that compaction replaced. Thread-safe.
+ * The message history of one conversation (no system prompt: that belongs to the chat config), the summary of the
+ * older messages that compaction replaced, and its title: the first question, fixed when it is asked, so neither
+ * compaction nor later questions change what the conversation is called. Thread-safe.
  *
  * Every change is passed to its {@link Journal} while the lock is held, so the stored copy sees changes in the
  * same order as readers do.
@@ -26,6 +27,10 @@ public final class Conversation {
   interface Journal {
     Journal NONE = new Journal() {
       @Override
+      public void title(String title) {
+      }
+
+      @Override
       public void append(List<Message> exchange) {
       }
 
@@ -41,6 +46,9 @@ public final class Conversation {
       public void parent(String parent, String summary, List<Message> messages) {
       }
     };
+
+    /** The title, set before the append that gives it (the first question); kept with every later write. */
+    void title(String title);
 
     /** Messages added at the end. */
     void append(List<Message> exchange);
@@ -60,20 +68,34 @@ public final class Conversation {
   private final Journal journal;
   private String summary;
   private String parent;
+  private String title;
   private long updatedAt;
 
   public Conversation(String id) {
-    this(id, Journal.NONE, null, null, List.of(), System.currentTimeMillis());
+    this(id, Journal.NONE, null, null, null, List.of(), System.currentTimeMillis());
   }
 
-  /** A conversation restored from storage, which records its later changes in {@code journal}. */
-  Conversation(String id, Journal journal, String summary, String parent, List<Message> loaded, long updatedAt) {
+  /**
+   * A conversation restored from storage, which records its later changes in {@code journal}. A null
+   * {@code title} (a file written before titles were kept) takes the first question still in {@code loaded}.
+   */
+  Conversation(String id, Journal journal, String summary, String parent, String title, List<Message> loaded,
+      long updatedAt) {
     this.id = Objects.requireNonNull(id, "id");
     this.journal = Objects.requireNonNull(journal, "journal");
     this.summary = summary;
     this.parent = parent;
     this.updatedAt = updatedAt;
     messages.addAll(loaded);
+    this.title = title != null ? title : firstUserMessage(loaded);
+    if (this.title != null) journal.title(this.title);
+  }
+
+  private static String firstUserMessage(List<Message> messages) {
+    for (Message m : messages) {
+      if (m.role() == Role.USER) return m.content();
+    }
+    return null;
   }
 
   public String id() {
@@ -84,6 +106,10 @@ public final class Conversation {
   public synchronized void append(Message... exchange) {
     List<Message> added = List.of(exchange);
     if (added.isEmpty()) return;
+    if (title == null) {
+      title = firstUserMessage(added);
+      if (title != null) journal.title(title);
+    }
     messages.addAll(added);
     updatedAt = System.currentTimeMillis();
     journal.append(added);
@@ -109,12 +135,9 @@ public final class Conversation {
     return updatedAt;
   }
 
-  /** The first question asked, or null when there is none (it may have been compacted away). */
-  public synchronized String firstQuestion() {
-    for (Message m : messages) {
-      if (m.role() == Role.USER) return m.content();
-    }
-    return null;
+  /** The first question ever asked (kept through compaction), or null when nothing was asked yet. */
+  public synchronized String title() {
+    return title;
   }
 
   /** True when there is neither a message nor a summary. */
@@ -148,12 +171,21 @@ public final class Conversation {
    * compacted by another turn).
    */
   public synchronized boolean compact(List<Message> prefix, String summary) {
+    return compact(prefix, summary, List.of());
+  }
+
+  /**
+   * Like {@link #compact(List, String)}, but {@code replacement} takes the place of the prefix after the summary
+   * (a condensed copy of the last turn, so the history never starts empty).
+   */
+  public synchronized boolean compact(List<Message> prefix, String summary, List<Message> replacement) {
     Objects.requireNonNull(summary, "summary");
     if (prefix.isEmpty() || prefix.size() > messages.size()) return false;
     for (int i = 0; i < prefix.size(); i++) {
       if (messages.get(i) != prefix.get(i)) return false;
     }
     messages.subList(0, prefix.size()).clear();
+    messages.addAll(0, replacement);
     this.summary = summary;
     updatedAt = System.currentTimeMillis();
     journal.rewrite(summary, List.copyOf(messages));
@@ -167,6 +199,8 @@ public final class Conversation {
   public synchronized void clear() {
     messages.clear();
     summary = null;
+    title = null;
     journal.delete();
+    journal.title(null);
   }
 }

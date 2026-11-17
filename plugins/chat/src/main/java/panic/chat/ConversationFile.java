@@ -27,7 +27,8 @@ import panic.llm.ToolCall;
 
 /**
  * One conversation stored as JSON lines: optional header lines first ({@code {"parent": ...}} for a conversation
- * that works for another, {@code {"summary": ...}}), then one message per line. An exchange is appended in a single write, so a crash leaves at most a torn last line. Compaction
+ * that works for another, {@code {"title": ...}} (its first question, kept through compaction),
+ * {@code {"summary": ...}}), then one message per line. An exchange is appended in a single write, so a crash leaves at most a torn last line. Compaction
  * rewrites the file through a temporary file and an atomic rename. Loading skips lines that are not valid
  * messages and turns that would be rejected by a provider (a tool call without its result), with a warning,
  * and then rewrites the file clean so later appends start on a fresh line.
@@ -42,6 +43,8 @@ final class ConversationFile implements Conversation.Journal {
   private final Consumer<String> warn;
   /** Written as a header whenever the file is (re)created. */
   private volatile String parent;
+  /** Written as a header whenever the file is (re)created. */
+  private volatile String title;
 
   private ConversationFile(Path file, Consumer<String> warn) {
     this.file = file;
@@ -73,12 +76,12 @@ final class ConversationFile implements Conversation.Journal {
   }
 
   /** What a listing needs of a stored conversation, read without loading all of it. */
-  record Head(String parent, String firstQuestion, long updatedAt) {
+  record Head(String parent, String title, long updatedAt) {
   }
 
   /**
-   * The parent and first question of the conversation in {@code file}, reading only up to its first user
-   * message; null when it cannot be read.
+   * The parent and title of the conversation in {@code file} (the title header, or for an older file its first
+   * user message), reading only up to that; null when it cannot be read.
    */
   static Head head(Path file) {
     try (var reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
@@ -96,6 +99,8 @@ final class ConversationFile implements Conversation.Journal {
         if (node == null || !node.isObject()) continue;
         if (node.has("parent") && !node.has("role")) {
           parent = node.path("parent").asText(null);
+        } else if (node.has("title") && !node.has("role")) {
+          return new Head(parent, node.path("title").asText(""), updatedAt);
         } else if ("user".equals(node.path("role").asText())) {
           return new Head(parent, node.path("content").asText(""), updatedAt);
         }
@@ -113,10 +118,10 @@ final class ConversationFile implements Conversation.Journal {
     try {
       text = new String(Files.readAllBytes(store.file), StandardCharsets.UTF_8);
     } catch (NoSuchFileException e) {
-      return new Conversation(id, store, null, null, List.of(), System.currentTimeMillis());
+      return new Conversation(id, store, null, null, null, List.of(), System.currentTimeMillis());
     } catch (IOException e) {
       warn.accept("[conversations] cannot read " + store.file + ": " + e + "; this conversation is kept in memory only");
-      return new Conversation(id, Conversation.Journal.NONE, null, null, List.of(), System.currentTimeMillis());
+      return new Conversation(id, Conversation.Journal.NONE, null, null, null, List.of(), System.currentTimeMillis());
     }
     long updatedAt;
     try {
@@ -138,6 +143,8 @@ final class ConversationFile implements Conversation.Journal {
           summary = text(node, "summary");
         } else if (node.has("parent") && !node.has("role")) {
           store.parent = text(node, "parent");
+        } else if (node.has("title") && !node.has("role")) {
+          store.title = text(node, "title");
         } else {
           read.add(decode(node));
         }
@@ -153,7 +160,7 @@ final class ConversationFile implements Conversation.Journal {
           + " message(s) of incomplete turns");
     }
     if (dirty) store.rewrite(summary, messages);
-    return new Conversation(id, store, summary, store.parent, messages, updatedAt);
+    return new Conversation(id, store, summary, store.parent, store.title, messages, updatedAt);
   }
 
   /** The file of {@code id} in {@code dir} deleted, if there is one; false when there was none. */
@@ -171,7 +178,10 @@ final class ConversationFile implements Conversation.Journal {
   public void append(List<Message> exchange) {
     StringBuilder out = new StringBuilder();
     // a file created by this append (new, or deleted by a clear) starts with the header
-    if (parent != null && !Files.exists(file)) out.append(line(Json.object().put("parent", parent)));
+    if (!Files.exists(file)) {
+      if (parent != null) out.append(line(Json.object().put("parent", parent)));
+      if (title != null) out.append(line(Json.object().put("title", title)));
+    }
     for (Message m : exchange) out.append(line(encode(m)));
     try {
       Files.writeString(file, out, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND,
@@ -185,6 +195,7 @@ final class ConversationFile implements Conversation.Journal {
   public void rewrite(String summary, List<Message> messages) {
     StringBuilder out = new StringBuilder();
     if (parent != null) out.append(line(Json.object().put("parent", parent)));
+    if (title != null) out.append(line(Json.object().put("title", title)));
     if (summary != null) out.append(line(Json.object().put("summary", summary)));
     for (Message m : messages) out.append(line(encode(m)));
     Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
@@ -207,6 +218,12 @@ final class ConversationFile implements Conversation.Journal {
     } catch (IOException e) {
       warn.accept("[conversations] cannot delete " + file + ": " + e);
     }
+  }
+
+  /** Kept for the next (re)write: the append that sets it creates the file, or a compaction rewrites it. */
+  @Override
+  public void title(String title) {
+    this.title = title;
   }
 
   /** Rewrites the file with the new header when it exists; a file created later starts with it anyway. */

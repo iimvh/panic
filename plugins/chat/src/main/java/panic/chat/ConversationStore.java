@@ -29,7 +29,7 @@ import panic.command.Commands;
  */
 final class ConversationStore implements Conversations {
 
-  /** Characters of the first question kept as a title. */
+  /** Characters of the title (the first question) shown in listings. */
   static final int TITLE_CHARS = 80;
 
   private final Context ctx;
@@ -52,7 +52,7 @@ final class ConversationStore implements Conversations {
   public List<Info> list() {
     List<Info> out = new ArrayList<>();
     for (Entry e : entries().values()) {
-      if (e.parent() == null && !e.empty()) out.add(new Info(e.id(), title(e.firstQuestion()), e.updatedAt()));
+      if (e.parent() == null && !e.empty()) out.add(new Info(e.id(), title(e.title()), e.updatedAt()));
     }
     out.sort(Comparator.comparingLong(Info::updatedAt).reversed().thenComparing(Info::id));
     return out;
@@ -121,14 +121,14 @@ final class ConversationStore implements Conversations {
   }
 
   /** What listing and deleting know of a conversation, loaded or not. */
-  private record Entry(String id, String parent, String firstQuestion, long updatedAt, boolean empty) {
+  private record Entry(String id, String parent, String title, long updatedAt, boolean empty) {
   }
 
   /** Every conversation: the loaded ones as they are now, the others from their files. */
   private Map<String, Entry> entries() {
     Map<String, Entry> out = new HashMap<>();
     for (Conversation c : all.values()) {
-      out.put(c.id(), new Entry(c.id(), c.parent(), c.firstQuestion(), c.updatedAt(), c.isEmpty()));
+      out.put(c.id(), new Entry(c.id(), c.parent(), c.title(), c.updatedAt(), c.isEmpty()));
     }
     if (dir == null) return out;
     try (Stream<Path> files = Files.list(dir)) {
@@ -136,7 +136,7 @@ final class ConversationStore implements Conversations {
         String id = ConversationFile.idOf(f.getFileName().toString());
         if (id == null || out.containsKey(id)) return;
         ConversationFile.Head head = ConversationFile.head(f);
-        if (head != null) out.put(id, new Entry(id, head.parent(), head.firstQuestion(), head.updatedAt(), false));
+        if (head != null) out.put(id, new Entry(id, head.parent(), head.title(), head.updatedAt(), false));
       });
     } catch (IOException e) {
       warn.accept("[conversations] cannot list " + dir + ": " + e);

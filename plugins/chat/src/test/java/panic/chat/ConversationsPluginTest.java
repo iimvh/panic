@@ -327,13 +327,39 @@ class ConversationsPluginTest {
     c.append(Message.user("q2"), Message.assistant("a2"));
     assertTrue(c.compact(c.snapshot().messages().subList(0, 2), "sum"));
     String text = Files.readString(file("s~x-1"));
-    assertTrue(text.startsWith("{\"parent\":\"s\"}\n{\"summary\":\"sum\"}\n"), text);
+    assertTrue(text.startsWith("{\"parent\":\"s\"}\n{\"title\":\"q\"}\n{\"summary\":\"sum\"}\n"), text);
     c.clear();
     c.append(Message.user("again"), Message.assistant("ok"));
     assertTrue(Files.readString(file("s~x-1")).startsWith("{\"parent\":\"s\"}\n"));
     restart();
     assertEquals("s", get("s~x-1").parent());
     assertTrue(store().list().isEmpty());
+  }
+
+  @Test
+  void theTitleIsTheFirstQuestionThroughCompactionAndRestarts() throws Exception {
+    start();
+    Conversation c = get("t");
+    c.append(Message.user("build me a landing page\nwith a hero"), Message.assistant("done"));
+    c.append(Message.user("now fix the footer"), Message.assistant("ok"));
+    assertTrue(c.compact(c.snapshot().messages().subList(0, 2), "sum"));
+    assertEquals("build me a landing page\nwith a hero", c.title());
+    assertEquals(List.of("build me a landing page"), store().list().stream().map(Conversations.Info::title).toList());
+    restart();
+    assertEquals(List.of("build me a landing page"), store().list().stream().map(Conversations.Info::title).toList(),
+        "read from the header without loading the conversation");
+    assertEquals("build me a landing page\nwith a hero", get("t").title());
+    get("t").clear();
+    get("t").append(Message.user("a new start"), Message.assistant("ok"));
+    assertEquals("a new start", get("t").title());
+  }
+
+  @Test
+  void anOlderFileWithoutATitleTakesItsFirstQuestion() throws Exception {
+    start();
+    Files.writeString(file("old"), "{\"role\":\"user\",\"content\":\"first\"}\n{\"role\":\"assistant\",\"content\":\"a\"}\n");
+    assertEquals(List.of("first"), store().list().stream().map(Conversations.Info::title).toList());
+    assertEquals("first", get("old").title());
   }
 
   @Test

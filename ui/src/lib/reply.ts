@@ -30,7 +30,7 @@ type Timeline = { text: string; parts?: Part[] };
 export type Part =
 	| { kind: 'text'; text: string }
 	| { kind: 'tool'; step: ToolStep }
-	| { kind: 'review'; attempt: number; pass: boolean; reason: string }
+	| { kind: 'review'; attempt: number; pass: boolean; reason: string; error?: string }
 	| { kind: 'error'; text: string };
 
 /** A tool call waiting for the user's approval, as the `approve` server-sent event describes it. */
@@ -240,10 +240,18 @@ export function size(text: string): string {
 	return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`;
 }
 
-/** A reviewer's verdict on the answer so far; a rejection is followed by another attempt. */
+/**
+ * A reviewer's verdict on the answer so far; a rejection is followed by another attempt. A reviewer that failed
+ * sends `error` instead: the answer stands, unchecked, and the part says so.
+ */
 export function review(m: Message, d: Record<string, unknown>) {
 	m.parts ??= [];
-	m.parts.push({ kind: 'review', attempt: Number(d.attempt ?? 0), pass: d.pass === true, reason: String(d.reason ?? '') });
+	const attempt = Number(d.attempt ?? 0);
+	if (typeof d.error === 'string') {
+		m.parts.push({ kind: 'review', attempt, pass: true, reason: '', error: d.error });
+		return;
+	}
+	m.parts.push({ kind: 'review', attempt, pass: d.pass === true, reason: String(d.reason ?? '') });
 }
 
 /**

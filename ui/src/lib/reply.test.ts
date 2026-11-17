@@ -39,6 +39,13 @@ describe('timeline', () => {
 		expect(m.text).toBe('Let me look.Done.');
 	});
 
+	it('keeps a failed review apart from a verdict', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '' };
+		review(m, { attempt: 1, error: 'the reviewer gave no verdict: maybe' });
+		expect(m.parts?.[0]).toEqual({ kind: 'review', attempt: 1, pass: true, reason: '', error: 'the reviewer gave no verdict: maybe' });
+		expect(activity(m)).toBe('Thinking…');
+	});
+
 	it('puts a review between the attempts it judged', () => {
 		const m: Message = { id: 1, role: 'assistant', text: '' };
 		appendText(m, 'first');

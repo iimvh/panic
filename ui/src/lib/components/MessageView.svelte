@@ -56,8 +56,12 @@
 				{:else if part.kind === 'tool'}
 					<ToolRow step={part.step} />
 				{:else if part.kind === 'review'}
-					<div class="review" class:rejected={!part.pass}>
-						{part.pass ? 'Review passed' : `Review rejected the answer: ${part.reason}`}
+					<div class="review" class:rejected={!part.pass || part.error !== undefined}>
+						{part.error !== undefined
+							? `Review failed: ${part.error}`
+							: part.pass
+								? 'Review passed'
+								: `Review rejected the answer: ${part.reason}`}
 					</div>
 				{:else}
 					<p class="err">{part.text}</p>

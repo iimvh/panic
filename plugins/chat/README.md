@@ -93,7 +93,7 @@ at the same time too; front-ends answer them one by one.
 
 A tool's own token spending (`ToolResult.usage`, a sub-agent's) is added to the turn's `usage` and counts
 toward `maxTokens`. While a tool runs, what it reports (`ToolContext.progress`) reaches the asker: a sub-agent's
-text through `Ask.onAgentDelta`, its tool calls through `Ask.onStep` as nested steps (`Step.parentCallId`,
+text and reasoning through `Ask.onAgentDelta` (`AgentDelta.reasoning`), its tool calls through `Ask.onStep` as nested steps (`Step.parentCallId`,
 `Step.agent`). Nested steps are not emitted on `Chat.STEP`: the sub-agent's own turn emits them.
 
 ## Delegated asks (sub-agents)
@@ -205,7 +205,7 @@ The trace id is `Ask.traceId` when the asker gives one (web does, to tell the UI
 | Span | Parent | Attributes |
 | --- | --- | --- |
 | `turn` | none (root); a sub-agent's under the `tool` span that runs it | `conversationId`, `question` (first 200 chars), `prompt` (a [slash prompt](#slash-prompts)'s name), `questionHash` (`Trace.QUESTION_HASH`, from `Trace.questionHash`), `model`, `stop`, `steps`, `toolCalls`, `promptTokens`, `completionTokens` (whole turn), `saved`; `agent`, `origin` for a sub-agent |
-| `llm` | `turn` | `step`, `messages`, `clearedToolResults` (when any), `model`, `finishReason`, `promptTokens`, `completionTokens`, `toolCalls`, `firstTokenMicros` (first text or tool-call piece) |
+| `llm` | `turn` | `step`, `messages`, `clearedToolResults` (when any), `model`, `finishReason`, `promptTokens`, `completionTokens`, `toolCalls`, `firstTokenMicros` (first text, reasoning or tool-call piece), and when the model thought: `firstReasoningMicros`, `reasoningChars`, `reasoningTokens` (sizes only, never the text) |
 | `tool` | `turn` | `tool`, `callId`, `approvalMicros` (until the tool started), `outputChars`, `truncated`, `refused` (a repeated call, or a tool a sub-agent may not use), `timedOut`, `promptTokens` / `completionTokens` (a tool's own spending). An error result is an `ERROR` span |
 | `stop` | `turn` | `attempt`, `checks`, `blocked`, `names`, `reason` (the first block's). `ERROR` when a check failed. Only when a check answered |
 | `review` | `turn` | `attempt`, `verdict` (`pass` / `fail`), `pass`, `reason`, `promptTokens`, `completionTokens`. Only when a reviewer judged (or failed) |
@@ -220,7 +220,7 @@ A span ends `CANCELLED` when the turn was cancelled, `ERROR` when its work threw
 | `Conversations.KEY` | service `Conversations` | `get(id)` returns the history of a session (created on first use); `list()` → `Info(id, title, updatedAt)`, newest first; `delete(id)` → whether anything was deleted |
 | `Conversations.LIST`, `Conversations.HISTORY`, `Conversations.REMOVE` | hooks | What front-ends ask instead of requiring the service: `ListQuery` → `Listing(conversations)`, `HistoryQuery(id)` → `History(messages)`, `RemoveQuery(id)` → `Removal(deleted)`. Answered by the store while it runs; no answer means no store |
 | `Conversations.DELETED` | event `Deleted(id)` | A conversation was deleted (one event per conversation, sub-agents' included) |
-| `Chat.ASK` | hook `Ask(conversationId, text, signal, onDelta, onStep?, onReview?, onToolDelta?, traceId?, onAgentDelta?, delegate?) → Reply(text, model, finishReason, usage, stop, steps, toolCalls, review, traceId)` | Ask the bot. Use `Chat.ask(ctx, ask)`: it is empty when no LLM is connected and rethrows the handler's own exception. `onStep` hears every tool call when it starts (`result == null`) and when it ends, a sub-agent's too (`Step.nested()`); `onReview` hears every `Reviewed` verdict (or reviewer failure, `Reviewed.failed()`); `onToolDelta` hears the pieces of a tool call while the model writes it (`ToolCallDelta`, before its step starts); `onAgentDelta` hears a sub-agent's text (`AgentDelta(parentCallId, agent, text)`). `delegate` makes it a [delegated ask](#delegated-asks-sub-agents). Callbacks run in the order things happen, one at a time |
+| `Chat.ASK` | hook `Ask(conversationId, text, signal, onDelta, onStep?, onReview?, onToolDelta?, traceId?, onAgentDelta?, delegate?, onReasoning?) → Reply(text, model, finishReason, usage, stop, steps, toolCalls, review, traceId)` | Ask the bot. Use `Chat.ask(ctx, ask)`: it is empty when no LLM is connected and rethrows the handler's own exception. `onStep` hears every tool call when it starts (`result == null`) and when it ends, a sub-agent's too (`Step.nested()`); `onReview` hears every `Reviewed` verdict (or reviewer failure, `Reviewed.failed()`); `onToolDelta` hears the pieces of a tool call while the model writes it (`ToolCallDelta`, before its step starts); `onAgentDelta` hears a sub-agent's text (`AgentDelta(parentCallId, agent, text, reasoning)`); `onReasoning` (set with `Ask.withReasoning`) hears what the model thinks before it writes, when the provider shows it (see the llm README). Reasoning is shown, never saved: the history keeps the answer only, and `Reply.usage().reasoningTokens()` counts it. `delegate` makes it a [delegated ask](#delegated-asks-sub-agents). Callbacks run in the order things happen, one at a time |
 | `Chat.REVIEW` | hook `Review(conversationId, question, turn, answer, attempt, signal) → Verdict(pass, reason, usage)` | Judges a final answer. No answer accepts it; a rejection sends `reason` back to the model |
 | `Chat.REVIEWED` | event `Reviewed(conversationId, attempt, verdict)` | Emitted after each verdict (auditing...) |
 | `Chat.TURN` | event `Turn(conversationId, question, reply, delegate?)` | Emitted after every completed exchange (logging, memory, cost tracking...) |
@@ -233,6 +233,8 @@ A span ends `CANCELLED` when the turn was cancelled, `ERROR` when its work threw
 
 `ask <text...>` (only while an LLM is connected; front-ends send plain text here). It prints each tool call as
 `[tool name args]` and the failed ones as `[tool name: error: ...]`; a sub-agent's calls are indented and named
-(`  [explore: tool name args]`). `reset` clears the session's conversation. `chats [count]` lists the
+(`  [explore: tool name args]`). What the model thinks is printed as lines starting with `│ `, closed by
+`[thought Ns]`; the closing line adds `(N thinking)` to the token count when the provider reports reasoning tokens.
+`reset` clears the session's conversation. `chats [count]` lists the
 conversations (default 20; `*` marks the session's own). `forget <id>` deletes one with its sub-agents'
 conversations.

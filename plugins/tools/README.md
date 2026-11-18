@@ -188,7 +188,7 @@ to its section restarts only it and applies from the next call.
   conversation, but are approved in `origin`; `agent` names the sub-agent (null for the main agent).
 - `traceId` / `spanId` are the caller's trace and the call's span (null when untraced), so a tool doing traced
   work of its own can nest it under the call.
-- `progress` hears `ToolProgress` (a piece of `text`, or one of the tool's own calls starting or ending) while a
+- `progress` hears `ToolProgress` (a piece of `text`, marked `reasoning` when it is what a sub-agent thinks, or one of the tool's own calls starting or ending) while a
   long tool runs. The agent loop passes it on to the asker; nobody has to listen.
 
 `ToolResult(content, isError, usage?)`: `usage` is what the tool spent on a model of its own (a sub-agent). The

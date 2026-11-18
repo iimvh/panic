@@ -86,11 +86,12 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     Commands.command(ctx, "ask <text...>", "ask the bot (plain text does the same)", call -> {
       Printer printer = new Printer(call.out());
       Chat.Ask ask = new Chat.Ask(call.session().id(), call.arg("text"), call.signal(), printer::text,
-          printer::step, printer::review);
+          printer::step, printer::review).withReasoning(printer::reasoning);
       Chat.Reply r = new Turn(ctx, cfg, llm, conversations, tokens, ask).run();
       printer.endLine();
       StringBuilder meta = new StringBuilder("[").append(r.model());
       if (r.usage().totalTokens() > 0) meta.append(" · ").append(r.usage().totalTokens()).append(" tokens");
+      if (r.usage().reasoningTokens() > 0) meta.append(" (").append(r.usage().reasoningTokens()).append(" thinking)");
       if (r.toolCalls() > 0) meta.append(" · ").append(r.toolCalls()).append(r.toolCalls() == 1 ? " tool" : " tools");
       if (!Chat.DONE.equals(r.stop())) {
         meta.append(" · stopped: ").append(r.stop());
@@ -378,12 +379,15 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
 
     /**
      * One model call, streamed to the asker, as an {@code llm} span. {@code firstTokenMicros} is when the first
-     * piece of text or of a tool call arrived: the wait the user sees.
+     * piece of text, reasoning or of a tool call arrived: the wait the user sees. {@code firstReasoningMicros},
+     * {@code reasoningChars} and {@code reasoningTokens} say how long and how much the model thought (the text itself
+     * is not kept).
      */
     private Completion callModel(ChatRequest request) {
       OpenSpan call = span.child("llm").attr("step", steps).attr("messages", request.messages().size());
       if (cleared > 0) call.attr("clearedToolResults", cleared);
       long[] first = {-1};
+      long[] firstReasoning = {-1};
       Runnable mark = () -> {
         if (first[0] < 0) first[0] = call.elapsedMicros();
       };
@@ -395,12 +399,19 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         }, d -> {
           mark.run();
           ask.onToolDelta().accept(d);
+        }, r -> {
+          mark.run();
+          if (firstReasoning[0] < 0) firstReasoning[0] = call.elapsedMicros();
+          ask.onReasoning().accept(r);
         });
       } catch (RuntimeException e) {
         fail(call, e);
         throw e;
       }
       if (first[0] >= 0) call.attr("firstTokenMicros", first[0]);
+      if (firstReasoning[0] >= 0) call.attr("firstReasoningMicros", firstReasoning[0]);
+      if (!c.reasoning().isEmpty()) call.attr("reasoningChars", c.reasoning().length());
+      if (c.usage().reasoningTokens() > 0) call.attr("reasoningTokens", c.usage().reasoningTokens());
       call.attr("model", c.model()).attr("finishReason", c.finishReason())
           .attr("promptTokens", c.usage().promptTokens()).attr("completionTokens", c.usage().completionTokens())
           .attr("toolCalls", c.toolCalls().size())
@@ -682,7 +693,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
 
     /** Synchronized: calls running in parallel add their own usage. */
     private synchronized void count(Usage u) {
-      usage = new Usage(usage.promptTokens() + u.promptTokens(), usage.completionTokens() + u.completionTokens());
+      usage = usage.plus(u);
     }
 
     /** A tool call of the model's reply, as planned before any runs: refused ({@code refusal}) or to run. */
@@ -868,7 +879,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private void progress(ToolCall call, panic.tools.ToolProgress p) {
       synchronized (callbacks) {
         if (p.isText()) {
-          ask.onAgentDelta().accept(new Chat.AgentDelta(call.id(), p.agent(), p.text()));
+          ask.onAgentDelta().accept(new Chat.AgentDelta(call.id(), p.agent(), p.text(), p.reasoning()));
         } else {
           ask.onStep().accept(new Chat.Step(ask.conversationId(), p.call(), p.result(), call.id(), p.agent()));
         }
@@ -929,14 +940,42 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
 
     private final Out out;
     private boolean midLine;
+    /** When the reasoning being printed started (System.nanoTime), -1 when none is. */
+    private long thinkingSince = -1;
 
     Printer(Out out) {
       this.out = out;
     }
 
     void text(String delta) {
+      endThinking();
       out.print(delta);
       midLine = !delta.endsWith("\n");
+    }
+
+    /** What the model thinks, as lines starting with "│ ", closed by "[thought Ns]" when it writes or acts. */
+    void reasoning(String delta) {
+      if (thinkingSince < 0) {
+        if (midLine) out.println();
+        midLine = false;
+        thinkingSince = System.nanoTime();
+        out.print("│ ");
+      } else if (!midLine) {
+        out.print("│ ");
+      }
+      String body = delta.endsWith("\n") ? delta.substring(0, delta.length() - 1) : delta;
+      out.print(body.replace("\n", "\n│ "));
+      if (body.length() < delta.length()) out.print("\n");
+      midLine = !delta.endsWith("\n");
+    }
+
+    private void endThinking() {
+      if (thinkingSince < 0) return;
+      long seconds = (System.nanoTime() - thinkingSince) / 1_000_000_000L;
+      thinkingSince = -1;
+      if (midLine) out.println();
+      midLine = false;
+      out.println("[thought " + seconds + "s]");
     }
 
     /** A sub-agent's calls are indented under the call that runs it and carry its name. */
@@ -953,6 +992,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
 
     /** Rejections only: an accepted answer needs no note. */
     void review(Chat.Reviewed r) {
+      endThinking();
       if (r.failed()) {
         endLine();
         out.println("[review failed: " + r.error() + "]");
@@ -964,6 +1004,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     }
 
     void endLine() {
+      endThinking();
       if (midLine) out.println();
       midLine = false;
     }

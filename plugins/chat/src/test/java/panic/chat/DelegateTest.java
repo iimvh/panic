@@ -204,6 +204,7 @@ class DelegateTest {
       @Override
       public ToolResult call(JsonNode args, ToolContext ctx) {
         ToolCall inner = new ToolCall("x", "look", "{}");
+        ctx.progress().accept(ToolProgress.reasoning("explore", "hmm"));
         ctx.progress().accept(ToolProgress.text("explore", "thinking"));
         ctx.progress().accept(ToolProgress.step("explore", inner, null));
         ctx.progress().accept(ToolProgress.step("explore", inner, ToolResult.ok("seen")));
@@ -220,10 +221,11 @@ class DelegateTest {
     Chat.Reply reply = Chat.ask(root, new Chat.Ask("c", "go", new CancelToken(), t -> { },
         s -> seen.add((s.nested() ? s.agent() + "/" + s.parentCallId() + " " : "") + s.call().name()
             + (s.done() ? " done" : "")),
-        null, null, "trace-2", d -> seen.add(d.agent() + "/" + d.parentCallId() + " text " + d.text()), null))
+        null, null, "trace-2", d -> seen.add(d.agent() + "/" + d.parentCallId() + (d.reasoning() ? " thinks " : " text ") + d.text()),
+        null))
         .orElseThrow();
 
-    assertEquals(List.of("helper", "explore/a text thinking", "explore/a look", "explore/a look done",
+    assertEquals(List.of("helper", "explore/a thinks hmm", "explore/a text thinking", "explore/a look", "explore/a look done",
         "helper done"), seen);
     // three model calls (the main ask is reviewed, rejected and answers once more) and the tool's own tokens
     assertEquals(new Usage(30 + 100, 15 + 50), reply.usage(), "the tool's tokens are the turn's");

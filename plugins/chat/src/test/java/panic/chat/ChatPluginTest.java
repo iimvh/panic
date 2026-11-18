@@ -271,4 +271,71 @@ class ChatPluginTest {
     fake.block = null;
     assertEquals("n=2", ask("fast", d -> { }).orElseThrow().text(), "the cancelled turn was not saved");
   }
+
+  /** Thinks "17*23\n= 391" in two pieces, then answers like {@link FakeLlm}. */
+  static final class ThinkingLlm implements Llm {
+    final FakeLlm inner = new FakeLlm("think");
+
+    @Override
+    public Provider provider() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public String model() {
+      return "think";
+    }
+
+    @Override
+    public Completion complete(ChatRequest r, Signal s) {
+      return inner.complete(r, s);
+    }
+
+    @Override
+    public Completion stream(ChatRequest r, Signal s, Consumer<String> onDelta) {
+      return inner.stream(r, s, onDelta);
+    }
+
+    @Override
+    public Completion stream(ChatRequest r, Signal s, Consumer<String> onDelta,
+        Consumer<panic.llm.ToolCallDelta> onToolDelta, Consumer<String> onReasoning) {
+      onReasoning.accept("17*23\n");
+      onReasoning.accept("= 391");
+      Completion c = inner.stream(r, s, onDelta);
+      return new Completion(c.text(), c.model(), c.finishReason(), new Usage(1, 5, 4), List.of(), "17*23\n= 391");
+    }
+  }
+
+  @Test
+  void reasoningIsShownButNeverSaved() {
+    ThinkingLlm think = new ThinkingLlm();
+    root.plugin("llm", (ctx, on) -> {
+      ctx.provide(Llm.KEY, think);
+      return null;
+    }, true);
+    root.plugin("conversations", Conversations.inMemory());
+    root.plugin("chat", new ChatPlugin(), new ChatConfig("sys", 0));
+    List<panic.trace.Span> spans = new CopyOnWriteArrayList<>();
+    root.plugin("tracing", ctx -> {
+      ctx.on(panic.trace.Trace.SPAN, spans::add);
+      return null;
+    });
+
+    List<String> thoughts = new ArrayList<>();
+    Chat.Reply reply = Chat.ask(root, new Chat.Ask("c", "17*23?", new CancelToken(), d -> { })
+        .withReasoning(thoughts::add)).orElseThrow();
+    assertEquals(List.of("17*23\n", "= 391"), thoughts);
+    assertEquals(4, reply.usage().reasoningTokens());
+    panic.trace.Span llm = spans.stream().filter(s -> s.name().equals("llm")).findFirst().orElseThrow();
+    assertEquals(11, llm.longAttr("reasoningChars", -1));
+    assertEquals(4, llm.longAttr("reasoningTokens", -1));
+    assertTrue(llm.longAttr("firstReasoningMicros", -1) >= 0);
+
+    StringBuilder out = new StringBuilder();
+    Commands.run(root, "ask", "again", new Session("c", out::append, new CancelToken()));
+    assertEquals(List.of(Message.system("sys"), Message.user("17*23?"), Message.assistant("n=2"),
+        Message.user("again")), think.inner.requests.get(1).messages(), "the history has no reasoning");
+    assertTrue(out.toString().startsWith("│ 17*23\n│ = 391\n[thought 0s]\nn=4\n"), out.toString());
+    assertTrue(out.toString().contains("(4 thinking)"), out.toString());
+  }
 }

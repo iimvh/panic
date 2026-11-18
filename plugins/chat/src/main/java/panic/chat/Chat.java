@@ -34,14 +34,16 @@ public final class Chat {
    * {@link Step#parentCallId}); {@code onReview} hears every verdict on a final answer (passed or not), before a
    * rejected answer is attempted again; {@code onToolDelta} hears the pieces of a tool call while the model
    * writes it (before {@code onStep} reports it running; nothing when the model cannot stream calls);
-   * {@code onAgentDelta} hears the text a sub-agent writes while one of this turn's tool calls runs it.
+   * {@code onAgentDelta} hears the text a sub-agent writes (and what it thinks) while one of this turn's tool
+   * calls runs it. {@code onReasoning} hears what the model thinks before it writes, when the provider shows it;
+   * it is shown, never saved.
    * {@code traceId} names the turn's trace (see {@link panic.trace.Trace}); null lets chat pick one, which
    * {@link Reply#traceId} returns. {@code delegate} is null for a user's question, set when a sub-agent asks
    * (see {@link Delegate}). The callbacks are called in the order things happen, one at a time.
    */
   public record Ask(String conversationId, String text, Signal signal, Consumer<String> onDelta,
       Consumer<Step> onStep, Consumer<Reviewed> onReview, Consumer<ToolCallDelta> onToolDelta, String traceId,
-      Consumer<AgentDelta> onAgentDelta, Delegate delegate) {
+      Consumer<AgentDelta> onAgentDelta, Delegate delegate, Consumer<String> onReasoning) {
     public Ask {
       Objects.requireNonNull(conversationId, "conversationId");
       Objects.requireNonNull(text, "text");
@@ -52,6 +54,20 @@ public final class Chat {
       if (onToolDelta == null) onToolDelta = d -> { };
       if (traceId != null && traceId.isBlank()) traceId = null;
       if (onAgentDelta == null) onAgentDelta = d -> { };
+      if (onReasoning == null) onReasoning = r -> { };
+    }
+
+    public Ask(String conversationId, String text, Signal signal, Consumer<String> onDelta,
+        Consumer<Step> onStep, Consumer<Reviewed> onReview, Consumer<ToolCallDelta> onToolDelta, String traceId,
+        Consumer<AgentDelta> onAgentDelta, Delegate delegate) {
+      this(conversationId, text, signal, onDelta, onStep, onReview, onToolDelta, traceId, onAgentDelta, delegate,
+          null);
+    }
+
+    /** This ask, with {@code onReasoning} hearing what the model thinks. */
+    public Ask withReasoning(Consumer<String> onReasoning) {
+      return new Ask(conversationId, text, signal, onDelta, onStep, onReview, onToolDelta, traceId, onAgentDelta,
+          delegate, onReasoning);
     }
 
     public Ask(String conversationId, String text, Signal signal, Consumer<String> onDelta,
@@ -110,8 +126,15 @@ public final class Chat {
     }
   }
 
-  /** A piece of text a sub-agent wrote while tool call {@code parentCallId} of this turn runs it. */
-  public record AgentDelta(String parentCallId, String agent, String text) {
+  /**
+   * A piece of text a sub-agent wrote while tool call {@code parentCallId} of this turn runs it; {@code reasoning}
+   * when it is what the sub-agent thinks rather than its answer.
+   */
+  public record AgentDelta(String parentCallId, String agent, String text, boolean reasoning) {
+
+    public AgentDelta(String parentCallId, String agent, String text) {
+      this(parentCallId, agent, text, false);
+    }
   }
 
   /**

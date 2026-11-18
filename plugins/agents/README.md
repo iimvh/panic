@@ -72,7 +72,7 @@ Profiles written with `description` only get the same prompt, so describe the pr
 - **Permissions.** `agent` is a `read` tool; each of the sub-agent's own calls passes the permission gate. Calls
   that ask are put to the user's conversation (`ToolContext.origin`), with `Tools.Approval.agent` naming the
   sub-agent, so cli and web ask the user as usual.
-- **Progress.** The sub-agent's text and tool calls reach the asker of the calling turn as `Ask.onAgentDelta` and
+- **Progress.** The sub-agent's text, reasoning (`ToolProgress.reasoning`) and tool calls reach the asker of the calling turn as `Ask.onAgentDelta` and
   nested steps (`Chat.Step.parentCallId`, `agent`). A deeper sub-agent's steps are reported under the same call.
 - **Tracing.** The sub-agent's `turn` span (with `agent` and `origin`) nests under the `tool` span of the call,
   in the same trace.

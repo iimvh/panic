@@ -156,7 +156,8 @@ public final class AgentsPlugin implements ConfigPlugin<AgentsConfig> {
             text -> tc.progress().accept(ToolProgress.text(name, text)),
             step -> tc.progress().accept(ToolProgress.step(step.nested() ? step.agent() : name, step.call(),
                 step.result())),
-            null, null, tc.traceId(), null, delegate));
+            null, null, tc.traceId(), null, delegate,
+            thought -> tc.progress().accept(ToolProgress.reasoning(name, thought))));
         if (reply.isEmpty()) return ToolResult.error(TOOL + ": no model is connected");
         Chat.Reply r = reply.get();
         String text = r.text().isBlank() ? "(no answer)" : r.text();

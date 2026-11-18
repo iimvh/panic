@@ -117,20 +117,20 @@
 		align-items: flex-end;
 		gap: 8px;
 		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: 16px;
+		border: 1.5px solid var(--edge);
+		border-radius: 12px;
 		padding: 8px 8px 8px 14px;
-		box-shadow: var(--shadow);
+		box-shadow: var(--lift);
 	}
 	form:focus-within {
-		border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+		border-color: var(--text);
+		box-shadow: var(--pop);
 	}
-	/* bypass is on: the danger shows where the next message is written. The accent (focus) is red too, so the
-	   box is tinted as well: a border colour alone would read as focus */
+	/* auto-run (bypass) is on: it shows where the next message is written, in the colour of its switch */
 	form.danger,
 	form.danger:focus-within {
-		border-color: var(--danger);
-		background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+		border-color: var(--rust);
+		box-shadow: 1.5px 2.5px 0 var(--rust);
 	}
 	textarea {
 		flex: 1;
@@ -140,6 +140,7 @@
 		background: none;
 		max-height: 220px;
 		padding: 6px 0;
+		font-size: 14px;
 		line-height: 1.5;
 	}
 	.send {
@@ -148,7 +149,7 @@
 		height: 36px;
 		justify-content: center;
 		padding: 0;
-		border-radius: 10px;
+		border-radius: 8px;
 	}
 	.below {
 		display: flex;
@@ -160,10 +161,14 @@
 	}
 	.hint {
 		flex: none;
-		font-size: 12px;
+		font-size: 11px;
 		color: var(--muted);
 	}
-	@media (max-width: 520px) {
+	/* the hint goes first when the column is narrow (small screens, the map in focus) */
+	.composer {
+		container-type: inline-size;
+	}
+	@container (max-width: 520px) {
 		.hint {
 			display: none;
 		}
@@ -177,9 +182,9 @@
 		padding: 6px;
 		list-style: none;
 		background: var(--surface);
-		border: 1px solid var(--border);
+		border: 1.5px solid var(--edge);
 		border-radius: 12px;
-		box-shadow: var(--shadow);
+		box-shadow: var(--pop);
 		max-height: 280px;
 		overflow-y: auto;
 	}

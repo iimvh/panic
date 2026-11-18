@@ -114,6 +114,7 @@
 		border: 1px solid var(--accent);
 		background: var(--accent);
 		color: var(--accent-text);
+		box-shadow: 1.5px 2.5px 0 var(--rust);
 	}
 	.continue:disabled {
 		opacity: 0.6;
@@ -128,9 +129,10 @@
 	}
 	.bubble {
 		max-width: min(80%, 640px);
-		background: var(--surface-2);
-		border: 1px solid var(--border);
-		border-radius: 18px 18px 4px 18px;
+		background: var(--surface);
+		border: 1.5px solid var(--edge);
+		box-shadow: var(--lift);
+		border-radius: 12px 12px 3px 12px;
 		padding: 8px 14px;
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
@@ -140,7 +142,7 @@
 		width: 100%;
 		overflow-wrap: anywhere;
 	}
-	.answer > :global(.reasoning + .md),
+	.answer > :global(.thought + .md),
 	.answer > :global(.tool + .md),
 	.answer > :global(details + .md),
 	.review + :global(.md) {
@@ -152,11 +154,13 @@
 		font-size: 13px;
 		color: var(--muted);
 		border-radius: 6px;
+		border: 1px solid var(--border);
 		background: var(--surface);
 	}
 	.review.rejected {
 		color: var(--text);
-		background: color-mix(in srgb, var(--warn) 14%, var(--surface));
+		border-color: var(--edge);
+		background: var(--amber);
 	}
 	.progress {
 		display: flex;

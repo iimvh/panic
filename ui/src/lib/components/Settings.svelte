@@ -126,8 +126,8 @@
 	.backdrop {
 		position: fixed;
 		inset: 0;
-		background: rgb(0 0 0 / 0.3);
-		z-index: 10;
+		background: rgb(29 27 24 / 0.3);
+		z-index: 30;
 	}
 	.panel {
 		position: fixed;
@@ -135,14 +135,13 @@
 		right: 0;
 		bottom: 0;
 		width: min(460px, 100%);
-		z-index: 11;
+		z-index: 31;
 		display: flex;
 		flex-direction: column;
 		gap: 18px;
 		padding: 16px;
 		background: var(--surface);
-		border-left: 1px solid var(--border);
-		box-shadow: var(--shadow);
+		border-left: 1.5px solid var(--edge);
 		overflow-y: auto;
 	}
 	header,

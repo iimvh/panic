@@ -14,7 +14,13 @@ export type ToolStep = {
 	draft?: number;
 	/** When this call runs a sub-agent: what it writes and the tools it calls, as they happen. */
 	agent?: SubAgent;
+	/** When it started running and when it ended, by this page's clock (ms); unset for calls loaded from history. */
+	startedAt?: number;
+	endedAt?: number;
 };
+
+/** Tokens of a finished answer, from the `done` event. */
+export type Usage = { promptTokens: number; completionTokens: number; reasoningTokens: number };
 
 /** A sub-agent's work under the call that runs it (`agent_delta` and `tool` events with `parent`). */
 export type SubAgent = { name: string; text: string; parts: Part[] };
@@ -150,6 +156,20 @@ export function endReasoning(t: Timeline, now: number) {
 	for (const p of t.parts ?? []) if (p.kind === 'reasoning' && p.endedAt === undefined) p.endedAt = now;
 }
 
+/**
+ * The end of a thought, as shown while it streams: its last `lines` non-empty lines, at most `maxChars` characters
+ * (the start is cut, marked with "…"). One function for the chat and the map, so both show the same words.
+ */
+export function thoughtTail(text: string, lines: number, maxChars: number): string {
+	const kept = text
+		.split('\n')
+		.map((l) => l.trimEnd())
+		.filter((l) => l.trim())
+		.slice(-lines)
+		.join('\n');
+	return kept.length > maxChars ? `…${kept.slice(kept.length - maxChars + 1).trimStart()}` : kept;
+}
+
 /** "Thinking · 4s" while it lasts, "Thought for 4s" after; no time when it took under a second (or was replayed). */
 export function reasoningLabel(p: Reasoning, now: number): string {
 	const ms = (p.endedAt ?? now) - p.startedAt;
@@ -202,7 +222,7 @@ export function toolDelta(m: Message, d: Record<string, unknown>) {
  * place of its draft (same id, else the first draft left), so it stays where the model wrote it. A sub-agent's
  * call (`parent` set) goes into the timeline of the call that runs that sub-agent.
  */
-export function toolStep(m: Message, d: Record<string, unknown>) {
+export function toolStep(m: Message, d: Record<string, unknown>, now?: number) {
 	const step: ToolStep = {
 		id: String(d.id ?? ''),
 		name: String(d.name ?? ''),
@@ -211,13 +231,13 @@ export function toolStep(m: Message, d: Record<string, unknown>) {
 		content: d.content === undefined ? undefined : String(d.content)
 	};
 	const into = d.parent ? subAgent(m, String(d.parent), d.agent) : m;
-	if (into) upsertStep(into, step);
+	if (into) upsertStep(into, step, now);
 	if (step.status !== 'running') clearApproval(m, (a) => a.callId === step.id);
 	if (step.status !== 'running' && step.name === EXIT_PLAN_TOOL && !d.parent) m.plan = undefined;
 	if (step.status !== 'running' && step.name === ASK_USER_TOOL && !d.parent) m.question = undefined;
 }
 
-function upsertStep(t: Timeline, step: ToolStep) {
+function upsertStep(t: Timeline, step: ToolStep, now?: number) {
 	t.parts ??= [];
 	const find = (match: (s: ToolStep) => boolean) => t.parts!.findIndex((p) => p.kind === 'tool' && match(p.step));
 	let i: number;
@@ -229,6 +249,10 @@ function upsertStep(t: Timeline, step: ToolStep) {
 	}
 	const old = i >= 0 ? t.parts[i] : undefined;
 	if (old?.kind === 'tool' && old.step.agent) step.agent = old.step.agent; // the sub-agent's work stays
+	if (now !== undefined) {
+		step.startedAt = step.status === 'running' ? now : old?.kind === 'tool' ? old.step.startedAt : undefined;
+		if (step.status !== 'running') step.endedAt = now;
+	}
 	if (i >= 0) t.parts[i] = { kind: 'tool', step };
 	else t.parts.push({ kind: 'tool', step });
 }
@@ -403,13 +427,14 @@ export function createAnswer(
 				// a resumed answer started before this page: take the server's time
 				if (question && typeof d.startedAt === 'number') reply.startedAt = d.startedAt;
 			} else if (event === 'tool_delta') toolDelta(reply, d);
-			else if (event === 'tool') toolStep(reply, d);
+			else if (event === 'tool') toolStep(reply, d, clock());
 			else if (event === 'review') review(reply, d);
 			else if (event === 'approve') askApproval(reply, d);
 			else if (event === 'plan') askPlan(reply, d);
 			else if (event === 'question') askUser(reply, d);
 			else if (event === 'done') {
 				reply.meta = meta(d);
+				reply.usage = usage(d);
 				if (typeof d.stop === 'string') reply.stop = d.stop;
 			}
 			else if (event === 'unavailable') failAnswer(reply, 'No LLM is connected. Open Settings to pick a connected provider.');
@@ -419,6 +444,7 @@ export function createAnswer(
 		seq: () => seq,
 		ended: () => ended,
 		finish() {
+			if (reply.startedAt !== undefined) reply.endedAt = clock();
 			thoughtDone();
 			text$.flush();
 			flushAgents();
@@ -500,6 +526,13 @@ export const CONTINUE_TEXT = 'Continue where you stopped.';
  */
 export function canContinue(m: Message): boolean {
 	return m.role === 'assistant' && !m.streaming && (m.stop === 'max_steps' || m.stop === 'budget');
+}
+
+/** The `usage` of a `done` event; undefined when it has none. */
+export function usage(d: Record<string, unknown>): Usage | undefined {
+	const u = d.usage as Partial<Usage> | undefined;
+	if (!u || typeof u !== 'object') return undefined;
+	return { promptTokens: u.promptTokens ?? 0, completionTokens: u.completionTokens ?? 0, reasoningTokens: u.reasoningTokens ?? 0 };
 }
 
 export function meta(d: Record<string, unknown>): string {

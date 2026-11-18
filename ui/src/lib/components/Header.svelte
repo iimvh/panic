@@ -1,7 +1,11 @@
 <script lang="ts">
 	import { chat } from '$lib/chat.svelte';
+	import { theme } from '$lib/theme.svelte';
 
 	let { onsettings, onmenu }: { onsettings: () => void; onmenu: () => void } = $props();
+
+	const THEME = { auto: 'system', light: 'light', dark: 'dark' } as const;
+	const next = $derived(theme.pref === 'auto' ? 'light' : theme.pref === 'light' ? 'dark' : 'auto');
 
 	const info = $derived(chat.state);
 	const label = $derived(
@@ -16,7 +20,7 @@
 		>
 	</button>
 	<div class="brand">
-		<img src="/favicon.svg" alt="" width="24" height="24" />
+		<img src="/panic.png" alt="" width="30" height="30" />
 		<span>Panic</span>
 	</div>
 	<button class="status" onclick={onsettings} title="Provider and model">
@@ -25,6 +29,22 @@
 	</button>
 	<div class="actions">
 		<button class="btn" onclick={() => chat.newChat()} disabled={!!chat.offline}>New chat</button>
+		<button
+			class="btn icon"
+			onclick={() => theme.cycle()}
+			aria-label="Theme: {THEME[theme.pref]}"
+			title="Theme: {THEME[theme.pref]} (click for {THEME[next]})"
+		>
+			<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+				{#if theme.pref === 'light'}
+					<circle cx="12" cy="12" r="4" /><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4" />
+				{:else if theme.pref === 'dark'}
+					<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z" />
+				{:else}
+					<circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16Z" fill="currentColor" />
+				{/if}
+			</svg>
+		</button>
 		<button class="btn icon" onclick={onsettings} aria-label="Settings">
 			<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
 				><path
@@ -52,23 +72,25 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		font-weight: 650;
-		letter-spacing: -0.01em;
+		font-weight: 800;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		font-size: 13px;
 	}
 	.status {
 		display: flex;
 		align-items: center;
 		gap: 8px;
 		min-width: 0;
-		border: 1px solid transparent;
-		background: none;
+		border: 1px solid var(--border);
+		background: var(--bg);
 		border-radius: 999px;
-		padding: 4px 10px;
+		padding: 2px 10px;
 		color: var(--muted);
-		font-size: 13px;
+		font-size: 12px;
 	}
 	.status:hover {
-		border-color: var(--border);
+		border-color: var(--edge);
 		background: var(--surface-2);
 	}
 	.label {

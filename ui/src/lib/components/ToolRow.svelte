@@ -46,7 +46,7 @@
 		<div class="work">
 			{#each agent.parts as part, i (i)}
 				{#if part.kind === 'reasoning'}
-					<ReasoningPart {part} agent={agent.name} />
+					<ReasoningPart {part} agent={agent.name} expand={false} />
 				{:else if part.kind === 'text'}
 					<TextPart text={part.text} live={working && i === agent.parts.length - 1} />
 				{:else if part.kind === 'tool'}
@@ -71,12 +71,18 @@
 		margin: 4px 0;
 		font: 12px var(--mono);
 		color: var(--muted);
-		border-left: 2px solid var(--border);
-		padding-left: 8px;
-	}
-	.tool:hover,
-	.tool.selected {
+		border: 1px solid var(--border);
+		border-left: 4px solid var(--green);
+		border-radius: 6px;
+		padding: 3px 8px;
 		background: var(--surface);
+	}
+	.tool:hover {
+		border-color: var(--edge);
+	}
+	.tool.selected {
+		border-color: var(--text);
+		box-shadow: var(--lift);
 	}
 	.tool:focus-visible {
 		outline: 2px solid var(--accent);
@@ -84,6 +90,13 @@
 	}
 	.tool .name {
 		color: var(--text);
+		font-weight: 700;
+	}
+	.tool .status {
+		flex: none;
+		font-size: 10.5px;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
 	}
 	.tool .args {
 		flex: 1;
@@ -98,10 +111,10 @@
 	}
 	.tool.drafting {
 		border-left-style: dashed;
-		border-left-color: var(--accent);
+		border-left-color: var(--amber);
 	}
 	.tool.running {
-		border-left-color: var(--accent);
+		border-left-color: var(--rust);
 	}
 	.tool.error {
 		border-left-color: var(--danger);

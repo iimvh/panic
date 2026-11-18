@@ -111,11 +111,12 @@
 <style>
 	.question {
 		margin: 0 0 8px;
-		border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+		border: 1.5px solid var(--text);
+		border-top: 6px solid var(--violet);
 		border-radius: var(--radius);
 		background: var(--surface);
 		padding: 10px 12px;
-		box-shadow: var(--shadow);
+		box-shadow: var(--pop);
 	}
 	fieldset {
 		border: none;

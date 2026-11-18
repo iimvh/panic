@@ -1,6 +1,6 @@
 import { ApiError, deleteConversation, events, follow, getConversations, getHistory, getMode, getPermissions, getState, getWorkspaces, postAnswer, postApproval, postPlan, postStop, putSettings, quoteArg, runCommand, stream, type Mode, type Permissions, type State } from './api';
 import { without, type ConversationInfo, type Workspaces } from './conversations';
-import { CONTINUE_TEXT, askApproval, askPlan, askUser, clearApproval, createAnswer, duration, failAnswer, fromHistory, type Approval, type Part, type PlanProposal, type Questions } from './reply';
+import { CONTINUE_TEXT, askApproval, askPlan, askUser, clearApproval, createAnswer, duration, failAnswer, fromHistory, type Approval, type Part, type PlanProposal, type Questions, type Usage } from './reply';
 import { newSessionId, sessionId, setSessionId } from './session';
 
 export type Message = {
@@ -13,6 +13,10 @@ export type Message = {
 	parts?: Part[];
 	/** When the answer was asked (ms since epoch), for the elapsed time while it streams. */
 	startedAt?: number;
+	/** When its stream ended (this page's clock), for the time it took. */
+	endedAt?: number;
+	/** Tokens it used, from the `done` event (assistant only). */
+	usage?: Usage;
 	/** A tool call waiting for the user to allow or deny it. */
 	approval?: Approval;
 	/** More questions, asked while `approval` is shown (calls running in parallel); shown next, in order. */

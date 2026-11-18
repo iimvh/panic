@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from './chat.svelte';
-import { canContinue, findStep, shellCommand, activity, agentText, appendReasoning, appendText, reasoningLabel, clearApproval, createAnswer, askApproval, askPlan, askUser, ASK_USER_TOOL, EXIT_PLAN_TOOL, createBatcher, duration, endDrafts, fromHistory, meta, review, size, toolDelta, toolStep, type Part } from './reply';
+import { canContinue, findStep, shellCommand, activity, agentText, appendReasoning, appendText, reasoningLabel, clearApproval, createAnswer, askApproval, askPlan, askUser, ASK_USER_TOOL, EXIT_PLAN_TOOL, createBatcher, duration, endDrafts, fromHistory, meta, review, size, thoughtTail, toolDelta, toolStep, type Part } from './reply';
 
 const steps = (m: Message) => (m.parts ?? []).flatMap((p) => (p.kind === 'tool' ? [p.step] : []));
 const kinds = (m: Message) => (m.parts ?? []).map((p: Part) => p.kind);
@@ -466,6 +466,20 @@ describe('reasoning', () => {
 		expect(meta({ model: 'm', usage: { promptTokens: 10, completionTokens: 40, reasoningTokens: 30 } })).toBe(
 			'm · 50 tokens (30 thinking)'
 		);
+	});
+});
+
+describe('thoughtTail', () => {
+	it('keeps the last non-empty lines', () => {
+		expect(thoughtTail('', 5, 600)).toBe('');
+		expect(thoughtTail('one', 5, 600)).toBe('one');
+		expect(thoughtTail('a\n\nb\nc  \n\nd\n', 2, 600)).toBe('c\nd');
+	});
+
+	it('cuts the start of a long tail', () => {
+		const t = thoughtTail('x'.repeat(50) + ' end', 1, 10);
+		expect(t).toBe('…xxxxx end');
+		expect(t.length).toBe(10);
 	});
 });
 

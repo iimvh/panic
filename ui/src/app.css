@@ -1,39 +1,85 @@
 :root {
-	--bg: #fbfaf8;
-	--surface: #ffffff;
-	--surface-2: #f3f1ed;
-	--border: #e4e0d9;
-	--text: #1d1b18;
-	--muted: #6f6a62;
-	--accent: #e8553f;
-	--accent-text: #ffffff;
-	--ok: #2f9e5b;
-	--warn: #c98a12;
-	--danger: #c8372d;
-	--code-bg: #f3f1ed;
-	--shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 4px 16px rgb(0 0 0 / 0.06);
+	/* paper, ink and pastels: a sheet of paper with ink drawings on it */
+	--bg: #f4ebe0; /* paper */
+	--surface: #f9f2e8; /* sheet */
+	--surface-2: #efe5d8; /* card, hover */
+	--border: #ddd3c5; /* line */
+	--edge: #46413b; /* ink edges of blocks and controls */
+	--text: #1d1b18; /* ink */
+	--muted: #6f6961;
+	--accent: #1d1b18;
+	--accent-text: #f9f2e8;
+	--ok: #4f7a2a;
+	--warn: #a86a10;
+	--danger: #c0392b;
+	--code-bg: #efe5d8;
+	/* role pastels, shared by the map and the chat */
+	--green: #cfe3b2;
+	--violet: #e7ddf5;
+	--orange: #fcdcbd;
+	--amber: #f6e6c9;
+	--blue: #d6e4f0;
+	--rose: #f6d3cc;
+	--rust: #d0683a;
+	--pop: 1.5px 2.5px 0 var(--text);
+	--lift: 0 1.5px 0 var(--edge);
+	--shadow: 0 1.5px 0 var(--edge);
 	--radius: 12px;
-	--font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-	--mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+	/* JetBrains Mono when installed; the platform's monospace otherwise (no font is downloaded) */
+	--mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+	--font: var(--mono);
 	color-scheme: light;
 }
 
+/* dark: from the system unless light is picked (the theme button sets data-theme on <html>), or when picked */
 @media (prefers-color-scheme: dark) {
-	:root {
-		--bg: #161513;
-		--surface: #1e1d1a;
-		--surface-2: #272522;
-		--border: #34312d;
-		--text: #ece9e4;
-		--muted: #a19b92;
-		--accent: #ef6b55;
-		--ok: #4cc27c;
+	:root:not([data-theme='light']) {
+		--bg: #1b1a17;
+		--surface: #23211d;
+		--surface-2: #2c2924;
+		--border: #3b3731;
+		--edge: #8a8278;
+		--text: #f1e9dd;
+		--muted: #a39b90;
+		--accent: #f1e9dd;
+		--accent-text: #1b1a17;
+		--ok: #9cc76e;
 		--warn: #e0a83a;
-		--danger: #ef6b5f;
-		--code-bg: #23211e;
-		--shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 16px rgb(0 0 0 / 0.3);
+		--danger: #ef7a6c;
+		--code-bg: #2c2924;
+		--green: #3b4a2b;
+		--violet: #3f3652;
+		--orange: #57402b;
+		--amber: #4f4429;
+		--blue: #2b3f55;
+		--rose: #573431;
+		--rust: #e08458;
 		color-scheme: dark;
 	}
+}
+
+:root[data-theme='dark'] {
+	--bg: #1b1a17;
+	--surface: #23211d;
+	--surface-2: #2c2924;
+	--border: #3b3731;
+	--edge: #8a8278;
+	--text: #f1e9dd;
+	--muted: #a39b90;
+	--accent: #f1e9dd;
+	--accent-text: #1b1a17;
+	--ok: #9cc76e;
+	--warn: #e0a83a;
+	--danger: #ef7a6c;
+	--code-bg: #2c2924;
+	--green: #3b4a2b;
+	--violet: #3f3652;
+	--orange: #57402b;
+	--amber: #4f4429;
+	--blue: #2b3f55;
+	--rose: #573431;
+	--rust: #e08458;
+	color-scheme: dark;
 }
 
 * {
@@ -46,7 +92,7 @@ body {
 	height: 100%;
 	background: var(--bg);
 	color: var(--text);
-	font: 15px/1.6 var(--font);
+	font: 14px/1.6 var(--font);
 	-webkit-font-smoothing: antialiased;
 }
 
@@ -63,7 +109,7 @@ button {
 }
 
 :focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 2px solid var(--rust);
 	outline-offset: 2px;
 }
 
@@ -71,30 +117,47 @@ button {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
-	border: 1px solid var(--border);
+	border: 1px solid var(--edge);
 	background: var(--surface);
 	border-radius: 8px;
-	padding: 6px 12px;
+	padding: 5px 12px;
 	line-height: 1.4;
+	white-space: nowrap;
+	box-shadow: var(--lift);
 }
 
 .btn:hover {
 	background: var(--surface-2);
 }
 
+.btn:active:not(:disabled) {
+	transform: translateY(1px);
+	box-shadow: none;
+}
+
 .btn.primary {
 	background: var(--accent);
 	border-color: var(--accent);
 	color: var(--accent-text);
+	box-shadow: 1.5px 2.5px 0 var(--rust);
 }
 
 .btn.primary:hover {
-	filter: brightness(1.05);
+	filter: brightness(1.15);
 }
 
 .btn:disabled {
 	opacity: 0.5;
 	cursor: default;
+}
+
+/* small uppercase tracked label: section names, HUD captions, tabs */
+.label-caps {
+	font-size: 10.5px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--muted);
 }
 
 /* rendered markdown */
@@ -137,7 +200,7 @@ button {
 	margin-top: 0.2em;
 }
 .md a {
-	color: var(--accent);
+	color: var(--rust);
 }
 .md blockquote {
 	border-left: 3px solid var(--border);

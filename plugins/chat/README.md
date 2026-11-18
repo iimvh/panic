@@ -172,6 +172,21 @@ Every request stays under `contextTokens` estimated tokens (default 32000; `0` t
   output that every model call would otherwise send again. Only the request changes: the conversation keeps the
   results, and a result shorter than the placeholder is left as is. The `llm` span records `clearedToolResults`.
 
+## Slash prompts
+
+A user's question `/name args` (not a sub-agent's task) that some plugin answers on `Prompts.EXPAND` (`sdk`; the
+`skills` plugin does for its skills) is expanded when the turn starts. The line is kept as the user wrote it, and
+the prompt follows it:
+
+- with `Prompt.tool` (a skill): an assistant message calling that tool (id `pre_<8 hex>`, arguments
+  `Prompt.toolArguments`) and its result, `Prompt.text` cut at `maxToolOutput`. `onStep` and `Chat.STEP` report the
+  call as running and then done, as for a call of the model. The history then looks as if the model had loaded
+  the skill itself, and compaction summarises it as a tool result instead of keeping it as the user's words.
+- without: a second user message with `Prompt.text`.
+
+The `turn` span gets `prompt` (the name). Nobody answers (the plugin is off, the skill was removed): the line goes
+as is. The call stays in the history afterwards, even when its tool is gone later, as with a removed MCP server.
+
 ## Context sections
 
 Other plugins add sections to the system prompt with `Chat.contribute(ctx, name, order, query -> text)`. `chat`
@@ -189,7 +204,7 @@ The trace id is `Ask.traceId` when the asker gives one (web does, to tell the UI
 
 | Span | Parent | Attributes |
 | --- | --- | --- |
-| `turn` | none (root); a sub-agent's under the `tool` span that runs it | `conversationId`, `question` (first 200 chars), `questionHash` (`Trace.QUESTION_HASH`, from `Trace.questionHash`), `model`, `stop`, `steps`, `toolCalls`, `promptTokens`, `completionTokens` (whole turn), `saved`; `agent`, `origin` for a sub-agent |
+| `turn` | none (root); a sub-agent's under the `tool` span that runs it | `conversationId`, `question` (first 200 chars), `prompt` (a [slash prompt](#slash-prompts)'s name), `questionHash` (`Trace.QUESTION_HASH`, from `Trace.questionHash`), `model`, `stop`, `steps`, `toolCalls`, `promptTokens`, `completionTokens` (whole turn), `saved`; `agent`, `origin` for a sub-agent |
 | `llm` | `turn` | `step`, `messages`, `clearedToolResults` (when any), `model`, `finishReason`, `promptTokens`, `completionTokens`, `toolCalls`, `firstTokenMicros` (first text or tool-call piece) |
 | `tool` | `turn` | `tool`, `callId`, `approvalMicros` (until the tool started), `outputChars`, `truncated`, `refused` (a repeated call, or a tool a sub-agent may not use), `timedOut`, `promptTokens` / `completionTokens` (a tool's own spending). An error result is an `ERROR` span |
 | `stop` | `turn` | `attempt`, `checks`, `blocked`, `names`, `reason` (the first block's). `ERROR` when a check failed. Only when a check answered |
@@ -211,6 +226,7 @@ A span ends `CANCELLED` when the turn was cancelled, `ERROR` when its work threw
 | `Chat.TURN` | event `Turn(conversationId, question, reply, delegate?)` | Emitted after every completed exchange (logging, memory, cost tracking...) |
 | `Chat.STEP` | event `Step(conversationId, call, result, parentCallId?, agent?)` | Emitted when a tool call starts and when it ends (auditing...) |
 | `Trace.SPAN` (emitted) | event `Span` | The turn's spans, see [Tracing](#tracing). `Trace.questionHash(question)` is the digest on the root |
+| `Prompts.EXPAND` (asked, `sdk`) | hook `Query(conversationId, name, args) → Prompt(name, description, tool, toolArguments, text)` | Expands a question `/name args`, see [Slash prompts](#slash-prompts) |
 | `Chat.CONTEXT` | hook `ContextQuery(conversationId, origin, agent) → Section(name, order, text)`, collected | Sections of the system prompt (environment, tool hints, memory...). Register with `Chat.contribute`. For a sub-agent, `conversationId` is its own conversation, `origin` the one the user talks to (its project) and `agent` its name (`delegated()`); for the main agent `origin == conversationId` and `agent` is null |
 
 ## Commands

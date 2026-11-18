@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import panic.command.Commands;
 import panic.command.Hooks;
 import panic.command.Out;
+import panic.command.Prompts;
 import panic.util.CancelToken;
 import panic.llm.ChatRequest;
 import panic.llm.Completion;
@@ -277,6 +278,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       summary = snapshot.summary();
       history = snapshot.messages();
       add(Message.user(ask.text()));
+      if (ask.delegate() == null) expand(); // a sub-agent's task is the model's text: it never triggers a prompt
       // a sub-agent's conversation lives for one task: nothing to gain from summarising it
       if (cfg.limitsContext() && cfg.compact() && ask.delegate() == null) compact(conversation);
 
@@ -883,6 +885,32 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
 
     private void add(Message m) {
       added.add(m);
+    }
+
+    /**
+     * A question {@code /name args} that a plugin answers on {@link Prompts#EXPAND} (a skill): the user's line
+     * stays as written, and the prompt follows it. With a tool it is recorded as that tool's call and result, so
+     * the history has the shape it has when the model loads the skill itself, compaction treats it as tool output
+     * (not as the user's words to keep), and front-ends show it as a step. Nobody answers: the line goes as is.
+     */
+    private void expand() {
+      Optional<Prompts.Line> line = Prompts.parse(ask.text());
+      if (line.isEmpty()) return;
+      Optional<Prompts.Prompt> found = Prompts.expand(ctx, ask.conversationId(), line.get().name(), line.get().args());
+      if (found.isEmpty()) return;
+      Prompts.Prompt p = found.get();
+      span.attr("prompt", p.name());
+      if (p.tool() == null) {
+        add(Message.user(p.text()));
+        return;
+      }
+      ToolCall call = new ToolCall("pre_" + java.util.UUID.randomUUID().toString().substring(0, 8), p.tool(),
+          p.toolArguments());
+      ToolResult result = truncate(ToolResult.ok(p.text()));
+      report(new Chat.Step(ask.conversationId(), call, null));
+      add(Message.assistant("", List.of(call)));
+      add(Message.tool(call.id(), result.content()));
+      report(new Chat.Step(ask.conversationId(), call, result));
     }
 
     private static String canonical(String arguments) {

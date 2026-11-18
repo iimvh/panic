@@ -21,6 +21,7 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import panic.command.Commands;
+import panic.command.Prompts;
 import panic.command.Session;
 import panic.util.CancelToken;
 import panic.llm.ChatRequest;
@@ -119,6 +120,84 @@ class ChatPluginTest {
         second);
     assertEquals(2, turns.size());
     assertEquals("two", turns.get(1).question());
+  }
+
+  /** Answers {@code /hello} with a skill-like prompt, recording what it was asked. */
+  private List<Prompts.Query> prompts(String tool) {
+    List<Prompts.Query> asked = new CopyOnWriteArrayList<>();
+    root.plugin("prompts", ctx -> {
+      ctx.hook(Prompts.EXPAND, q -> {
+        if (!q.name().equals("hello")) return null;
+        asked.add(q);
+        return new Prompts.Prompt("hello", "says hello", tool, "{\"name\":\"hello\"}", "Say hello to " + q.args());
+      });
+      return null;
+    });
+    return asked;
+  }
+
+  @Test
+  void expandsASlashPromptAsAToolCallAfterTheUsersLine() {
+    FakeLlm fake = new FakeLlm("m");
+    llm(fake);
+    root.plugin("conversations", Conversations.inMemory());
+    root.plugin("chat", new ChatPlugin(), new ChatConfig(null, 0));
+    List<Prompts.Query> asked = prompts("skill");
+    List<Chat.Step> steps = new CopyOnWriteArrayList<>();
+
+    Chat.ask(root, new Chat.Ask("c", "/hello  bob", new CancelToken(), d -> { }, steps::add)).orElseThrow();
+
+    assertEquals(List.of(new Prompts.Query("c", "hello", "bob")), asked);
+    List<Message> sent = fake.requests.get(0).messages();
+    assertEquals(3, sent.size());
+    assertEquals(Message.user("/hello  bob"), sent.get(0));
+    assertEquals("skill", sent.get(1).toolCalls().get(0).name());
+    assertEquals("{\"name\":\"hello\"}", sent.get(1).toolCalls().get(0).arguments());
+    assertEquals(Message.tool(sent.get(1).toolCalls().get(0).id(), "Say hello to bob"), sent.get(2));
+    assertEquals(2, steps.size(), "running, then done");
+    assertEquals("Say hello to bob", steps.get(1).result().content());
+    // the next turn sees the same history: the expansion was saved
+    ask("again", d -> { });
+    assertEquals(5, fake.requests.get(1).messages().size());
+  }
+
+  @Test
+  void expandsAPromptWithoutAToolAsAUserMessage() {
+    FakeLlm fake = new FakeLlm("m");
+    llm(fake);
+    root.plugin("conversations", Conversations.inMemory());
+    root.plugin("chat", new ChatPlugin(), new ChatConfig(null, 0));
+    prompts(null);
+    ask("/hello bob", d -> { });
+    assertEquals(List.of(Message.user("/hello bob"), Message.user("Say hello to bob")),
+        fake.requests.get(0).messages());
+  }
+
+  @Test
+  void sendsASlashLineAsIsWhenNobodyExpandsIt() {
+    FakeLlm fake = new FakeLlm("m");
+    llm(fake);
+    root.plugin("conversations", Conversations.inMemory());
+    root.plugin("chat", new ChatPlugin(), new ChatConfig(null, 0));
+    prompts("skill");
+    ask("/other x", d -> { });
+    ask("/etc/hosts is broken", d -> { });
+    assertEquals(List.of(Message.user("/other x")), fake.requests.get(0).messages());
+    assertEquals(Message.user("/etc/hosts is broken"), fake.requests.get(1).messages().get(2));
+  }
+
+  @Test
+  void neverExpandsASubAgentsTask() {
+    FakeLlm fake = new FakeLlm("m");
+    llm(fake);
+    root.plugin("conversations", Conversations.inMemory());
+    root.plugin("chat", new ChatPlugin(), new ChatConfig(null, 0));
+    List<Prompts.Query> asked = prompts("skill");
+    Chat.ask(root, new Chat.Ask("c~x", "/hello bob", new CancelToken(), d -> { }, null, null, null, null, null,
+        new Chat.Delegate("c", "x", null, null, 0, 0, null))).orElseThrow();
+    assertTrue(asked.isEmpty());
+    List<Message> sent = fake.requests.get(0).messages();
+    assertEquals(Message.user("/hello bob"), sent.get(sent.size() - 1));
   }
 
   @Test

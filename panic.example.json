@@ -30,6 +30,7 @@
   "todo": { "dir": ".panic/todo", "maxItems": 50 },
   "instructions": { "global": ".panic/AGENTS.md", "names": ["AGENTS.md", "CLAUDE.md"], "root": ".", "maxChars": 12000 },
   "memory": { "dir": ".panic/memory", "root": ".", "maxIndexChars": 6000, "maxFileChars": 20000 },
+  "skills": { "global": ".panic/skills", "dirs": [".panic/skills", ".agents/skills", ".claude/skills"], "root": ".", "maxListChars": 6000, "maxSkillChars": 40000 },
   "planner": { "byDefault": false, "allow": [], "approveTimeoutSeconds": 900, "dir": ".panic/plans", "root": "." },
   "shell": { "dir": ".", "timeoutSeconds": 120, "maxTimeoutSeconds": 600, "maxOutput": 8000, "maxBackground": 4 },
   "ask-user": { "timeoutSeconds": 900, "maxQuestions": 4, "maxOptions": 6 },

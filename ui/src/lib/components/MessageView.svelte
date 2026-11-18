@@ -4,6 +4,7 @@
 	import ApprovalCard from './ApprovalCard.svelte';
 	import PlanCard from './PlanCard.svelte';
 	import QuestionCard from './QuestionCard.svelte';
+	import ReasoningPart from './ReasoningPart.svelte';
 	import TextPart from './TextPart.svelte';
 	import ToolRow from './ToolRow.svelte';
 	import TraceView from './TraceView.svelte';
@@ -51,7 +52,9 @@
 		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 		<div class="answer" {onclick}>
 			{#each parts as part, i (i)}
-				{#if part.kind === 'text'}
+				{#if part.kind === 'reasoning'}
+					<ReasoningPart {part} {now} />
+				{:else if part.kind === 'text'}
 					<TextPart text={part.text} live={message.streaming && i === parts.length - 1} />
 				{:else if part.kind === 'tool'}
 					<ToolRow step={part.step} />
@@ -134,6 +137,7 @@
 		width: 100%;
 		overflow-wrap: anywhere;
 	}
+	.answer > :global(.reasoning + .md),
 	.answer > :global(.tool + .md),
 	.answer > :global(details + .md),
 	.review + :global(.md) {

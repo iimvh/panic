@@ -23,15 +23,22 @@ export type SubAgent = { name: string; text: string; parts: Part[] };
 type Timeline = { text: string; parts?: Part[] };
 
 /**
- * One piece of an answer, in the order it happened: text the model wrote, a tool call, a reviewer's verdict,
- * or an error that ended the stream. Text after a tool call starts a new text part, so a turn with several
- * model calls reads as "text, tool, tool, text" instead of one merged blob.
+ * One piece of an answer, in the order it happened: what the model thought, text it wrote, a tool call, a
+ * reviewer's verdict, or an error that ended the stream. Text after a tool call starts a new text part, so a turn
+ * with several model calls reads as "text, tool, tool, text" instead of one merged blob.
  */
 export type Part =
+	| Reasoning
 	| { kind: 'text'; text: string }
 	| { kind: 'tool'; step: ToolStep }
 	| { kind: 'review'; attempt: number; pass: boolean; reason: string; error?: string }
 	| { kind: 'error'; text: string };
+
+/**
+ * What the model thought before it wrote or acted (`reasoning` events), shown, never saved. `endedAt` is set once
+ * something else happens; until then the model is still thinking. Times are this page's clock (ms).
+ */
+export type Reasoning = { kind: 'reasoning'; text: string; startedAt: number; endedAt?: number };
 
 /** A tool call waiting for the user's approval, as the `approve` server-sent event describes it. */
 export type Approval = {
@@ -129,6 +136,27 @@ export function appendText(m: Timeline, delta: string) {
 	else m.parts.push({ kind: 'text', text: delta });
 }
 
+/** Appends streamed reasoning: to the last part while it is unfinished reasoning, else as a new reasoning part. */
+export function appendReasoning(t: Timeline, delta: string, now: number) {
+	if (!delta) return;
+	t.parts ??= [];
+	const last = t.parts.at(-1);
+	if (last?.kind === 'reasoning' && last.endedAt === undefined) last.text += delta;
+	else t.parts.push({ kind: 'reasoning', text: delta, startedAt: now });
+}
+
+/** The model stopped thinking: it writes, calls a tool, or the stream ended. */
+export function endReasoning(t: Timeline, now: number) {
+	for (const p of t.parts ?? []) if (p.kind === 'reasoning' && p.endedAt === undefined) p.endedAt = now;
+}
+
+/** "Thinking · 4s" while it lasts, "Thought for 4s" after; no time when it took under a second (or was replayed). */
+export function reasoningLabel(p: Reasoning, now: number): string {
+	const ms = (p.endedAt ?? now) - p.startedAt;
+	if (p.endedAt === undefined) return ms >= 1000 ? `Thinking · ${duration(ms)}` : 'Thinking';
+	return ms >= 1000 ? `Thought for ${duration(ms)}` : 'Thought';
+}
+
 /**
  * Shows the question; the call's finished `tool` step (or the end of the stream) clears it. Calls running in
  * parallel may ask at the same time: one question is shown, the others wait in `waiting`, in arrival order.
@@ -217,10 +245,16 @@ function subAgent(m: Message, parent: string, name: unknown): SubAgent | undefin
 	return undefined;
 }
 
-/** Adds text a sub-agent wrote (`agent_delta`) to the timeline of the call that runs it. */
-export function agentText(m: Message, d: Record<string, unknown>) {
+/**
+ * Adds text a sub-agent wrote (`agent_delta`) to the timeline of the call that runs it: what it thinks when
+ * `reasoning` is set, else its text, which ends its thinking.
+ */
+export function agentText(m: Message, d: Record<string, unknown>, now = Date.now()) {
 	const agent = subAgent(m, String(d.parent ?? ''), d.agent);
-	if (agent) appendText(agent, String(d.text ?? ''));
+	if (!agent) return;
+	if (d.reasoning === true) return appendReasoning(agent, String(d.text ?? ''), now);
+	endReasoning(agent, now);
+	appendText(agent, String(d.text ?? ''));
 }
 
 /** At the end of a stream: calls still drafting never ran (the turn stopped or failed). */
@@ -303,8 +337,19 @@ const LAST = new Set(['done', 'cancelled', 'error', 'unavailable']);
  * after; `ended()` says whether the last event came. Text is batched with `schedule` (see createBatcher), and
  * `finish()` flushes it and closes drafts once the stream is over.
  */
-export function createAnswer(reply: Message, schedule: (run: () => void) => void, question?: Message) {
+export function createAnswer(
+	reply: Message,
+	schedule: (run: () => void) => void,
+	question?: Message,
+	clock: () => number = Date.now
+) {
 	const text$ = createBatcher((t) => appendText(reply, t), schedule);
+	const thought$ = createBatcher((t) => appendReasoning(reply, t, clock()), schedule);
+	/** Anything but more reasoning: the reasoning so far is shown and ends. */
+	const thoughtDone = () => {
+		thought$.flush();
+		endReasoning(reply, clock());
+	};
 	// one batcher per sub-agent, so parallel sub-agents writing at once still render once per frame
 	const agents = new Map<string, ReturnType<typeof createBatcher>>();
 	const flushAgents = () => agents.forEach((b) => b.flush());
@@ -314,16 +359,26 @@ export function createAnswer(reply: Message, schedule: (run: () => void) => void
 		onEvent({ event, data, id }: SseEvent) {
 			if (id !== undefined && Number(id) > seq) seq = Number(id);
 			const d = (data ?? {}) as Record<string, unknown>;
-			if (event === 'delta') return text$.push(String(d.text ?? ''));
+			if (event === 'reasoning') {
+				text$.flush();
+				return thought$.push(String(d.text ?? ''));
+			}
+			if (event === 'delta') {
+				thoughtDone();
+				return text$.push(String(d.text ?? ''));
+			}
 			if (event === 'agent_delta') {
-				const parent = String(d.parent ?? '');
-				let b = agents.get(parent);
+				// one batcher per sub-agent and kind: its thinking and its text never merge
+				const key = `${String(d.parent ?? '')}${d.reasoning === true ? ':reasoning' : ''}`;
+				let b = agents.get(key);
 				if (!b) {
-					b = createBatcher((t) => agentText(reply, { ...d, text: t }), schedule);
-					agents.set(parent, b);
+					b = createBatcher((t) => agentText(reply, { ...d, text: t }, clock()), schedule);
+					agents.set(key, b);
 				}
+				if (d.reasoning !== true) agents.get(`${String(d.parent ?? '')}:reasoning`)?.flush();
 				return b.push(String(d.text ?? ''));
 			}
+			thoughtDone();
 			text$.flush(); // anything else comes after the text before it
 			flushAgents();
 			if (LAST.has(event)) ended = true;
@@ -349,6 +404,7 @@ export function createAnswer(reply: Message, schedule: (run: () => void) => void
 		seq: () => seq,
 		ended: () => ended,
 		finish() {
+			thoughtDone();
 			text$.flush();
 			flushAgents();
 			endDrafts(reply);
@@ -379,8 +435,10 @@ export function activity(m: Message): string {
 	if (last?.kind === 'tool' && last.step.status === 'running') return `Running ${last.step.name}…`;
 	if (last?.kind === 'tool' && last.step.status === 'drafting') return `Writing ${last.step.name || 'a tool'} call…`;
 	if (last?.kind === 'text') return 'Writing…';
+	if (last?.kind === 'reasoning' && last.endedAt === undefined) return 'Thinking…';
 	if (last?.kind === 'review' && !last.pass) return 'Trying again…';
-	return 'Thinking…';
+	// nothing from the model yet: it may be thinking without showing it, loading, or the provider is slow
+	return 'Waiting for the model…';
 }
 
 /** "4s", "1m 05s". */
@@ -431,9 +489,10 @@ export function canContinue(m: Message): boolean {
 
 export function meta(d: Record<string, unknown>): string {
 	const parts = [String(d.model ?? '')];
-	const u = d.usage as { promptTokens?: number; completionTokens?: number } | undefined;
+	const u = d.usage as { promptTokens?: number; completionTokens?: number; reasoningTokens?: number } | undefined;
 	const tokens = (u?.promptTokens ?? 0) + (u?.completionTokens ?? 0);
-	if (tokens > 0) parts.push(`${tokens} tokens`);
+	const thinking = u?.reasoningTokens ?? 0;
+	if (tokens > 0) parts.push(thinking > 0 ? `${tokens} tokens (${thinking} thinking)` : `${tokens} tokens`);
 	const calls = Number(d.toolCalls ?? 0);
 	if (calls > 0) parts.push(calls === 1 ? '1 tool' : `${calls} tools`);
 	if (d.stop && d.stop !== 'done') {

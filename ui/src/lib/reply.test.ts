@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from './chat.svelte';
-import { canContinue, shellCommand, activity, agentText, appendText, clearApproval, createAnswer, askApproval, askPlan, askUser, ASK_USER_TOOL, EXIT_PLAN_TOOL, createBatcher, duration, endDrafts, fromHistory, meta, review, size, toolDelta, toolStep, type Part } from './reply';
+import { canContinue, shellCommand, activity, agentText, appendReasoning, appendText, reasoningLabel, clearApproval, createAnswer, askApproval, askPlan, askUser, ASK_USER_TOOL, EXIT_PLAN_TOOL, createBatcher, duration, endDrafts, fromHistory, meta, review, size, toolDelta, toolStep, type Part } from './reply';
 
 const steps = (m: Message) => (m.parts ?? []).flatMap((p) => (p.kind === 'tool' ? [p.step] : []));
 const kinds = (m: Message) => (m.parts ?? []).map((p: Part) => p.kind);
@@ -43,7 +43,7 @@ describe('timeline', () => {
 		const m: Message = { id: 1, role: 'assistant', text: '' };
 		review(m, { attempt: 1, error: 'the reviewer gave no verdict: maybe' });
 		expect(m.parts?.[0]).toEqual({ kind: 'review', attempt: 1, pass: true, reason: '', error: 'the reviewer gave no verdict: maybe' });
-		expect(activity(m)).toBe('Thinking…');
+		expect(activity(m)).toBe('Waiting for the model…');
 	});
 
 	it('puts a review between the attempts it judged', () => {
@@ -66,7 +66,7 @@ describe('timeline', () => {
 describe('activity', () => {
 	it('says what a streaming answer is doing', () => {
 		const m: Message = { id: 1, role: 'assistant', text: '', parts: [] };
-		expect(activity(m)).toBe('Thinking…');
+		expect(activity(m)).toBe('Waiting for the model…');
 		appendText(m, 'hi');
 		expect(activity(m)).toBe('Writing…');
 		toolStep(m, { id: 'a', name: 'write_file', status: 'running' });
@@ -74,7 +74,7 @@ describe('activity', () => {
 		askApproval(m, { id: 'q', callId: 'a', name: 'write_file', risk: 'write' });
 		expect(activity(m)).toBe('Waiting for approval');
 		toolStep(m, { id: 'a', name: 'write_file', status: 'ok' });
-		expect(activity(m)).toBe('Thinking…');
+		expect(activity(m)).toBe('Waiting for the model…');
 		review(m, { attempt: 1, pass: false, reason: 'x' });
 		expect(activity(m)).toBe('Trying again…');
 	});
@@ -405,5 +405,66 @@ describe('sub-agents', () => {
 		expect(m.waiting).toBeUndefined();
 		clearApproval(m, (a) => a.id === 'q2');
 		expect(m.approval).toBeUndefined();
+	});
+});
+
+describe('reasoning', () => {
+	const kinds = (m: Message) => (m.parts ?? []).map((p) => p.kind);
+
+	it('shows what the model thinks apart from its text, and says Thinking only while it thinks', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '', parts: [] };
+		let t = 1000;
+		const a = createAnswer(m, (run) => run(), undefined, () => t);
+		expect(activity(m)).toBe('Waiting for the model…');
+		a.onEvent({ event: 'reasoning', data: { text: '17*23 ' } });
+		a.onEvent({ event: 'reasoning', data: { text: 'is 391' } });
+		expect(activity(m)).toBe('Thinking…');
+		t = 5000;
+		a.onEvent({ event: 'delta', data: { text: '391' } });
+		expect(kinds(m)).toEqual(['reasoning', 'text']);
+		expect(m.parts?.[0]).toEqual({ kind: 'reasoning', text: '17*23 is 391', startedAt: 1000, endedAt: 5000 });
+		expect(m.text).toBe('391'); // the thinking is not the answer
+		expect(activity(m)).toBe('Writing…');
+	});
+
+	it('starts a new block when the model thinks again after a tool, and ends one when the stream ends', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '', parts: [] };
+		const a = createAnswer(m, (run) => run(), undefined, () => 0);
+		a.onEvent({ event: 'reasoning', data: { text: 'look first' } });
+		a.onEvent({ event: 'tool', data: { id: 'x', name: 'read_file', status: 'running' } });
+		a.onEvent({ event: 'tool', data: { id: 'x', name: 'read_file', status: 'ok' } });
+		expect(activity(m)).toBe('Waiting for the model…');
+		a.onEvent({ event: 'reasoning', data: { text: 'now answer' } });
+		a.finish();
+		expect(kinds(m)).toEqual(['reasoning', 'tool', 'reasoning']);
+		expect((m.parts ?? []).every((p) => p.kind !== 'reasoning' || p.endedAt === 0)).toBe(true);
+	});
+
+	it('keeps a sub-agent’s thinking apart from its text', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '', parts: [] };
+		const a = createAnswer(m, (run) => run(), undefined, () => 0);
+		a.onEvent({ event: 'tool', data: { id: 'a', name: 'agent', status: 'running' } });
+		a.onEvent({ event: 'agent_delta', data: { parent: 'a', agent: 'explore', text: 'hmm', reasoning: true } });
+		a.onEvent({ event: 'agent_delta', data: { parent: 'a', agent: 'explore', text: 'Found it.' } });
+		const agent = m.parts?.[0].kind === 'tool' ? m.parts[0].step.agent : undefined;
+		expect(agent?.parts.map((p) => p.kind)).toEqual(['reasoning', 'text']);
+		expect(agent?.text).toBe('Found it.');
+	});
+
+	it('labels a block by how long it took', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '' };
+		appendReasoning(m, 'x', 0);
+		const p = m.parts![0];
+		if (p.kind !== 'reasoning') throw new Error('not reasoning');
+		expect(reasoningLabel(p, 500)).toBe('Thinking');
+		expect(reasoningLabel(p, 12_000)).toBe('Thinking · 12s');
+		p.endedAt = 65_000;
+		expect(reasoningLabel(p, 99_000)).toBe('Thought for 1m 05s');
+	});
+
+	it('counts thinking tokens in the meta line', () => {
+		expect(meta({ model: 'm', usage: { promptTokens: 10, completionTokens: 40, reasoningTokens: 30 } })).toBe(
+			'm · 50 tokens (30 thinking)'
+		);
 	});
 });

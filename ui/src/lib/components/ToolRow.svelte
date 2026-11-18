@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { shellCommand, size, type ToolStep } from '$lib/reply';
+	import ReasoningPart from './ReasoningPart.svelte';
 	import TextPart from './TextPart.svelte';
 	import ToolRow from './ToolRow.svelte';
 
@@ -33,7 +34,9 @@
 		</summary>
 		<div class="work">
 			{#each agent.parts as part, i (i)}
-				{#if part.kind === 'text'}
+				{#if part.kind === 'reasoning'}
+					<ReasoningPart {part} />
+				{:else if part.kind === 'text'}
 					<TextPart text={part.text} live={working && i === agent.parts.length - 1} />
 				{:else if part.kind === 'tool'}
 					<ToolRow step={part.step} />

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { chat } from '$lib/chat.svelte';
 	import { shellCommand, size, type ToolStep } from '$lib/reply';
 	import ReasoningPart from './ReasoningPart.svelte';
 	import TextPart from './TextPart.svelte';
@@ -8,14 +9,24 @@
 	 * One tool call of an answer. A call that runs a sub-agent also shows the sub-agent's work under it (its text
 	 * and its own tool calls, in order), open while it runs and folded once it is done.
 	 */
-	let { step }: { step: ToolStep } = $props();
+	let { step, messageId, agentName }: { step: ToolStep; messageId: number; agentName?: string } = $props();
+
+	const target = $derived({ kind: 'tool' as const, messageId, id: step.id, agent: agentName });
+	const selected = $derived(chat.isInspected(target));
 
 	const agent = $derived(step.agent);
 	const working = $derived(step.status === 'running');
 	const command = $derived(step.status === 'drafting' ? null : shellCommand(step.arguments));
 </script>
 
-<div class="tool {step.status}" title={step.content ?? step.arguments}>
+<button
+	type="button"
+	class="tool {step.status}"
+	class:selected
+	aria-pressed={selected}
+	title="Show the call and its result"
+	onclick={() => chat.inspect(target)}
+>
 	<span class="name">{step.name}</span>
 	{#if step.status === 'drafting'}
 		<!-- the end of what is being written, right-aligned so the newest text shows -->
@@ -25,7 +36,7 @@
 		<span class="args">{command ?? step.arguments}</span>
 		<span class="status">{working ? '…' : step.status}</span>
 	{/if}
-</div>
+</button>
 {#if agent}
 	<details class="agent" open={working}>
 		<summary>
@@ -35,11 +46,11 @@
 		<div class="work">
 			{#each agent.parts as part, i (i)}
 				{#if part.kind === 'reasoning'}
-					<ReasoningPart {part} />
+					<ReasoningPart {part} agent={agent.name} />
 				{:else if part.kind === 'text'}
 					<TextPart text={part.text} live={working && i === agent.parts.length - 1} />
 				{:else if part.kind === 'tool'}
-					<ToolRow step={part.step} />
+					<ToolRow step={part.step} {messageId} agentName={agent.name} />
 				{/if}
 			{/each}
 		</div>
@@ -48,6 +59,11 @@
 
 <style>
 	.tool {
+		width: 100%;
+		border: 0;
+		background: none;
+		text-align: left;
+		cursor: pointer;
 		display: flex;
 		gap: 8px;
 		align-items: baseline;
@@ -57,6 +73,14 @@
 		color: var(--muted);
 		border-left: 2px solid var(--border);
 		padding-left: 8px;
+	}
+	.tool:hover,
+	.tool.selected {
+		background: var(--surface);
+	}
+	.tool:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
 	}
 	.tool .name {
 		color: var(--text);

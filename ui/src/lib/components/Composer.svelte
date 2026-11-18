@@ -125,10 +125,12 @@
 	form:focus-within {
 		border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
 	}
-	/* bypass is on: the danger shows where the next message is written */
+	/* bypass is on: the danger shows where the next message is written. The accent (focus) is red too, so the
+	   box is tinted as well: a border colour alone would read as focus */
 	form.danger,
 	form.danger:focus-within {
 		border-color: var(--danger);
+		background: color-mix(in srgb, var(--danger) 9%, var(--surface));
 	}
 	textarea {
 		flex: 1;

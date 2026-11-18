@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from './chat.svelte';
-import { canContinue, shellCommand, activity, agentText, appendReasoning, appendText, reasoningLabel, clearApproval, createAnswer, askApproval, askPlan, askUser, ASK_USER_TOOL, EXIT_PLAN_TOOL, createBatcher, duration, endDrafts, fromHistory, meta, review, size, toolDelta, toolStep, type Part } from './reply';
+import { canContinue, findStep, shellCommand, activity, agentText, appendReasoning, appendText, reasoningLabel, clearApproval, createAnswer, askApproval, askPlan, askUser, ASK_USER_TOOL, EXIT_PLAN_TOOL, createBatcher, duration, endDrafts, fromHistory, meta, review, size, toolDelta, toolStep, type Part } from './reply';
 
 const steps = (m: Message) => (m.parts ?? []).flatMap((p) => (p.kind === 'tool' ? [p.step] : []));
 const kinds = (m: Message) => (m.parts ?? []).map((p: Part) => p.kind);
@@ -466,5 +466,20 @@ describe('reasoning', () => {
 		expect(meta({ model: 'm', usage: { promptTokens: 10, completionTokens: 40, reasoningTokens: 30 } })).toBe(
 			'm · 50 tokens (30 thinking)'
 		);
+	});
+});
+
+describe('findStep', () => {
+	it('finds a call by its answer and id, a sub-agent’s too, after it ended', () => {
+		const m: Message = { id: 7, role: 'assistant', text: '' };
+		toolStep(m, { id: 'a', name: 'agent', status: 'running' });
+		toolStep(m, { id: 'x', name: 'read_file', status: 'running', parent: 'a', agent: 'explore' });
+		toolStep(m, { id: 'x', name: 'read_file', status: 'ok', content: 'text', parent: 'a', agent: 'explore' });
+		const other: Message = { id: 8, role: 'assistant', text: '' };
+		toolStep(other, { id: 'x', name: 'exec', status: 'ok' });
+		expect(findStep([m, other], 7, 'x')?.status).toBe('ok');
+		expect(findStep([m, other], 7, 'x')?.name).toBe('read_file');
+		expect(findStep([m, other], 8, 'x')?.name).toBe('exec');
+		expect(findStep([m, other], 9, 'x')).toBeUndefined();
 	});
 });

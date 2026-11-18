@@ -7,13 +7,12 @@
 	import ReasoningPart from './ReasoningPart.svelte';
 	import TextPart from './TextPart.svelte';
 	import ToolRow from './ToolRow.svelte';
-	import TraceView from './TraceView.svelte';
 
 	let { message }: { message: Message } = $props();
 
 	const parts = $derived(message.parts ?? []);
 	const status = $derived(message.streaming ? activity(message) : '');
-	let showTrace = $state(false);
+	const showTrace = $derived(!!message.traceId && chat.isInspected({ kind: 'trace', traceId: message.traceId }));
 
 	let now = $state(Date.now());
 	$effect(() => {
@@ -57,7 +56,7 @@
 				{:else if part.kind === 'text'}
 					<TextPart text={part.text} live={message.streaming && i === parts.length - 1} />
 				{:else if part.kind === 'tool'}
-					<ToolRow step={part.step} />
+					<ToolRow step={part.step} messageId={message.id} />
 				{:else if part.kind === 'review'}
 					<div class="review" class:rejected={!part.pass || part.error !== undefined}>
 						{part.error !== undefined
@@ -84,12 +83,16 @@
 				<div class="meta">
 					{#if message.meta}<span>{message.meta}</span>{/if}
 					{#if message.traceId}
-						<button type="button" class="trace-toggle" aria-expanded={showTrace} onclick={() => (showTrace = !showTrace)}>
-							{showTrace ? 'Hide trace' : 'Trace'}
+						<button
+							type="button"
+							class="trace-toggle"
+							aria-pressed={showTrace}
+							onclick={() => chat.inspect({ kind: 'trace', traceId: message.traceId! })}
+						>
+							Trace
 						</button>
 					{/if}
 				</div>
-				{#if showTrace && message.traceId}<TraceView session={chat.session} traceId={message.traceId} />{/if}
 			{/if}
 			{#if canContinue(message) && chat.messages.at(-1)?.id === message.id}
 				<button type="button" class="continue" disabled={chat.busy} onclick={() => chat.continueAnswer()}>
@@ -185,7 +188,7 @@
 		cursor: pointer;
 	}
 	.trace-toggle:hover,
-	.trace-toggle[aria-expanded='true'] {
+	.trace-toggle[aria-pressed='true'] {
 		color: var(--text);
 	}
 	.trace-toggle:focus-visible {

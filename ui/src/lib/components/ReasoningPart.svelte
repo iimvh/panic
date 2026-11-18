@@ -1,46 +1,80 @@
 <script lang="ts">
+	import { chat } from '$lib/chat.svelte';
 	import { reasoningLabel, type Reasoning } from '$lib/reply';
 
 	/**
-	 * What the model thought, folded by default: "Thinking · 12s" while it lasts, "Thought for 12s" after. The text
-	 * is rendered only while open, so a long stream of thinking costs nothing when nobody reads it.
+	 * One line where the model thought, in the order things happened: "Thinking · 12s" with the newest line of the
+	 * thought while it lasts, "Thought for 12s" after. It never grows, so it never pushes the answer down; clicking it
+	 * opens the whole thought in the inspector. `agent` names the sub-agent that thought, if any.
 	 */
-	let { part, now = Date.now() }: { part: Reasoning; now?: number } = $props();
+	let { part, now = Date.now(), agent }: { part: Reasoning; now?: number; agent?: string } = $props();
 
-	let open = $state(false);
 	const live = $derived(part.endedAt === undefined);
+	const lastLine = $derived(live ? (part.text.trimEnd().split('\n').at(-1) ?? '') : '');
+	const selected = $derived(chat.inspected?.kind === 'part' && chat.inspected.part === part);
 </script>
 
-<details class="reasoning" class:live bind:open>
-	<summary>{reasoningLabel(part, now)}</summary>
-	{#if open}<div class="text">{part.text.trim()}</div>{/if}
-</details>
+<button
+	type="button"
+	class="reasoning"
+	class:live
+	class:selected
+	aria-pressed={selected}
+	title="Show the whole thought"
+	onclick={() => chat.inspect({ kind: 'part', part, agent })}
+>
+	<span class="label">{reasoningLabel(part, now)}</span>
+	{#if lastLine}<span class="tail">{lastLine}</span>{/if}
+	<span class="more" aria-hidden="true">›</span>
+</button>
 
 <style>
 	.reasoning {
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+		width: 100%;
+		max-width: 100%;
 		margin: 4px 0;
-		font-size: 13px;
+		padding: 2px 8px;
+		border: 0;
+		border-left: 2px solid var(--border);
+		background: none;
 		color: var(--muted);
-	}
-	summary {
+		font: inherit;
+		font-size: 13px;
+		text-align: left;
 		cursor: pointer;
-		width: fit-content;
 	}
-	summary:focus-visible {
+	.reasoning:hover,
+	.reasoning.selected {
+		background: var(--surface);
+		color: var(--text);
+	}
+	.reasoning:focus-visible {
 		outline: 2px solid var(--accent);
 		outline-offset: 2px;
 		border-radius: 3px;
 	}
-	.live summary {
+	.live {
+		border-left-color: var(--accent);
+	}
+	.label {
+		flex: none;
+	}
+	.live .label {
 		color: var(--text);
 	}
-	.text {
-		margin: 4px 0 8px;
-		padding-left: 10px;
-		border-left: 2px solid var(--border);
-		white-space: pre-wrap;
-		overflow-wrap: anywhere;
-		max-height: 320px;
-		overflow-y: auto;
+	.tail {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-style: italic;
+	}
+	.more {
+		margin-left: auto;
+		flex: none;
 	}
 </style>

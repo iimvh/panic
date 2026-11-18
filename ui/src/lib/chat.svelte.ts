@@ -29,6 +29,16 @@ export type Message = {
 	traceId?: string;
 };
 
+/**
+ * What the inspector panel shows: a thought in full, a tool call, or an answer's trace. A thought is the live part
+ * itself (it grows in place while it streams); a tool call is found again by its answer and id, because a call that
+ * ends replaces its part. `agent` names the sub-agent the thought or call belongs to, if any.
+ */
+export type Inspected =
+	| { kind: 'part'; part: Part; agent?: string }
+	| { kind: 'tool'; messageId: number; id: string; agent?: string }
+	| { kind: 'trace'; traceId: string };
+
 let nextId = 1;
 
 /** All UI state: what the server runs (state), this session's messages, and the request in flight. */
@@ -46,6 +56,8 @@ class Chat {
 	/** Plan mode of this session; null when the server has no planner plugin. */
 	mode = $state<Mode | null>(null);
 	busy = $state(false);
+	/** Shown in the inspector panel; null when it is closed. Page state only: nothing is asked of the server. */
+	inspected = $state<Inspected | null>(null);
 	/** Server unreachable or failing; shown as a banner. */
 	offline = $state<string | null>(null);
 	#abort: AbortController | null = null;
@@ -168,6 +180,7 @@ class Chat {
 		await this.#settle();
 		this.session = newSessionId();
 		this.messages = [];
+		this.inspected = null;
 		let problem: string | null = null;
 		if (project) {
 			try {
@@ -224,7 +237,22 @@ class Chat {
 		await this.#settle();
 		this.session = setSessionId(id);
 		this.messages = [];
+		this.inspected = null;
 		await this.load();
+	}
+
+	/** Opens the inspector on `what`; the same thing again closes it (a toggle, as its row reads). */
+	inspect(what: Inspected) {
+		this.inspected = this.isInspected(what) ? null : what;
+	}
+
+	/** True when the inspector shows `what` now. */
+	isInspected(what: Inspected): boolean {
+		const now = this.inspected;
+		if (!now || now.kind !== what.kind) return false;
+		if (what.kind === 'part') return now.kind === 'part' && now.part === what.part;
+		if (what.kind === 'tool') return now.kind === 'tool' && now.messageId === what.messageId && now.id === what.id;
+		return now.kind === 'trace' && now.traceId === what.traceId;
 	}
 
 	/** Stops what runs (an answer through the server) and waits for it to end. */

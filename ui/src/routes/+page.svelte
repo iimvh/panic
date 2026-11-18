@@ -4,6 +4,7 @@
 	import Composer from '$lib/components/Composer.svelte';
 	import ChatList from '$lib/components/ChatList.svelte';
 	import Header from '$lib/components/Header.svelte';
+	import Inspector from '$lib/components/Inspector.svelte';
 	import MessageView from '$lib/components/MessageView.svelte';
 	import Settings from '$lib/components/Settings.svelte';
 
@@ -96,6 +97,7 @@
 		<Settings onclose={() => (settingsOpen = false)} />
 	{/if}
 </div>
+<Inspector />
 </div>
 
 <style>

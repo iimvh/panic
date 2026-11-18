@@ -89,7 +89,8 @@
 		font-size: 12px;
 		cursor: pointer;
 	}
-	.chip:hover:not(:disabled) {
+	/* hover never hides the state: an "on" chip keeps its colour */
+	.chip:hover:not(:disabled):not(.on) {
 		background: var(--surface-2);
 		color: var(--text);
 	}

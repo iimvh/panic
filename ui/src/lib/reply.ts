@@ -257,6 +257,21 @@ export function agentText(m: Message, d: Record<string, unknown>, now = Date.now
 	appendText(agent, String(d.text ?? ''));
 }
 
+/** The tool call `id` of answer `messageId`, also among its sub-agents' calls; the latest one when ids repeat. */
+export function findStep(messages: Message[], messageId: number, id: string): ToolStep | undefined {
+	const search = (parts: Part[] | undefined): ToolStep | undefined => {
+		for (let i = (parts?.length ?? 0) - 1; i >= 0; i--) {
+			const p = parts![i];
+			if (p.kind !== 'tool') continue;
+			if (p.step.id === id) return p.step;
+			const inner = search(p.step.agent?.parts);
+			if (inner) return inner;
+		}
+		return undefined;
+	};
+	return search(messages.find((m) => m.id === messageId)?.parts);
+}
+
 /** At the end of a stream: calls still drafting never ran (the turn stopped or failed). */
 export function endDrafts(m: Message) {
 	for (const p of m.parts ?? []) {

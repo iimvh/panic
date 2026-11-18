@@ -121,6 +121,7 @@ every pull request. A change is not done until it passes.
 | `plugins/chat` | `conversations`, `chat` | [README](plugins/chat/README.md) |
 | `plugins/tools` | `tools`, `permissions`, `files`, `clock`, `shell` | [README](plugins/tools/README.md) |
 | `plugins/todo` | `todo` | [README](plugins/todo/README.md) |
+| `plugins/memory` | `instructions`, `memory` | [README](plugins/memory/README.md) |
 | `plugins/planner` | `planner` | [README](plugins/planner/README.md) |
 | `plugins/interact` | `ask-user` | [README](plugins/interact/README.md) |
 | `plugins/mcp` | `mcp` | [README](plugins/mcp/README.md) |

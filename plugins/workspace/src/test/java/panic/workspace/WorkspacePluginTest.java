@@ -162,6 +162,14 @@ class WorkspacePluginTest {
     assertTrue(text.contains("\"meeting-room\"") && text.contains(project.toString()), text);
   }
 
+  @Test
+  void aSubAgentIsToldAboutTheProjectOfItsOrigin() {
+    run("c1", "use", project.toString());
+    String text = root.collect(Chat.CONTEXT, new Chat.ContextQuery("c1~explore-1", "c1", "explore")).stream()
+        .map(Chat.Section::text).findFirst().orElse("");
+    assertTrue(text.contains("\"meeting-room\""), text);
+  }
+
   private String section(String id) {
     return root.collect(Chat.CONTEXT, new Chat.ContextQuery(id)).stream().map(Chat.Section::text).findFirst()
         .orElse("");

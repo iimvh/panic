@@ -270,10 +270,27 @@ public final class Chat {
     }
   }
 
-  /** The question put to {@link #CONTEXT} contributors, once per ask. */
-  public record ContextQuery(String conversationId) {
+  /**
+   * The question put to {@link #CONTEXT} contributors, once per ask. {@code conversationId} is the conversation
+   * the ask runs in. For a sub-agent ({@link Delegate}) that is its own conversation, so {@code origin} names the
+   * conversation the user talks to (its project, its approvals) and {@code agent} the sub-agent; for the main agent
+   * {@code origin} equals {@code conversationId} and {@code agent} is null.
+   */
+  public record ContextQuery(String conversationId, String origin, String agent) {
     public ContextQuery {
       Objects.requireNonNull(conversationId, "conversationId");
+      if (origin == null || origin.isBlank()) origin = conversationId;
+      if (agent != null && agent.isBlank()) agent = null;
+    }
+
+    /** The main agent's query for {@code conversationId}. */
+    public ContextQuery(String conversationId) {
+      this(conversationId, null, null);
+    }
+
+    /** True when the ask is a sub-agent's. */
+    public boolean delegated() {
+      return agent != null;
     }
   }
 

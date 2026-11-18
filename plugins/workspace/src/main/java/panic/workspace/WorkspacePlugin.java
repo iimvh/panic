@@ -56,7 +56,8 @@ public final class WorkspacePlugin implements ConfigPlugin<WorkspaceConfig> {
     ctx.hook(Workspace.ROOT, q -> store.root(q.conversationId()));
     ctx.hook(Workspace.LIST, q -> store.list());
     Chat.contribute(ctx, "Workspace", 1, q -> {
-      Workspace.Project p = store.projectOf(q.conversationId());
+      // a sub-agent works in the project of the conversation that asked it
+      Workspace.Project p = store.projectOf(q.origin());
       if (p == null) {
         return "No project is selected, so the file tools use the default workspace. When the user wants to work "
             + "in another folder of their computer, tell them to add it as a project (the \"Add project\" button "

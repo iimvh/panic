@@ -113,6 +113,29 @@ class DelegateTest {
   }
 
   @Test
+  void contributorsHearTheOriginAndTheAgentOfASubAgent() {
+    List<Chat.ContextQuery> queries = new CopyOnWriteArrayList<>();
+    root.plugin("contributor", ctx -> {
+      Chat.contribute(ctx, "Where", 1, q -> {
+        queries.add(q);
+        return "origin " + q.origin();
+      });
+      return null;
+    });
+    llm.then(r -> answer("found"));
+    delegate(explore(null, 0, null), null, new CopyOnWriteArrayList<>());
+    assertEquals(List.of(new Chat.ContextQuery("c~explore-1", "c", "explore")), queries);
+    assertTrue(queries.get(0).delegated());
+    assertTrue(llm.requests.get(0).messages().get(0).content().contains("## Where\norigin c"));
+
+    queries.clear();
+    llm.then(r -> answer("hi"));
+    Chat.ask(root, new Chat.Ask("c", "hello", new CancelToken(), t -> { })).orElseThrow();
+    assertEquals(List.of(new Chat.ContextQuery("c", "c", null)), queries);
+    assertFalse(queries.get(0).delegated());
+  }
+
+  @Test
   void aSubAgentSeesOnlyItsToolsAndItsPrompt() {
     tools(tool("look", Risk.READ), tool("change", Risk.WRITE));
     llm.then(r -> calls(call("a", "change", "{}"), call("b", "look", "{}"))).then(r -> answer("found"));

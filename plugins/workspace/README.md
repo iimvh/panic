@@ -45,7 +45,7 @@ All keys live in `Workspace` (`plugins/tools`), so `files` and `checks` use them
 
 | Key / helper | From | Use |
 | --- | --- | --- |
-| `Chat.contribute` | `plugins/chat` | Adds the section `Workspace` (order 1): where the model works, or how the user can add a project |
+| `Chat.contribute` | `plugins/chat` | Adds the section `Workspace` (order 1): where the model works, or how the user can add a project. A sub-agent is told about the project of its `origin` |
 | `Conversations.DELETED` | `plugins/chat` | Drops the entry of a deleted conversation |
 
 It requires no service, and nothing requires it: without `workspace` every chat uses `files.root` and `checks.dir`.

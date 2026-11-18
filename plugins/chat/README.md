@@ -176,7 +176,8 @@ Every request stays under `contextTokens` estimated tokens (default 32000; `0` t
 
 Other plugins add sections to the system prompt with `Chat.contribute(ctx, name, order, query -> text)`. `chat`
 collects them once per ask, sorts them by `order` then `name`, and sends them after `systemPrompt` as
-`## name` + text. A section returning null or blank is left out for that ask, one that throws is skipped, and
+`## name` + text. A sub-agent's ask collects them too: `ContextQuery.origin` tells a contributor which
+conversation (and so which project) the sub-agent works for. A section returning null or blank is left out for that ask, one that throws is skipped, and
 all of a plugin's sections disappear when it is disposed. Chat does not require the contributors.
 
 ## Tracing
@@ -210,7 +211,7 @@ A span ends `CANCELLED` when the turn was cancelled, `ERROR` when its work threw
 | `Chat.TURN` | event `Turn(conversationId, question, reply, delegate?)` | Emitted after every completed exchange (logging, memory, cost tracking...) |
 | `Chat.STEP` | event `Step(conversationId, call, result, parentCallId?, agent?)` | Emitted when a tool call starts and when it ends (auditing...) |
 | `Trace.SPAN` (emitted) | event `Span` | The turn's spans, see [Tracing](#tracing). `Trace.questionHash(question)` is the digest on the root |
-| `Chat.CONTEXT` | hook `ContextQuery(conversationId) → Section(name, order, text)`, collected | Sections of the system prompt (environment, tool hints, memory...). Register with `Chat.contribute` |
+| `Chat.CONTEXT` | hook `ContextQuery(conversationId, origin, agent) → Section(name, order, text)`, collected | Sections of the system prompt (environment, tool hints, memory...). Register with `Chat.contribute`. For a sub-agent, `conversationId` is its own conversation, `origin` the one the user talks to (its project) and `agent` its name (`delegated()`); for the main agent `origin == conversationId` and `agent` is null |
 
 ## Commands
 

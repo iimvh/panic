@@ -655,7 +655,9 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       if (base != null && !base.isBlank()) parts.add(base.strip());
       List<Chat.Section> sections;
       try {
-        sections = new ArrayList<>(ctx.collect(Chat.CONTEXT, new Chat.ContextQuery(ask.conversationId())));
+        sections = new ArrayList<>(ctx.collect(Chat.CONTEXT, new Chat.ContextQuery(ask.conversationId(),
+            ask.delegate() == null ? null : ask.delegate().origin(),
+            ask.delegate() == null ? null : ask.delegate().agent())));
       } catch (EmitException e) {
         sections = new ArrayList<>(); // a contributor that did not go through Chat.contribute failed
       }

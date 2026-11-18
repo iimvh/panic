@@ -79,6 +79,8 @@ class WebPluginTest {
     volatile ToolCall call;
     /** With {@link #useTool}: the call also comes in two pieces before the completion. */
     volatile boolean streamCalls;
+    /** When set, every answer is preceded by this reasoning. */
+    volatile String think;
     final CountDownLatch cancelled = new CountDownLatch(1);
     final CountDownLatch released = new CountDownLatch(1);
 
@@ -105,6 +107,18 @@ class WebPluginTest {
     @Override
     public Completion complete(ChatRequest r, Signal s) {
       return stream(r, s, d -> { });
+    }
+
+    @Override
+    public Completion stream(ChatRequest r, Signal s, Consumer<String> onDelta, Consumer<ToolCallDelta> onToolDelta,
+        Consumer<String> onReasoning) {
+      String t = think;
+      if (t == null) return stream(r, s, onDelta, onToolDelta);
+      onReasoning.accept(t);
+      Completion c = stream(r, s, onDelta, onToolDelta);
+      Usage u = c.usage();
+      return new Completion(c.text(), c.model(), c.finishReason(),
+          new Usage(u.promptTokens(), u.completionTokens(), 7), c.toolCalls(), t);
     }
 
     @Override
@@ -227,6 +241,17 @@ class WebPluginTest {
     assertFalse(s.path("connected").asBoolean());
     assertFalse(s.path("providers").path(0).path("connected").asBoolean());
     assertEquals(409, get("/api/models").statusCode());
+  }
+
+  @Test
+  void reasoningIsStreamedBeforeTheAnswerAndNotKept() throws Exception {
+    fake.think = "the user greets me";
+    List<Event> ev = events(send("POST", "/api/chat", "{\"session\":\"r1\",\"text\":\"hi\"}").body());
+    assertEquals(List.of("reasoning", "delta", "delta", "done"), ev.stream().map(Event::name).toList());
+    assertEquals("the user greets me", ev.get(0).data().path("text").asText());
+    assertEquals(7, ev.get(3).data().path("usage").path("reasoningTokens").asInt());
+    String history = get("/api/history?session=r1").body();
+    assertFalse(history.contains("greets"), history);
   }
 
   @Test

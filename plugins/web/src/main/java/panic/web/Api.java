@@ -410,9 +410,8 @@ final class Api {
               step -> run.publish("tool", step(step)),
               r -> run.publish("review", review(r)),
               d -> run.publish("tool_delta", toolDelta(d)), traceId,
-              d -> run.publish("agent_delta", Json.object().put("parent", d.parentCallId()).put("agent", d.agent())
-                  .put("text", d.text())),
-              null));
+              d -> run.publish("agent_delta", agentDelta(d)),
+              null).withReasoning(t -> run.publish("reasoning", Json.object().put("text", t))));
       if (reply.isEmpty()) {
         run.publish("unavailable", Json.object().put("message", "no LLM connected"));
         return;
@@ -423,13 +422,21 @@ final class Api {
       if (r.review() != null) done.put("review", r.review());
       if (r.traceId() != null) done.put("traceId", r.traceId());
       done.putObject("usage").put("promptTokens", r.usage().promptTokens())
-          .put("completionTokens", r.usage().completionTokens());
+          .put("completionTokens", r.usage().completionTokens())
+          .put("reasoningTokens", r.usage().reasoningTokens());
       run.publish("done", done);
     } catch (CancelledException e) {
       run.publish("cancelled", Json.object());
     } catch (RuntimeException e) {
       run.publish("error", Json.object().put("message", message(e)));
     }
+  }
+
+  /** A sub-agent's text; {@code reasoning: true} only when it is what the sub-agent thinks. */
+  private static ObjectNode agentDelta(Chat.AgentDelta d) {
+    ObjectNode out = Json.object().put("parent", d.parentCallId()).put("agent", d.agent()).put("text", d.text());
+    if (d.reasoning()) out.put("reasoning", true);
+    return out;
   }
 
   /**

@@ -179,11 +179,11 @@ web UI shows Allow/Deny buttons. With no answer (one-shot mode, nobody watching,
 the call is denied and the model is told so. Tune the rules per risk, per tool or per command (`"rules": {"allow": ["exec(npm run *)"], "deny": ["exec(kill *)"]}`) in the `permissions` section.
 
 **YOLO mode.** `"permissions": {"bypassPermissions": true}` runs every call the rules would ask about without
-asking; a rule that says `deny` still denies. In a chat, `/bypass on` / `/bypass off` (or the switch in the web
-header) does the same for that chat only, and the REPL prompt shows `[bypass] > ` while it is on. Use it only where
+asking; a rule that says `deny` still denies. In a chat, `/bypass on` / `/bypass off` (or the switch under the
+message box in the web UI) does the same for that chat only, and the REPL prompt shows `[bypass] > ` while it is on. Use it only where
 the agent can do no harm you cannot undo.
 
-**Plan mode.** `/plan on` (or the Plan switch in the web header; the REPL prompt shows `[plan] > `) makes the agent
+**Plan mode.** `/plan on` (or the Plan mode switch under the web message box; the REPL prompt shows `[plan] > `) makes the agent
 research with read-only tools first: calls to tools that write, run commands or use the network are refused, even
 in bypass mode, and the agent is told to propose its plan. It then proposes a plan (`exit_plan_mode`): the REPL prints it and asks
 `approve the plan? [y/N, or what to change]`, the web UI shows it with "Approve and start" and "Keep planning". Once

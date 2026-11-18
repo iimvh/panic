@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { chat } from '$lib/chat.svelte';
+	import ModeChips from './ModeChips.svelte';
 
 	let text = $state('');
 	let box: HTMLTextAreaElement;
@@ -75,7 +76,7 @@
 			{/each}
 		</ul>
 	{/if}
-	<form onsubmit={(e) => (e.preventDefault(), submit())}>
+	<form class:danger={chat.permissions?.bypass} onsubmit={(e) => (e.preventDefault(), submit())}>
 		<textarea
 			bind:this={box}
 			bind:value={text}
@@ -83,6 +84,7 @@
 			rows="1"
 			placeholder={chat.state?.connected ? 'Message Panic, or type / for commands' : 'Type / for commands'}
 			aria-label="Message"
+			title="Enter to send · Shift+Enter for a new line"
 		></textarea>
 		{#if chat.busy}
 			<button type="button" class="btn send" onclick={() => chat.stop()} aria-label="Stop">
@@ -96,7 +98,10 @@
 			</button>
 		{/if}
 	</form>
-	<p class="hint">Enter to send · Shift+Enter for a new line</p>
+	<div class="below">
+		<ModeChips />
+		<span class="hint">Shift+Enter for a new line</span>
+	</div>
 </div>
 
 <style>
@@ -120,6 +125,11 @@
 	form:focus-within {
 		border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
 	}
+	/* bypass is on: the danger shows where the next message is written */
+	form.danger,
+	form.danger:focus-within {
+		border-color: var(--danger);
+	}
 	textarea {
 		flex: 1;
 		resize: none;
@@ -138,11 +148,23 @@
 		padding: 0;
 		border-radius: 10px;
 	}
+	.below {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		margin-top: 6px;
+		min-height: 22px;
+	}
 	.hint {
-		margin: 6px 0 0;
-		text-align: center;
+		flex: none;
 		font-size: 12px;
 		color: var(--muted);
+	}
+	@media (max-width: 520px) {
+		.hint {
+			display: none;
+		}
 	}
 	.suggest {
 		position: absolute;

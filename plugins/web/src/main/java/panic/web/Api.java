@@ -290,6 +290,8 @@ final class Api {
             String reason = m.content().substring(Chat.REVIEW_FEEDBACK_PREFIX.length());
             int nl = reason.indexOf('\n');
             out.addObject().put("role", "review").put("reason", nl < 0 ? reason : reason.substring(0, nl));
+          } else if (Chat.fromHarness(m.content())) {
+            continue; // the harness's notice of a cut reply: not the user's words, and the reply goes on
           } else {
             questions.add(out.addObject().put("role", "user").put("content", m.content()));
           }

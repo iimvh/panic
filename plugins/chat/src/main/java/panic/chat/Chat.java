@@ -169,6 +169,11 @@ public final class Chat {
   public static final String BUDGET = "budget";
   /** The reviewer still rejected the answer once {@code maxReviews} retries were used; see {@link Reply#review}. */
   public static final String REJECTED = "rejected";
+  /**
+   * The model's reply was cut at the output limit ({@code llm.maxTokens}) {@code TRUNCATIONS_IN_A_ROW} times in a
+   * row: the limit is too low for what it tries to write, and asking again would only cut it again.
+   */
+  public static final String TRUNCATED = "truncated";
 
   /**
    * Starts the content of a {@code TOOL} message whose call failed (unknown tool, bad arguments, denied, not
@@ -180,10 +185,28 @@ public final class Chat {
   public static final String REVIEW_FEEDBACK_PREFIX = "A review of your answer rejected it: ";
 
   /**
+   * Starts the user message that tells the model its last reply was cut at the output limit (stored with the
+   * turn). It is the harness speaking, like {@link #REVIEW_FEEDBACK_PREFIX}: see {@link #fromHarness}.
+   */
+  public static final String TRUNCATED_FEEDBACK_PREFIX = "Your last reply was cut off at the output token limit";
+
+  /** Cut replies in a row after which a turn stops with {@link #TRUNCATED}. */
+  public static final int TRUNCATIONS_IN_A_ROW = 3;
+
+  /**
+   * True for a user message the harness wrote (a review's rejection, a cut reply's notice), not the user: front-ends
+   * do not show it as the user's words and summaries do not keep it as such.
+   */
+  public static boolean fromHarness(String userMessage) {
+    return userMessage.startsWith(REVIEW_FEEDBACK_PREFIX) || userMessage.startsWith(TRUNCATED_FEEDBACK_PREFIX);
+  }
+
+  /**
    * The answer. {@code text} is the bot's last message, or, when {@link #MAX_STEPS} or {@link #BUDGET} stopped the
-   * turn before it answered, a closing note of the harness (why it stopped, the tools run, how to continue) that is
-   * not saved in the conversation; {@code usage} adds up every model call of the turn (reviews included);
-   * {@code stop} says why it ended ({@link #DONE}, {@link #MAX_STEPS}, {@link #BUDGET}, {@link #REJECTED}). {@code review} is the reason of the last verdict, null when nobody
+   * turn before it answered or {@link #TRUNCATED} stopped it, a closing note of the harness (why it stopped, the
+   * tools run, how to continue) that is not saved in the conversation; {@code usage} adds up every model call of the
+   * turn (reviews included); {@code stop} says why it ended ({@link #DONE}, {@link #MAX_STEPS}, {@link #BUDGET},
+   * {@link #REJECTED}, {@link #TRUNCATED}). {@code review} is the reason of the last verdict, null when nobody
    * reviewed the answer. {@code traceId} is the turn's trace, whose spans are emitted on
    * {@link panic.trace.Trace#SPAN}.
    */

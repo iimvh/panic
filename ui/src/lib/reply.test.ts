@@ -167,6 +167,7 @@ describe('canContinue', () => {
 		expect(reply.stop).toBe('max_steps');
 		expect(canContinue(reply)).toBe(true);
 		expect(canContinue({ ...reply, stop: 'budget' })).toBe(true);
+		expect(canContinue({ ...reply, stop: 'truncated' })).toBe(true);
 		expect(canContinue({ ...reply, stop: 'done' })).toBe(false);
 		expect(canContinue({ ...reply, stop: 'rejected' })).toBe(false);
 	});
@@ -284,6 +285,22 @@ describe('toolDelta', () => {
 		toolDelta(m, { index: 0, id: 'a', name: 'write_file', arguments: '{' });
 		endDrafts(m);
 		expect(steps(m).map((t) => [t.status, t.content])).toEqual([['error', 'not run']]);
+	});
+
+	it('ends a draft that never ran when another call takes its index', () => {
+		const m: Message = { id: 1, role: 'assistant', text: '' };
+		toolDelta(m, { index: 0, id: 'a', name: 'write_file', arguments: '{"content":"lo' });
+		// the reply was cut there; the next model call writes a new call at index 0
+		toolDelta(m, { index: 0, id: 'b', name: 'edit_file', arguments: '{}' });
+		expect(steps(m).map((t) => [t.id, t.status, t.arguments])).toEqual([
+			['a', 'error', '{"content":"lo'],
+			['b', 'drafting', '{}']
+		]);
+		toolStep(m, { id: 'b', name: 'edit_file', arguments: '{}', status: 'running' });
+		expect(steps(m).map((t) => [t.id, t.status])).toEqual([
+			['a', 'error'],
+			['b', 'running']
+		]);
 	});
 
 	it('sizes the arguments', () => {

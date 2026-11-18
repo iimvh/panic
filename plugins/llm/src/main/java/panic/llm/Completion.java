@@ -24,6 +24,15 @@ public record Completion(String text, String model, String finishReason, Usage u
     this(text, model, finishReason, usage, List.of(), "");
   }
 
+  /**
+   * True when the model was cut off at the request's output limit ({@code length}, or {@code max_tokens} as
+   * Anthropic-style APIs say) before it finished: its text stops mid-way and its last tool call, if any, is
+   * incomplete. Such a reply is neither an answer nor a call to run.
+   */
+  public boolean truncated() {
+    return "length".equals(finishReason) || "max_tokens".equals(finishReason);
+  }
+
   public boolean hasToolCalls() {
     return !toolCalls.isEmpty();
   }

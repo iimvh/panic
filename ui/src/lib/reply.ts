@@ -205,8 +205,15 @@ export function clearApproval(m: Message, gone: (a: Approval) => boolean) {
 export function toolDelta(m: Message, d: Record<string, unknown>) {
 	m.parts ??= [];
 	const index = Number(d.index ?? 0);
-	const part = m.parts.find((p) => p.kind === 'tool' && p.step.status === 'drafting' && p.step.draft === index);
+	let part = m.parts.find((p) => p.kind === 'tool' && p.step.status === 'drafting' && p.step.draft === index);
 	const piece = String(d.arguments ?? '');
+	if (part?.kind === 'tool' && d.id && part.step.id && part.step.id !== String(d.id)) {
+		// a new call at the index of one that never ran (the model was cut off mid-call): that draft is over
+		part.step.status = 'error';
+		part.step.content = 'not run';
+		delete part.step.draft;
+		part = undefined;
+	}
 	if (part?.kind === 'tool') {
 		if (d.id) part.step.id = String(d.id);
 		if (d.name) part.step.name = String(d.name);
@@ -521,11 +528,11 @@ export function createBatcher(apply: (text: string) => void, schedule: (run: () 
 export const CONTINUE_TEXT = 'Continue where you stopped.';
 
 /**
- * Whether an answer ended on a hard limit (steps or tokens) and can be continued, as Cursor offers "Continue" after
- * its tool call limit and the Claude Agent SDK resumes a session after max_turns.
+ * Whether an answer ended on a hard limit (steps, tokens, or replies cut at the output limit) and can be continued,
+ * as Cursor offers "Continue" after its tool call limit and the Claude Agent SDK resumes a session after max_turns.
  */
 export function canContinue(m: Message): boolean {
-	return m.role === 'assistant' && !m.streaming && (m.stop === 'max_steps' || m.stop === 'budget');
+	return m.role === 'assistant' && !m.streaming && (m.stop === 'max_steps' || m.stop === 'budget' || m.stop === 'truncated');
 }
 
 /** The `usage` of a `done` event; undefined when it has none. */

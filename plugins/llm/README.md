@@ -65,6 +65,7 @@ The API carries tools; it does not run them (that is the caller's job).
 | `ToolSpec(name, description, parameters)` | A tool offered to the model; `parameters` is a JSON Schema object |
 | `ChatRequest.withTools(tools, toolChoice)` | Offer tools; `ToolChoice.AUTO` / `NONE` / `REQUIRED` / `named(name)`, null = provider default |
 | `Completion.toolCalls()` | `ToolCall(id, name, arguments)` the model asked for (`finishReason` is `tool_calls`); `arguments` is raw JSON text, not validated |
+| `Completion.truncated()` | True when `finishReason` is `length` (or `max_tokens`): the reply was cut at the output limit, so its text stops mid-way and its last tool call is incomplete |
 | `Completion.message()` | The answer as the assistant `Message` to append to the history |
 | `Message.tool(callId, content)` | The result of one call, sent back with role `tool` |
 | `ChatModel.stream(request, signal, onDelta, onToolDelta)` | Also hands each piece of a tool call to `onToolDelta` as it streams: `ToolCallDelta(index, id?, name?, arguments)`, `arguments` being only the new text. Progress only (the calls still come in the `Completion`); the default reports nothing |

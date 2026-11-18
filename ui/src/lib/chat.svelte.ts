@@ -23,7 +23,7 @@ export type Message = {
 	waiting?: Approval[];
 	/** A plan the agent proposes (plan mode), waiting for the user to approve it or send it back. */
 	plan?: PlanProposal;
-	/** Why the answer ended (`done`, `max_steps`, `budget`, `rejected`), from the `done` event (assistant only). */
+	/** Why the answer ended (`done`, `max_steps`, `budget`, `rejected`, `truncated`), from the `done` event (assistant only). */
 	stop?: string;
 	/** Questions the agent asks, waiting for the user's answers. */
 	question?: Questions;

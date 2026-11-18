@@ -54,6 +54,7 @@ until the model answers or a limit stops it:
 | `max_steps` | `maxSteps` model calls were made (default 25) |
 | `budget` | The tokens of the turn reached `maxTokens` (default 400000; `0` = no budget) |
 | `rejected` | The reviewer still rejected the answer after `maxReviews` retries (or no step was left for one). `Reply.review` holds its reason |
+| `truncated` | The model's reply was cut at the output limit (`llm.maxTokens`) `Chat.TRUNCATIONS_IN_A_ROW` (3) times in a row |
 
 **Only hard limits stop a turn.** This follows proven harnesses:
 
@@ -67,12 +68,24 @@ A repeated call is feedback, not a stop. The same call (name and arguments, key 
 arguments or answer with what you have`, and the turn goes on, so a model that changes course recovers.
 
 **A turn stopped by a limit closes with a note for the user.** When `max_steps` or `budget` stops a turn before
-the model answered, `Reply.text` is a note written by the harness, not the model:
+the model answered, or `truncated` stops it, `Reply.text` is a note written by the harness, not the model:
 `Stopped after 25 steps (max_steps) before finishing. Tools run this turn: read_file ×7, write_file ×2. Say
 "continue" to go on from here.` It is also streamed through `onDelta`. It is never saved in the conversation, so
 the model never reads the harness's words as its own. The work done is saved, so asking again (the web UI's
 **Continue** button, or typing "continue") goes on from there. A sub-agent gets no note: the `agent` tool reports
 its stop to its caller.
+
+**A reply cut at the output limit is not an answer.** When the provider ends a reply with `finish_reason: length`
+(`Completion.truncated()`), the model was stopped mid-way by `llm.maxTokens`, typically while writing a large tool
+call (a whole file). Its text stops mid-sentence and its last call is incomplete, so treating it as either an answer
+or a call would be wrong: it is not put to `Chat.STOP` or `Chat.REVIEW` (that would spend a review on work the model
+never finished), and none of its calls run. Its text is kept, without the calls (a call with no result would be
+refused by providers), followed by a user message from the harness (`Chat.TRUNCATED_FEEDBACK_PREFIX`) naming the
+calls that were lost and asking for the work in smaller pieces; the loop goes on. It counts as a step. After
+`Chat.TRUNCATIONS_IN_A_ROW` cuts in a row (any reply that finishes resets the count) the turn stops with
+`truncated` and a closing note telling the user to raise `llm.maxTokens`, and the web UI offers **Continue**.
+`Chat.fromHarness` tells such messages (and review feedback) from the user's words: summaries do not keep them
+verbatim and the web history does not show them.
 
 Every failure is an observation for the model, not a crash of the turn. Unknown tools, bad arguments, tool
 errors, calls denied by the permission policy or the user, and timeouts (`toolTimeoutSeconds`, default 60) all

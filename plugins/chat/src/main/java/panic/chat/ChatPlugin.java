@@ -137,12 +137,12 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
   /**
    * {@code summary} with every user message of {@code turns} it does not quote added word for word under
    * {@link #VERBATIM_HEADING}: the model is asked to keep them, and this makes sure it did. A reviewer's
-   * feedback is the harness speaking, not the user, and is left out.
+   * feedback or a cut reply's notice is the harness speaking, not the user, and is left out.
    */
   static String verbatim(String summary, List<Message> turns) {
     StringBuilder missing = new StringBuilder();
     for (Message m : turns) {
-      if (m.role() != Role.USER || m.content().startsWith(Chat.REVIEW_FEEDBACK_PREFIX)) continue;
+      if (m.role() != Role.USER || Chat.fromHarness(m.content())) continue;
       String text = clip(m.content().strip());
       if (text.isEmpty() || summary.contains(text)) continue;
       missing.append("- ").append(text.replace("\n", "\n  ")).append('\n');
@@ -226,6 +226,8 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private String lastCall;
     private int repeats;
     private int reviews;
+    /** Replies cut at the output limit in a row; any reply that finishes resets it. */
+    private int truncations;
     private String review;
     private int steps;
     private String stop = Chat.DONE;
@@ -291,6 +293,23 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         model = last.model();
         tokens.observe(Tokens.raw(request), last.usage().promptTokens());
         count(last.usage());
+        if (last.truncated()) {
+          // cut at the output limit: not an answer to review, and its last call is incomplete, so nothing runs
+          truncations++;
+          add(Message.assistant(last.text()));
+          if (steps >= maxSteps()) {
+            stop = Chat.MAX_STEPS;
+          } else if (maxTokens() > 0 && usage.totalTokens() >= maxTokens()) {
+            stop = Chat.BUDGET;
+          } else if (truncations >= Chat.TRUNCATIONS_IN_A_ROW) {
+            stop = Chat.TRUNCATED;
+          } else {
+            add(Message.user(truncatedFeedback(last)));
+            continue;
+          }
+          break;
+        }
+        truncations = 0;
         add(last.message());
         if (!last.hasToolCalls()) {
           Chat.Verdict verdict = review(last.text());
@@ -321,7 +340,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       String closing = closing(text);
       if (closing != null) {
         // the harness's own words: shown to the user, never saved as something the model said
-        ask.onDelta().accept(closing);
+        ask.onDelta().accept(text == null || text.isBlank() ? closing : "\n\n" + closing);
         text = closing;
       }
       Chat.Reply reply = new Chat.Reply(text, last.model(), last.finishReason(), usage, stop, steps,
@@ -333,12 +352,18 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     /**
      * What the user reads when a hard limit stopped the turn before the model answered (the role of the OpenAI
      * Agents SDK's max_turns handler): why it stopped, what ran, and how to go on (Cursor's "Continue"). Null when
-     * the model answered, the turn finished, or for a sub-agent (its caller reports the stop).
+     * the model answered, the turn finished, or for a sub-agent (its caller reports the stop). A turn stopped by
+     * {@link Chat#TRUNCATED} always gets one: its last text stops mid-way.
      */
     private String closing(String answer) {
-      if (ask.delegate() != null || !(Chat.MAX_STEPS.equals(stop) || Chat.BUDGET.equals(stop))) return null;
-      if (answer != null && !answer.isBlank()) return null;
-      String why = Chat.MAX_STEPS.equals(stop) ? "after " + steps + " steps (max_steps)"
+      if (ask.delegate() != null) return null;
+      boolean cut = Chat.TRUNCATED.equals(stop);
+      if (!cut && !(Chat.MAX_STEPS.equals(stop) || Chat.BUDGET.equals(stop))) return null;
+      // a cut answer is no answer: the note says why it stops mid-way
+      if (!cut && answer != null && !answer.isBlank()) return null;
+      String why = cut ? "because the model's reply was cut at the output token limit " + truncations
+          + " times in a row (raise llm.maxTokens, the most it may write in one reply)"
+          : Chat.MAX_STEPS.equals(stop) ? "after " + steps + " steps (max_steps)"
           : "after using " + usage.totalTokens() + " tokens (budget)";
       StringBuilder out = new StringBuilder("Stopped ").append(why).append(" before finishing.");
       if (!ran.isEmpty()) {
@@ -351,6 +376,22 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         out.append('.');
       }
       return out.append(" Say \"continue\" to go on from here.").toString();
+    }
+
+    /**
+     * What the model is told after a reply cut at the output limit. The calls it was writing are named (they did
+     * not run: the last one is incomplete), and it is asked to work in smaller pieces, since writing the same thing
+     * again would be cut at the same place.
+     */
+    private static String truncatedFeedback(Completion cut) {
+      StringBuilder out = new StringBuilder(Chat.TRUNCATED_FEEDBACK_PREFIX).append(" before you finished");
+      List<String> names = cut.toolCalls().stream().map(ToolCall::name).filter(n -> !n.isBlank()).distinct().toList();
+      if (!names.isEmpty()) {
+        out.append(", while writing a call to ").append(String.join(", ", names)).append(": nothing was run");
+      }
+      return out.append(". It is not an answer. Go on from there in smaller pieces: split large content over ")
+          .append("several tool calls (write part of a file, then add the rest with further edits) and keep each ")
+          .append("reply short.").toString();
     }
 
     /** The step limit: the sub-agent's own when it has one, otherwise the config's. */

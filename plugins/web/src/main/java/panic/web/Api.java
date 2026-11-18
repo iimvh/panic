@@ -27,6 +27,7 @@ import panic.chat.Conversations;
 import panic.command.Command;
 import panic.command.Commands;
 import panic.command.Hooks;
+import panic.command.Prompts;
 import panic.command.Session;
 import panic.command.UsageException;
 import panic.util.CancelToken;
@@ -517,6 +518,9 @@ final class Api {
     try {
       if (Commands.run(ctx, name, args, s)) {
         sse.send("done");
+      } else if (Prompts.expand(ctx, session, name, args).isPresent()) {
+        // a slash prompt (a skill): the page asks it through /api/chat, where the chat expands it
+        sse.send("prompt", Json.object().put("line", "/" + line));
       } else {
         sse.send("unknown", Json.object().put("name", name));
       }

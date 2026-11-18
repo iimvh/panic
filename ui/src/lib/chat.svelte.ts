@@ -381,10 +381,12 @@ class Chat {
 	async #command(line: string, quiet = false) {
 		const name = line.slice(1).split(/\s+/, 1)[0];
 		const out = this.#push({ id: nextId++, role: 'command', text: '', meta: line, streaming: true });
+		let prompt: string | null = null;
 		await this.#run(() => out, (signal) =>
 			stream('/api/command', { session: this.session, line }, ({ event, data }) => {
 				const d = data as Record<string, unknown>;
-				if (event === 'delta') out.text += String(d.text ?? '');
+				if (event === 'prompt') prompt = String(d.line ?? line);
+				else if (event === 'delta') out.text += String(d.text ?? '');
 				else if (event === 'approve') askApproval(out, d);
 				else if (event === 'plan') askPlan(out, d);
 				else if (event === 'question') askUser(out, d);
@@ -394,6 +396,12 @@ class Chat {
 				else if (event === 'cancelled') out.meta = `${line} · stopped`;
 			}, signal)
 		);
+		if (prompt !== null) {
+			// not a command but a slash prompt (a skill): asked like any question, the server expands it
+			this.messages = this.messages.filter((m) => m.id !== out.id);
+			await this.#ask(prompt);
+			return;
+		}
 		if (name === 'reset' && !out.error) {
 			this.messages = [];
 			void this.loadConversations();

@@ -565,6 +565,18 @@ class WebPluginTest {
   }
 
   @Test
+  void aSlashPromptIsSentBackForThePageToAsk() throws Exception {
+    root.plugin("skills", ctx -> ctx.hook(panic.command.Prompts.EXPAND, q -> q.name().equals("hello")
+        ? new panic.command.Prompts.Prompt("hello", "", "skill", null, "hi " + q.args()) : null));
+    Event prompt = events(send("POST", "/api/command", "{\"session\":\"s1\",\"line\":\"/hello  bob\"}").body())
+        .get(0);
+    assertEquals("prompt", prompt.name());
+    assertEquals("/hello  bob", prompt.data().path("line").asText());
+    assertEquals("unknown", events(send("POST", "/api/command", "{\"session\":\"s1\",\"line\":\"/helo\"}").body())
+        .get(0).name());
+  }
+
+  @Test
   void settingsSwitchTheModel() throws Exception {
     HttpResponse<String> r = send("PUT", "/api/settings", "{\"model\":\"m2\"}");
     assertEquals(200, r.statusCode());

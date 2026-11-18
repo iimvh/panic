@@ -124,6 +124,19 @@ class CliApprovalTest {
   }
 
   @Test
+  void aSlashPromptIsAskedAsTextAndAMistypedCommandStaysUnknown() throws Exception {
+    java.util.List<String> asked = new java.util.concurrent.CopyOnWriteArrayList<>();
+    root.plugin("chat", ctx -> Commands.command(ctx, "ask <text...>", "", call -> asked.add(call.arg("text"))));
+    root.plugin("skills", ctx -> ctx.hook(panic.command.Prompts.EXPAND,
+        q -> q.name().equals("hello") ? new panic.command.Prompts.Prompt("hello", "", "skill", null, "hi") : null));
+    see("\n> ", 1);
+    type("/hello bob");
+    type("/helo bob");
+    see("unknown command", 1);
+    assertEquals(java.util.List.of("/hello bob"), asked);
+  }
+
+  @Test
   void bypassModeRunsCallsWithoutAskingAndShowsInThePrompt() throws Exception {
     root.plugin("permissions", new panic.tools.PermissionsPlugin(), panic.tools.PermissionsConfig.DEFAULT);
     see("\n> ", 1);

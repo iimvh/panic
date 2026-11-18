@@ -8,7 +8,9 @@ The terminal front-end. It owns no feature: it runs the commands that other plug
 | --- | --- | --- | --- |
 | `cli` | `CliConfig { repl }` | `App.KEY` (provided last, so the REPL starts once the tree is complete) | commands `help`, and `exit` when `repl`; hooks `Tools.APPROVE`, `Planner.APPROVE`, `AskUser.ASK` when `repl` |
 
-With `repl=true` it reads lines from `App.in()`: `/name args` runs a command, plain text runs `ask`. At
+With `repl=true` it reads lines from `App.in()`: `/name args` runs a command, plain text runs `ask`. A `/name` that
+is no command but that `Prompts.EXPAND` answers (a skill) runs `ask` with the whole line, which the chat expands;
+any other unknown name is reported as such. At
 end of input or on `exit` it calls `App.exit()`. The app sets `repl` from its flags (`--serve` and one-shot
 commands turn it off).
 

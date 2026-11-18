@@ -29,7 +29,7 @@ that left: a command is cancelled, an answer goes on without it (see [Resuming](
 | `GET /api/trace?session=&id=` | hook `Trace.GET`: `{traceId, spans: [{id, parentId, name, startMicros, durationMicros, status: ok/error/cancelled, error?, attrs}]}`, in the order they started. `404` `no such trace`, or `tracing is off` when nobody answers `Trace.LIST` |
 | `GET /api/stream?session=&after=` → SSE | attaches to the session's answer in flight: its events after SSE id `after`, then the rest; `204` when none runs |
 | `POST /api/stop {session}` | cancels the session's answer (`404` when none runs) |
-| `POST /api/command {session, line}` → SSE | `Commands.run` |
+| `POST /api/command {session, line}` → SSE | `Commands.run`. When no command has the name but `Prompts.EXPAND` answers it (a skill), SSE `prompt {line}` and nothing runs: the page sends `line` to `/api/chat`, so a slash prompt is an answer like any other (one per session, resumable) |
 | `POST /api/approve {session, id, allow}` | answers an SSE `approve` (`404` when it is unknown, already answered or expired) |
 | `POST /api/plan {session, id, approve, feedback?}` | answers an SSE `plan`: approve it, or send it back with `feedback` (`404` when it is unknown, already answered or expired) |
 | `POST /api/answer {session, id, answers: [{selected: [label], other?}]}` | answers an SSE `question`, one answer per question in order (`400` for a wrong count, an unknown label, or several picks on a single-select question; all empty skips; `404` when it is unknown, already answered or expired) |

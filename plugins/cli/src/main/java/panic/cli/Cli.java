@@ -17,6 +17,7 @@ import panic.command.Command;
 import panic.command.Commands;
 import panic.command.Hooks;
 import panic.command.Out;
+import panic.command.Prompts;
 import panic.command.Session;
 import panic.command.UsageException;
 import panic.interact.AskUser;
@@ -258,7 +259,13 @@ public final class Cli implements ConfigPlugin<CliConfig> {
     }
     Out out = session.out();
     try {
-      if (!Commands.run(ctx, name, argLine, session)) out.println(unknown(name, PREFIX));
+      if (Commands.run(ctx, name, argLine, session)) return;
+      // not a command: a slash prompt (a skill) is asked like plain text, and the chat expands it
+      if (!name.equals(ASK) && Prompts.expand(ctx, session.id(), name, argLine).isPresent()) {
+        if (Commands.run(ctx, ASK, line, session)) return;
+        name = ASK;
+      }
+      out.println(unknown(name, PREFIX));
     } catch (UsageException e) {
       out.println("usage: " + PREFIX + e.usage() + "  (" + e.getMessage() + ")");
     } catch (CancelledException e) {

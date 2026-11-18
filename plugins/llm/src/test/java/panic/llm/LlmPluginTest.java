@@ -40,7 +40,9 @@ class LlmPluginTest {
 
     @Override
     public Completion complete(ChatRequest r, Signal s) {
-      return new Completion(id + ":" + r.model() + ":" + r.temperature(), r.model(), "stop", Usage.NONE);
+      // the effort the provider got comes back as the reasoning, so tests can see it
+      return new Completion(id + ":" + r.model() + ":" + r.temperature(), r.model(), "stop", Usage.NONE, List.of(),
+          "effort=" + r.reasoningEffort());
     }
 
     @Override
@@ -130,6 +132,23 @@ class LlmPluginTest {
     Llm llm = root.bail(Llm.CURRENT, Llm.Query.CURRENT).orElseThrow();
     ChatRequest custom = new ChatRequest(List.of(Message.user("q")), "other", 1.0, null);
     assertEquals("a:other:1.0", llm.complete(custom, new CancelToken()).text());
+  }
+
+  @Test
+  void theConfiguredEffortIsTheDefaultAndARequestMayTurnItOff() {
+    root.plugin("a", fakeProvider("a"), true);
+    ConfigHandle<LlmConfig> cfg = root.plugin("llm", new LlmPlugin(), new LlmConfig("a", "m1", null, null, " high "));
+    Llm llm = root.bail(Llm.CURRENT, Llm.Query.CURRENT).orElseThrow();
+    ChatRequest q = ChatRequest.of(List.of(Message.user("q")));
+    assertEquals("effort=high", llm.complete(q, new CancelToken()).reasoning());
+    assertEquals("effort=low", llm.complete(q.withReasoningEffort("low"), new CancelToken()).reasoning());
+    ChatRequest none = q.withReasoningEffort(ChatRequest.NO_REASONING_EFFORT);
+    assertEquals("effort=", llm.complete(none, new CancelToken()).reasoning(), "kept as none, not the default");
+    assertEquals(null, none.withDefaults("m", null, null, "high").sentReasoningEffort());
+
+    cfg.update(cfg.config().withReasoningEffort(" "));
+    llm = root.bail(Llm.CURRENT, Llm.Query.CURRENT).orElseThrow();
+    assertEquals("effort=null", llm.complete(q, new CancelToken()).reasoning(), "blank in the config = none");
   }
 
   @Test

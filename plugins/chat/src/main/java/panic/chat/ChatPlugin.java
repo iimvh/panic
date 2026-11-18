@@ -654,7 +654,9 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private String summarize(List<Message> turns, OpenSpan s) {
       int maxTokens = Math.max(256, Math.min(2_048, cfg.contextTokens() / 8));
       ChatRequest request = new ChatRequest(
-          List.of(Message.system(SUMMARY_PROMPT), Message.user(transcript(turns))), null, null, maxTokens);
+          List.of(Message.system(SUMMARY_PROMPT), Message.user(transcript(turns))), null, null, maxTokens)
+          // a summary needs no thinking, and thinking would spend the small limit before the summary is written
+          .withReasoningEffort(ChatRequest.NO_REASONING_EFFORT);
       try {
         Completion c = llm.complete(request, signal);
         count(c.usage());

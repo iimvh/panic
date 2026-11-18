@@ -6,16 +6,24 @@ package panic.verify;
  * small limit cuts the verdict off. {@code maxTranscript}: the most characters of the turn shown to the
  * reviewer, newest kept (non-positive = 12000). {@code temperature}: sent with the reviewer's request; null (the
  * default) sends none, so the model uses its own default (some reject a temperature of 0 unless {@code top_p} is
- * 1).
+ * 1). {@code reasoningEffort}: sent as {@code reasoning_effort} with the reviewer's request; null (the default)
+ * sends none even when {@code llm.reasoningEffort} is set, so the verdict is not cut off by thinking under
+ * {@code maxTokens}. Set it to let the reviewer think.
  */
-public record ReviewConfig(String prompt, int maxTokens, int maxTranscript, Double temperature) {
+public record ReviewConfig(String prompt, int maxTokens, int maxTranscript, Double temperature,
+    String reasoningEffort) {
 
-  public static final ReviewConfig DEFAULT = new ReviewConfig(null, 0, 0, null);
+  public static final ReviewConfig DEFAULT = new ReviewConfig(null, 0, 0, null, null);
 
   public ReviewConfig {
     prompt = prompt == null || prompt.isBlank() ? ReviewPlugin.PROMPT : prompt.strip();
     if (maxTokens <= 0) maxTokens = 16_384;
     if (maxTranscript <= 0) maxTranscript = 12_000;
+    reasoningEffort = reasoningEffort == null || reasoningEffort.isBlank() ? null : reasoningEffort.strip();
+  }
+
+  public ReviewConfig(String prompt, int maxTokens, int maxTranscript, Double temperature) {
+    this(prompt, maxTokens, maxTranscript, temperature, null);
   }
 
   public ReviewConfig(String prompt, int maxTokens, int maxTranscript) {

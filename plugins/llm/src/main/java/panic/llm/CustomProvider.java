@@ -66,7 +66,7 @@ public final class CustomProvider extends OpenAiCompatProvider {
       ctx.hook(Providers.STATUS, q -> new Providers.Status(id, endpoint.connected()));
       if (!endpoint.connected()) return null;
       OpenAiCompatClient client = new OpenAiCompatClient(id, endpoint.baseUrl(), endpoint.key(),
-          endpoint.retryPolicy());
+          endpoint.retryPolicy(), endpoint.streamUsage());
       ctx.provide(Providers.key(id), new CustomProvider(id, client, ctx.signal()));
       return null;
     };

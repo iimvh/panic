@@ -169,7 +169,8 @@ Every request stays under `contextTokens` estimated tokens (default 32000; `0` t
   the summarised messages are removed from the history. It compacts down to half the budget, so the next asks
   do not each pay for a summary. Its tokens count in the turn's `usage` (and `maxTokens`). If the summary call
   fails, the old turns are only left out of the request; a cancelled ask is cancelled as usual and changes
-  nothing. `maxHistory` alone never triggers a summary.
+  nothing. `maxHistory` alone never triggers a summary. The summary call never asks the model to think
+  (`ChatRequest.NO_REASONING_EFFORT`), whatever `llm.reasoningEffort` says: its limit is small (at most 2048 tokens).
   - **What the summary keeps.** The prompt (`SUMMARY_PROMPT`) asks for the sections of Claude Code's compaction:
     the primary request, every user message word for word, key facts, work done and current state, pending tasks
     and the next step. Then `chat` checks it: each user message of the summarised turns that the summary does not

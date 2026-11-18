@@ -252,11 +252,14 @@ class ReviewPluginTest {
     assertNull(sent.model());
     assertEquals(16_384, sent.maxTokens());
     assertTrue(sent.tools().isEmpty());
+    assertEquals(ChatRequest.NO_REASONING_EFFORT, sent.reasoningEffort(),
+        "no thinking unless configured, even when llm.reasoningEffort is set: it would eat maxTokens");
 
-    review.update(new ReviewConfig(null, 100, 0, 0.3));
+    review.update(new ReviewConfig(null, 100, 0, 0.3, "low"));
     llm.reviewer.clear();
     ask("greet me again");
     assertEquals(0.3, llm.reviewer.get(0).temperature());
     assertEquals(100, llm.reviewer.get(0).maxTokens());
+    assertEquals("low", llm.reviewer.get(0).reasoningEffort());
   }
 }

@@ -100,7 +100,7 @@ public final class LlmPlugin implements ConfigPlugin<LlmConfig> {
     }
 
     private ChatRequest defaults(ChatRequest request) {
-      return request.withDefaults(cfg.model(), cfg.temperature(), cfg.maxTokens());
+      return request.withDefaults(cfg.model(), cfg.temperature(), cfg.maxTokens(), cfg.reasoningEffort());
     }
 
     @Override

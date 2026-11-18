@@ -50,17 +50,35 @@ public final class OpenAiCompatClient implements ChatModel {
   private final String apiKey;
   private final String providerName;
   private final RetryPolicy retry;
+  private final boolean streamUsage;
 
   public OpenAiCompatClient(String providerName, String baseUrl, String apiKey) {
     this(providerName, baseUrl, apiKey, RetryPolicy.DEFAULT);
   }
 
   public OpenAiCompatClient(String providerName, String baseUrl, String apiKey, RetryPolicy retry) {
-    this(HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build(), providerName, baseUrl, apiKey, retry);
+    this(providerName, baseUrl, apiKey, retry, true);
+  }
+
+  public OpenAiCompatClient(String providerName, String baseUrl, String apiKey, RetryPolicy retry,
+      boolean streamUsage) {
+    this(HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build(), providerName, baseUrl, apiKey, retry,
+        streamUsage);
   }
 
   public OpenAiCompatClient(HttpClient http, String providerName, String baseUrl, String apiKey,
       RetryPolicy retry) {
+    this(http, providerName, baseUrl, apiKey, retry, true);
+  }
+
+  /**
+   * {@code streamUsage}: ask for the token usage of a streamed reply ({@code stream_options.include_usage}). Most
+   * servers send no usage in a stream without it, which leaves the turn's token budget and counts at zero; turn it
+   * off only for a server that refuses the option.
+   */
+  public OpenAiCompatClient(HttpClient http, String providerName, String baseUrl, String apiKey,
+      RetryPolicy retry, boolean streamUsage) {
+    this.streamUsage = streamUsage;
     this.http = Objects.requireNonNull(http, "http");
     this.providerName = Objects.requireNonNull(providerName, "providerName");
     this.baseUrl = stripSlash(Objects.requireNonNull(baseUrl, "baseUrl"));
@@ -198,6 +216,7 @@ public final class OpenAiCompatClient implements ChatModel {
     }
     if (request.temperature() != null) body.put("temperature", request.temperature());
     if (request.maxTokens() != null) body.put("max_tokens", request.maxTokens());
+    if (request.sentReasoningEffort() != null) body.put("reasoning_effort", request.sentReasoningEffort());
     if (!request.tools().isEmpty()) {
       ArrayNode tools = body.putArray("tools");
       for (ToolSpec t : request.tools()) {
@@ -213,7 +232,10 @@ public final class OpenAiCompatClient implements ChatModel {
         body.putObject("tool_choice").put("type", "function").putObject("function").put("name", choice.name());
       }
     }
-    if (stream) body.put("stream", true);
+    if (stream) {
+      body.put("stream", true);
+      if (streamUsage) body.putObject("stream_options").put("include_usage", true);
+    }
     return body;
   }
 

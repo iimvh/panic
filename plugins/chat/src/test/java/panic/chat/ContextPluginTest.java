@@ -185,6 +185,8 @@ class ContextPluginTest {
 
     Chat.Reply reply = ask(question(5)); // four turns (340) no longer fit
     assertEquals(1, llm.summaries.size());
+    assertEquals(ChatRequest.NO_REASONING_EFFORT, llm.summaries.get(0).reasoningEffort(),
+        "a summary never thinks: thinking would spend its small limit");
     String transcript = llm.summaries.get(0).messages().get(1).content();
     assertTrue(transcript.contains("q1 ") && transcript.contains("q3 "), transcript);
     assertFalse(transcript.contains("q4 "), "compacted down to half the budget: the newest turn stays");

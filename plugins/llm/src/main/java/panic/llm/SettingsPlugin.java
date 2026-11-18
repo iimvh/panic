@@ -9,8 +9,8 @@ import panic.command.Commands;
 import panic.plugin.Configs;
 
 /**
- * Commands {@code provider [id]} and {@code model [id]}: they change the {@code llm} plugin's config at
- * runtime. A plugin of its own, because a plugin must not restart itself from one of its own commands.
+ * Commands {@code provider [id]}, {@code model [id]} and {@code effort [level]}: they change the {@code llm}
+ * plugin's config at runtime ({@code effort off} sends no {@code reasoning_effort}). A plugin of its own, because a plugin must not restart itself from one of its own commands.
  */
 public final class SettingsPlugin implements Plugin {
 
@@ -44,6 +44,17 @@ public final class SettingsPlugin implements Plugin {
       } else {
         configs.update("llm", cfg.withModel(id));
         Commands.run(ctx, Commands.STATUS, "", call.session());
+      }
+    });
+    Commands.command(ctx, Llm.EFFORT_COMMAND + " [level]", "show or set how much the model thinks (low, medium, "
+        + "high, off)", call -> {
+      LlmConfig cfg = configs.get("llm", LlmConfig.class);
+      String level = call.arg("level");
+      if (level == null) {
+        call.out().println("effort: " + (cfg.reasoningEffort() == null ? "off" : cfg.reasoningEffort()));
+      } else {
+        configs.update("llm", cfg.withReasoningEffort(level.equalsIgnoreCase("off") ? null : level));
+        call.out().println("effort: " + (level.equalsIgnoreCase("off") ? "off" : level.strip()));
       }
     });
     return null;

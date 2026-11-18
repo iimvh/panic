@@ -7,8 +7,8 @@ LLM providers and the model the app chats with.
 | Name | Config (`panic.json` section) | Requires | Provides / registers |
 | --- | --- | --- | --- |
 | `openrouter` | `ProviderConfig { apiKey, baseUrl?, maxRetries? }` | none | service `Providers.key("openrouter")` while it has a key; hook `Providers.STATUS` |
-| `custom-providers` | `CustomProvidersConfig { providers: { <id>: { baseUrl, apiKey?, maxRetries?, enabled? } } }` | none | per entry: service `Providers.key(<id>)` while connected; hook `Providers.STATUS` |
-| `llm` | `LlmConfig { provider, model, temperature?, maxTokens? }` | none (its child `active:<provider>` requires that provider) | service `Llm.KEY`; hooks `Llm.CURRENT`, `Llm.CONFIG`; commands `status`, `models`, `check` |
+| `custom-providers` | `CustomProvidersConfig { providers: { <id>: { baseUrl, apiKey?, maxRetries?, enabled?, streamUsage? } } }` | none | per entry: service `Providers.key(<id>)` while connected; hook `Providers.STATUS` |
+| `llm` | `LlmConfig { provider, model, temperature?, maxTokens?, reasoningEffort? }` | none (its child `active:<provider>` requires that provider) | service `Llm.KEY`; hooks `Llm.CURRENT`, `Llm.CONFIG`; commands `status`, `models`, `check` |
 | `settings` | none | `Configs.KEY` | commands `provider`, `model` (they update the `llm` config) |
 
 ## Environment without `panic.json`
@@ -38,6 +38,9 @@ code. The entry's id becomes the provider id, so `/provider <id>` and `llm.provi
   by `Providers.STATUS` as not connected and provides no service.
 - `enabled: false` keeps an entry listed but not connected.
 - `maxRetries` is as for `openrouter`.
+- `streamUsage` (default true) asks for the token usage of a streamed reply (`stream_options.include_usage`).
+  Without it most servers send no usage in a stream, so the turn's token counts, its `chat.maxTokens` budget and
+  the context estimate's calibration all see zero. Set it to `false` only for a server that refuses the option.
 - Ids are letters, digits, `_` and `-`. A bad entry fails the config instead of being skipped.
 - Ids must not equal a built-in provider's (`openrouter`): both would claim `Providers.key(id)`, so such an
   entry is a config error.
@@ -84,8 +87,17 @@ What a reasoning model thinks before it answers is kept apart from its answer, s
 | `Usage.reasoningTokens()` | The part of `completionTokens` spent thinking (`completion_tokens_details.reasoning_tokens`), also when the text is hidden |
 | `Content.reasoning(message)` | Reads `reasoning` (OpenRouter, Ollama), else `reasoning_content` (DeepSeek, vLLM, LM Studio), plus `thinking` content parts (Mistral) |
 
-No request option turns reasoning on or off: the model and the provider decide. A model that writes `<think>`
-tags into its text (old Ollama versions) is not split; its thinking stays in the answer.
+**Turning it on.** `llm.reasoningEffort` (`low`, `medium`, `high`, or any level the provider knows; left out = none)
+is sent as `reasoning_effort` with every request that does not choose its own. Some models always think; hybrid ones
+(DeepSeek V4 on River, for one) think only when it is set, and stream it as `reasoning_content`. A request chooses its
+own with `ChatRequest.withReasoningEffort(level)`, or `ChatRequest.NO_REASONING_EFFORT` to send none whatever the
+default: `chat`'s compaction does, and so does the `review` reviewer unless `review.reasoningEffort` is set, because
+thinking tokens count against `max_tokens` and those calls have small limits. Raise `llm.maxTokens` when you turn it
+on: a reply cut at the limit while thinking has nothing to show (see `Completion.truncated()`). The level is sent to
+whatever model is selected, so switching to a model that refuses `reasoning_effort` needs `effort off`.
+
+A model that writes `<think>` tags into its text (old Ollama versions) is not split; its thinking stays in the
+answer.
 
 ## Retries
 
@@ -97,7 +109,9 @@ after text has been handed out.
 
 ## Commands
 
-`status`, `models [filter]`, `check` (the last two only while connected); `provider [id]`, `model [id]`.
+`status`, `models [filter]`, `check` (the last two only while connected); `provider [id]`, `model [id]`,
+`effort [level]` (`low`, `medium`, `high`, ... or `off`; with no level it shows the current one), all three in
+`settings`, which updates the `llm` section.
 
 ## Adding a provider
 

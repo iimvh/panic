@@ -9,7 +9,7 @@ acceptance criteria of `plugins/todo`, they keep the agent from calling work don
 | --- | --- | --- | --- |
 | `checks` | `ChecksConfig { dir = ".", checks = {}, maxOutput = 8000 }`, each check `{ command: [...], timeoutSeconds = 600 }` | none | tool `check` (exec), when at least one check is configured; command `checks` |
 | `stop-hooks` | `StopHooksConfig { hooks = [], dir = ".", onlyWithCriteria = true, maxOutput = 4000 }`, each hook `{ command, timeoutSeconds = 120 }` | none | answers hook `Chat.STOP` (one check per hook) |
-| `review` | `ReviewConfig { prompt = (built in), maxTokens = 16384, maxTranscript = 12000, temperature = null }` | `Llm.KEY` | answers hook `Chat.REVIEW` |
+| `review` | `ReviewConfig { prompt = (built in), maxTokens = 16384, maxTranscript = 12000, temperature = null, reasoningEffort = null }` | `Llm.KEY` | answers hook `Chat.REVIEW` |
 
 ## `check`: external ground truth
 
@@ -57,7 +57,9 @@ The review uses the same LLM as the chat; its tokens count in the turn's usage. 
 leave a reasoning model room to think: its thinking counts against the limit, and a reply cut there
 (`finish_reason: length`) fails with a message that says to raise it. It sends only `maxTokens` and,
 when set, `temperature`: null (the default) lets the model use its own default, because some models reject
-`temperature: 0` (for example "top_p must be 1 when using greedy sampling").
+`temperature: 0` (for example "top_p must be 1 when using greedy sampling"). `reasoningEffort` null (the default)
+sends no `reasoning_effort` even when `llm.reasoningEffort` is set (`ChatRequest.NO_REASONING_EFFORT`), so a chat
+that thinks does not make every verdict think too and run out of `maxTokens`; set it to let the reviewer think.
 
 ## `stop-hooks`: commands that must pass before the agent stops
 

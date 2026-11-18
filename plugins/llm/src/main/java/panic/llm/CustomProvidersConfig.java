@@ -39,14 +39,21 @@ public record CustomProvidersConfig(Map<String, Endpoint> providers) {
    * {@code apiKey} left out = the server needs no key (no {@code Authorization} header); present but blank
    * (e.g. an unset {@code ${VAR}}) = a key is needed and missing, so not connected. {@code maxRetries}: as in
    * {@link ProviderConfig}. {@code enabled} (default true): false keeps it listed but not connected.
+   * {@code streamUsage} (default true): asks for the token usage of streamed replies
+   * ({@code stream_options.include_usage}); false for a server that refuses the option.
    */
-  public record Endpoint(String baseUrl, String apiKey, Integer maxRetries, Boolean enabled) {
+  public record Endpoint(String baseUrl, String apiKey, Integer maxRetries, Boolean enabled, Boolean streamUsage) {
 
     public Endpoint {
       if (baseUrl == null || baseUrl.isBlank()) throw new IllegalArgumentException("baseUrl is missing");
       baseUrl = baseUrl.strip();
       if (maxRetries != null && maxRetries < 0) maxRetries = 0;
       if (enabled == null) enabled = true;
+      if (streamUsage == null) streamUsage = true;
+    }
+
+    public Endpoint(String baseUrl, String apiKey, Integer maxRetries, Boolean enabled) {
+      this(baseUrl, apiKey, maxRetries, enabled, null);
     }
 
     public Endpoint(String baseUrl, String apiKey) {
@@ -71,7 +78,7 @@ public record CustomProvidersConfig(Map<String, Endpoint> providers) {
       // never print the key
       String shown = apiKey == null ? "<none>" : apiKey.isBlank() ? "<missing>" : "***";
       return "Endpoint[baseUrl=" + baseUrl + ", apiKey=" + shown + ", maxRetries=" + maxRetries
-          + ", enabled=" + enabled + "]";
+          + ", enabled=" + enabled + ", streamUsage=" + streamUsage + "]";
     }
   }
 }

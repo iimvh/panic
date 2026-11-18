@@ -36,6 +36,32 @@ class OpenAiCompatClientTest {
       assertEquals("system", body.path("messages").path(0).path("role").asText());
       assertEquals(64, body.path("max_tokens").asInt());
       assertTrue(body.path("stream").isMissingNode());
+      assertTrue(body.path("stream_options").isMissingNode(), "only a stream asks for its usage");
+      assertTrue(body.path("reasoning_effort").isMissingNode(), "no effort unless one is chosen");
+    }
+  }
+
+  @Test
+  void theEffortIsSentAsReasoningEffortUnlessItIsNone() throws Exception {
+    try (FakeServer server = new FakeServer(ex -> FakeServer.json(ex, 200, """
+        {"model":"m-1","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"""))) {
+      OpenAiCompatClient client = new OpenAiCompatClient("fake", server.url(), "k");
+      client.complete(HELLO.withReasoningEffort("high"), new CancelToken());
+      assertEquals("high", Json.parseOrNull(server.lastBody).path("reasoning_effort").asText());
+      client.complete(HELLO.withReasoningEffort(ChatRequest.NO_REASONING_EFFORT), new CancelToken());
+      assertTrue(Json.parseOrNull(server.lastBody).path("reasoning_effort").isMissingNode());
+    }
+  }
+
+  @Test
+  void streamUsageCanBeTurnedOffForAServerThatRefusesIt() throws Exception {
+    try (FakeServer server = new FakeServer(ex -> FakeServer.sse(ex,
+        "{\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}", "[DONE]"))) {
+      new OpenAiCompatClient("fake", server.url(), "k", RetryPolicy.DEFAULT, false)
+          .stream(HELLO, new CancelToken(), d -> { });
+      var body = Json.parseOrNull(server.lastBody);
+      assertTrue(body.path("stream").asBoolean());
+      assertTrue(body.path("stream_options").isMissingNode());
     }
   }
 
@@ -53,7 +79,10 @@ class OpenAiCompatClientTest {
       assertEquals("Hello", c.text());
       assertEquals("stop", c.finishReason());
       assertEquals(4, c.usage().totalTokens());
-      assertTrue(Json.parseOrNull(server.lastBody).path("stream").asBoolean());
+      var body = Json.parseOrNull(server.lastBody);
+      assertTrue(body.path("stream").asBoolean());
+      assertTrue(body.path("stream_options").path("include_usage").asBoolean(),
+          "without it most servers send no usage in a stream, and the turn's token counts stay at zero");
     }
   }
 

@@ -14,6 +14,7 @@ public interface Llm extends ChatModel {
   /** Commands of the {@code settings} plugin that switch the provider or the model of {@code llm} (see its README). */
   String PROVIDER_COMMAND = "provider";
   String MODEL_COMMAND = "model";
+  String EFFORT_COMMAND = "effort";
 
   /**
    * Answers with the current Llm, for callers that only want to look at it (list models, check the key)

@@ -79,9 +79,10 @@ export OPENROUTER_API_KEY=sk-or-...   # and/or MISTRAL_API_KEY (used by the cust
 | --- | --- |
 | `openrouter.apiKey` | Credential. If it is blank, the provider is not connected. |
 | `openrouter.baseUrl` | Optional endpoint override, for example a proxy. |
-| `custom-providers.providers` | OpenAI-compatible providers by id: `baseUrl`, optional `apiKey` (left out = no key needed, blank = not connected), `maxRetries`, `enabled`. See [plugins/llm](plugins/llm/README.md#custom-providers). |
+| `custom-providers.providers` | OpenAI-compatible providers by id: `baseUrl`, optional `apiKey` (left out = no key needed, blank = not connected), `maxRetries`, `enabled`, `streamUsage` (default true; `false` for a server that refuses `stream_options`). See [plugins/llm](plugins/llm/README.md#custom-providers). |
 | `llm.provider`, `llm.model` | The provider and model to chat with. |
 | `llm.temperature`, `llm.maxTokens` | Default options. Leave them out to use the provider's defaults. |
+| `llm.reasoningEffort` | `low`, `medium` or `high`: sent as `reasoning_effort`, so the model thinks before it answers (hybrid models only think when it is set). Left out = not sent. Thinking counts against `llm.maxTokens`: raise it too. Also the `effort` command. |
 | `chat.systemPrompt` | System message sent with every request. |
 | `chat.maxHistory` | Number of past messages sent with each request. `0` sends them all. |
 | `conversations.dir`, `conversations.persist` | Where chat history is saved (default `.panic/conversations`, one JSON lines file per conversation), so it survives a restart. `persist: false` keeps it in memory only. |
@@ -153,7 +154,7 @@ Plain text runs `ask`. In the REPL, commands start with `/`. On the command line
 | `models [filter]` | `llm` → `active:<provider>` | while the provider is connected. `filter` is `free` or part of an id. |
 | `check` | `llm` → `active:<provider>` | while the provider is connected |
 | `status` | `llm` | always |
-| `provider [id]`, `model [id]` | `settings` | always |
+| `provider [id]`, `model [id]`, `effort [level]` | `settings` | always |
 | `reset`, `chats [count]`, `forget <id>` | `conversations` | always. `reset` clears this session's conversation; `chats` lists the conversations; `forget` deletes one (with its sub-agents' conversations, plan and traces) |
 | `tools`, `tool <name> [args...]` | `tools` | always. `tools` shows each tool's risk and permission. `args` is a JSON object, e.g. `tool read_file {"path":"README.md"}` |
 | `bypass [on \| off \| status]` | `permissions` | always. Runs tools without asking in this chat (YOLO mode); `deny` rules still apply |

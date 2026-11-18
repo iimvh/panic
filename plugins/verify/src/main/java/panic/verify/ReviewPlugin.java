@@ -56,7 +56,8 @@ public final class ReviewPlugin implements ConfigPlugin<ReviewConfig> {
     List<String> criteria = criteria(ctx, review.conversationId());
     if (criteria.isEmpty()) return null;
     ChatRequest request = new ChatRequest(List.of(Message.system(cfg.prompt()),
-        Message.user(brief(review, criteria, cfg.maxTranscript()))), null, cfg.temperature(), cfg.maxTokens());
+        Message.user(brief(review, criteria, cfg.maxTranscript()))), null, cfg.temperature(), cfg.maxTokens())
+        .withReasoningEffort(cfg.reasoningEffort() == null ? ChatRequest.NO_REASONING_EFFORT : cfg.reasoningEffort());
     Completion c;
     try {
       c = llm.complete(request, review.signal());

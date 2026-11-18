@@ -10,6 +10,7 @@ import context.ConfigPlugin;
 import context.Context;
 import context.Root;
 import core.Signal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.AfterEach;
@@ -47,6 +48,14 @@ class LlmPluginTest {
       Completion c = complete(r, s);
       onDelta.accept(c.text());
       return c;
+    }
+
+    /** Thinks "hmm" first: shows whether a wrapper forwards the reasoning. */
+    @Override
+    public Completion stream(ChatRequest r, Signal s, Consumer<String> onDelta, Consumer<ToolCallDelta> onToolDelta,
+        Consumer<String> onReasoning) {
+      onReasoning.accept("hmm");
+      return stream(r, s, onDelta);
     }
   }
 
@@ -121,5 +130,15 @@ class LlmPluginTest {
     Llm llm = root.bail(Llm.CURRENT, Llm.Query.CURRENT).orElseThrow();
     ChatRequest custom = new ChatRequest(List.of(Message.user("q")), "other", 1.0, null);
     assertEquals("a:other:1.0", llm.complete(custom, new CancelToken()).text());
+  }
+
+  @Test
+  void streamForwardsTheReasoning() {
+    root.plugin("a", fakeProvider("a"), true);
+    root.plugin("llm", new LlmPlugin(), new LlmConfig("a", "m1", null, null));
+    Llm llm = root.bail(Llm.CURRENT, Llm.Query.CURRENT).orElseThrow();
+    List<String> thoughts = new ArrayList<>();
+    llm.stream(ChatRequest.of(List.of(Message.user("q"))), new CancelToken(), d -> { }, d -> { }, thoughts::add);
+    assertEquals(List.of("hmm"), thoughts, "the current llm passes the reasoning on, not only text and tool calls");
   }
 }

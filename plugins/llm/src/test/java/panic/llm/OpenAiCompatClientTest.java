@@ -362,4 +362,39 @@ class OpenAiCompatClientTest {
       assertEquals(1, hits.get());
     }
   }
+
+  @Test
+  void streamHandsReasoningApartFromText() throws Exception {
+    // OpenRouter / Ollama put it in "reasoning", DeepSeek / vLLM in "reasoning_content", Mistral in thinking parts
+    try (FakeServer server = new FakeServer(ex -> FakeServer.sse(ex,
+        "{\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning\":\"Let me \"}}]}",
+        "{\"choices\":[{\"delta\":{\"reasoning_content\":\"think. \"}}]}",
+        "{\"choices\":[{\"delta\":{\"content\":[{\"type\":\"thinking\",\"thinking\":[{\"type\":\"text\","
+            + "\"text\":\"Done.\"}]}]}}]}",
+        "{\"choices\":[{\"delta\":{\"content\":\"391\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,"
+            + "\"completion_tokens\":40,\"completion_tokens_details\":{\"reasoning_tokens\":37}}}",
+        "[DONE]"))) {
+      List<String> deltas = new ArrayList<>();
+      List<String> thoughts = new ArrayList<>();
+      Completion c = new OpenAiCompatClient("fake", server.url(), "k")
+          .stream(HELLO, new CancelToken(), deltas::add, d -> { }, thoughts::add);
+      assertEquals(List.of("391"), deltas, "reasoning is not answer text");
+      assertEquals(List.of("Let me ", "think. ", "Done."), thoughts);
+      assertEquals("391", c.text());
+      assertEquals("Let me think. Done.", c.reasoning());
+      assertEquals(37, c.usage().reasoningTokens());
+      assertEquals("391", c.message().content(), "the history keeps the answer only");
+    }
+  }
+
+  @Test
+  void completeReadsReasoning() throws Exception {
+    try (FakeServer server = new FakeServer(ex -> FakeServer.json(ex, 200, """
+        {"model":"m-1","choices":[{"message":{"role":"assistant","content":"391","reasoning":"17*23"},
+         "finish_reason":"stop"}]}"""))) {
+      Completion c = new OpenAiCompatClient("fake", server.url(), "k").complete(HELLO, new CancelToken());
+      assertEquals("391", c.text());
+      assertEquals("17*23", c.reasoning());
+    }
+  }
 }

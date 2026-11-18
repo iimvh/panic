@@ -72,6 +72,20 @@ The API carries tools; it does not run them (that is the caller's job).
 Streams hand only text to `onDelta`; tool calls are rebuilt from their fragments and returned in the
 `Completion`.
 
+## Reasoning
+
+What a reasoning model thinks before it answers is kept apart from its answer, so users can see it.
+
+| Type | Meaning |
+| --- | --- |
+| `ChatModel.stream(request, signal, onDelta, onToolDelta, onReasoning)` | Also hands each piece of the reasoning to `onReasoning` as it streams; the default reports nothing. A wrapper must forward it (`Llm`'s does) |
+| `Completion.reasoning()` | The whole reasoning, empty when the provider shows none. Not part of `message()`: it is never sent back to the model nor saved |
+| `Usage.reasoningTokens()` | The part of `completionTokens` spent thinking (`completion_tokens_details.reasoning_tokens`), also when the text is hidden |
+| `Content.reasoning(message)` | Reads `reasoning` (OpenRouter, Ollama), else `reasoning_content` (DeepSeek, vLLM, LM Studio), plus `thinking` content parts (Mistral) |
+
+No request option turns reasoning on or off: the model and the provider decide. A model that writes `<think>`
+tags into its text (old Ollama versions) is not split; its thinking stays in the answer.
+
 ## Retries
 
 Provider calls (chat, models, key check) are retried on transient failures: unreachable, 408, 429, 500,

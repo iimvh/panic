@@ -88,7 +88,8 @@ public final class OpenAiCompatClient implements ChatModel {
         json.path("model").asText(request.model()),
         textOrNull(choice.path("finish_reason")),
         usage(json.path("usage")),
-        calls);
+        calls,
+        Content.reasoning(message));
   }
 
   @Override
@@ -99,12 +100,20 @@ public final class OpenAiCompatClient implements ChatModel {
   @Override
   public Completion stream(ChatRequest request, Signal signal, Consumer<String> onDelta,
       Consumer<ToolCallDelta> onToolDelta) {
+    return stream(request, signal, onDelta, onToolDelta, r -> { });
+  }
+
+  @Override
+  public Completion stream(ChatRequest request, Signal signal, Consumer<String> onDelta,
+      Consumer<ToolCallDelta> onToolDelta, Consumer<String> onReasoning) {
     Objects.requireNonNull(onDelta, "onDelta");
     Objects.requireNonNull(onToolDelta, "onToolDelta");
+    Objects.requireNonNull(onReasoning, "onReasoning");
     HttpResponse<InputStream> response = sendChecked(post("/chat/completions", body(request, true)), signal);
 
     ToolCallParts calls = new ToolCallParts();
     StringBuilder text = new StringBuilder();
+    StringBuilder reasoning = new StringBuilder();
     String[] model = {request.model()};
     String[] finish = {null};
     Usage[] usage = {Usage.NONE};
@@ -118,6 +127,11 @@ public final class OpenAiCompatClient implements ChatModel {
         if (chunk.hasNonNull("model")) model[0] = chunk.get("model").asText();
         if (chunk.path("usage").isObject()) usage[0] = usage(chunk.get("usage"));
         JsonNode choice = chunk.path("choices").path(0);
+        String thought = Content.reasoning(choice.path("delta"));
+        if (!thought.isEmpty()) {
+          reasoning.append(thought);
+          onReasoning.accept(thought);
+        }
         String piece = Content.text(choice.path("delta").path("content"));
         if (!piece.isEmpty()) {
           text.append(piece);
@@ -134,7 +148,7 @@ public final class OpenAiCompatClient implements ChatModel {
       abort.dispose();
     }
     signal.throwIfCancelled();
-    return new Completion(text.toString(), model[0], finish[0], usage[0], calls.build());
+    return new Completion(text.toString(), model[0], finish[0], usage[0], calls.build(), reasoning.toString());
   }
 
   // ---------------- plain REST ----------------
@@ -391,7 +405,8 @@ public final class OpenAiCompatClient implements ChatModel {
 
   private static Usage usage(JsonNode u) {
     if (u == null || !u.isObject()) return Usage.NONE;
-    return new Usage(u.path("prompt_tokens").asInt(0), u.path("completion_tokens").asInt(0));
+    return new Usage(u.path("prompt_tokens").asInt(0), u.path("completion_tokens").asInt(0),
+        u.path("completion_tokens_details").path("reasoning_tokens").asInt(0));
   }
 
   private static String textOrNull(JsonNode n) {

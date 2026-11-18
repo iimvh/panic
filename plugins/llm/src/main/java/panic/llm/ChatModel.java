@@ -23,4 +23,14 @@ public interface ChatModel {
       Consumer<ToolCallDelta> onToolDelta) {
     return stream(request, signal, onDelta);
   }
+
+  /**
+   * Like {@link #stream(ChatRequest, Signal, Consumer, Consumer)}, and also hands each piece of the model's
+   * reasoning to {@code onReasoning} as it arrives (see {@link Completion#reasoning}). A model that cannot tell (the
+   * default) reports none. A wrapper must forward this call, or the reasoning is lost without a sign.
+   */
+  default Completion stream(ChatRequest request, Signal signal, Consumer<String> onDelta,
+      Consumer<ToolCallDelta> onToolDelta, Consumer<String> onReasoning) {
+    return stream(request, signal, onDelta, onToolDelta);
+  }
 }

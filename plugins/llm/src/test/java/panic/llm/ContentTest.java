@@ -26,4 +26,16 @@ class ContentTest {
     assertEquals("", Content.text(Json.parseOrNull("null")));
     assertEquals("", Content.text(Json.object().path("content")));
   }
+
+  @Test
+  void reasoningFieldsAndThinkingParts() {
+    assertEquals("a", Content.reasoning(Json.parseOrNull("{\"reasoning\":\"a\"}")));
+    assertEquals("b", Content.reasoning(Json.parseOrNull("{\"reasoning_content\":\"b\"}")));
+    assertEquals("a", Content.reasoning(Json.parseOrNull("{\"reasoning\":\"a\",\"reasoning_content\":\"a\"}")),
+        "the same thought sent in both fields counts once");
+    assertEquals("hmm", Content.reasoning(Json.parseOrNull("""
+        {"content":[{"type":"thinking","thinking":[{"type":"text","text":"hmm"}]},{"type":"text","text":"Hi"}]}""")));
+    assertEquals("", Content.reasoning(Json.parseOrNull("{\"content\":\"Hi\",\"reasoning\":null}")));
+    assertEquals("", Content.reasoning(null));
+  }
 }

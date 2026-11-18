@@ -35,12 +35,12 @@ class ConfigLoaderTest {
   }
 
   @Test
-  void environmentOnlyPicksFirstProviderWithKey() {
-    ObjectNode cfg = new ConfigLoader(Map.of("MISTRAL_API_KEY", "m", "PANIC_MODEL", "mistral-small-latest")::get, Panic.discoverSets())
-        .fromEnvironment();
-    assertEquals("mistral", cfg.at("/llm/provider").asText());
-    assertEquals("mistral-small-latest", cfg.at("/llm/model").asText());
-    assertEquals("m", cfg.at("/mistral/apiKey").asText());
-    assertTrue(cfg.at("/openrouter").isMissingNode());
+  void environmentConnectsOpenRouterOnly() {
+    ObjectNode cfg = new ConfigLoader(Map.of("OPENROUTER_API_KEY", "o", "MISTRAL_API_KEY", "m",
+        "PANIC_MODEL", "some/model")::get, Panic.discoverSets()).fromEnvironment();
+    assertEquals("openrouter", cfg.at("/llm/provider").asText());
+    assertEquals("some/model", cfg.at("/llm/model").asText());
+    assertEquals("o", cfg.at("/openrouter/apiKey").asText());
+    assertTrue(cfg.at("/mistral").isMissingNode(), "custom providers come from panic.json only");
   }
 }

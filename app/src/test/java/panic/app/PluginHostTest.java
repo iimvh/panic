@@ -60,7 +60,7 @@ class PluginHostTest {
   @Test
   void discoversEveryModulesPlugins() {
     List<String> names = Panic.discover().stream().map(PluginSpec::name).toList();
-    assertTrue(names.containsAll(List.of("openrouter", "mistral", "llm", "settings", "conversations", "chat", "cli", "web")),
+    assertTrue(names.containsAll(List.of("openrouter", "custom-providers", "llm", "settings", "conversations", "chat", "cli", "web")),
         names.toString());
   }
 

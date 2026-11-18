@@ -61,7 +61,7 @@
 		</div>
 	{:else if chat.state && !chat.state.connected}
 		<div class="banner">
-			No LLM connected: the selected provider has no API key, or no model is chosen.
+			No LLM connected: the selected provider is not connected, or no model is chosen.
 			<button class="btn" onclick={() => (settingsOpen = true)}>Open settings</button>
 		</div>
 	{/if}

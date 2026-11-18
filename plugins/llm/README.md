@@ -7,15 +7,44 @@ LLM providers and the model the app chats with.
 | Name | Config (`panic.json` section) | Requires | Provides / registers |
 | --- | --- | --- | --- |
 | `openrouter` | `ProviderConfig { apiKey, baseUrl?, maxRetries? }` | none | service `Providers.key("openrouter")` while it has a key; hook `Providers.STATUS` |
-| `mistral` | `ProviderConfig { apiKey, baseUrl?, maxRetries? }` | none | service `Providers.key("mistral")` while it has a key; hook `Providers.STATUS` |
+| `custom-providers` | `CustomProvidersConfig { providers: { <id>: { baseUrl, apiKey?, maxRetries?, enabled? } } }` | none | per entry: service `Providers.key(<id>)` while connected; hook `Providers.STATUS` |
 | `llm` | `LlmConfig { provider, model, temperature?, maxTokens? }` | none (its child `active:<provider>` requires that provider) | service `Llm.KEY`; hooks `Llm.CURRENT`, `Llm.CONFIG`; commands `status`, `models`, `check` |
 | `settings` | none | `Configs.KEY` | commands `provider`, `model` (they update the `llm` config) |
 
 ## Environment without `panic.json`
 
 `LlmPlugins.environment` (`PluginSet.environment`) tells the app which variables fill which sections when there is
-no file: `OPENROUTER_API_KEY` / `MISTRAL_API_KEY` set `<provider>.apiKey`, the first provider with a key becomes
-`llm.provider`, and `PANIC_MODEL` is `llm.model`. The app only supplies the lookup, so it knows no provider name.
+no file: `OPENROUTER_API_KEY` sets `openrouter.apiKey` and makes OpenRouter `llm.provider`, and `PANIC_MODEL` is
+`llm.model`. The app only supplies the lookup, so it knows no provider name. Custom providers are declared in
+`panic.json` only.
+
+## Custom providers
+
+Any OpenAI-compatible API (Mistral, Ollama, Groq, vLLM, LM Studio, ...) is an entry in `custom-providers`, with no
+code. The entry's id becomes the provider id, so `/provider <id>` and `llm.provider` name it.
+
+```json
+"custom-providers": {
+  "providers": {
+    "mistral": { "baseUrl": "https://api.mistral.ai/v1", "apiKey": "${MISTRAL_API_KEY}" },
+    "ollama": { "baseUrl": "http://127.0.0.1:11434/v1" }
+  }
+}
+```
+
+- `baseUrl` is required: the API root, ending in `/v1` for OpenAI-style servers.
+- `apiKey` left out means the server needs no key (Ollama, LM Studio): no `Authorization` header is sent.
+- `apiKey` present but blank, for example an unset `${VAR}`, means a key is needed and missing: the entry is listed
+  by `Providers.STATUS` as not connected and provides no service.
+- `enabled: false` keeps an entry listed but not connected.
+- `maxRetries` is as for `openrouter`.
+- Ids are letters, digits, `_` and `-`. A bad entry fails the config instead of being skipped.
+- Ids must not equal a built-in provider's (`openrouter`): both would claim `Providers.key(id)`, so such an
+  entry is a config error.
+- Each entry is a child plugin named after its id. A config change only restarts the entries that changed,
+  appeared or went away, so editing one endpoint does not interrupt a chat running on another custom provider.
+- An old `"mistral": {"apiKey": ...}` section no longer has a plugin (the app warns about the unknown section):
+  move it into `custom-providers` as above.
 
 ## Public keys
 
@@ -57,6 +86,7 @@ after text has been handed out.
 
 ## Adding a provider
 
-Write a `ConfigPlugin<ProviderConfig>` that answers `Providers.STATUS` and, when it has a key, provides
-`Providers.key("<id>")`. Extend `OpenAiCompatProvider` for OpenAI-compatible APIs (`Mistral.java` is about
-50 lines), then list it in `LlmPlugins`. The `settings` command picks it up through `Providers.STATUS`.
+An OpenAI-compatible API is a `custom-providers` entry, with nothing to code. Write a class only when the API
+behaves differently (its own key check, pricing, request shape): a `ConfigPlugin<ProviderConfig>` that answers
+`Providers.STATUS` and, when it has a key, provides `Providers.key("<id>")`. Extend `OpenAiCompatProvider` (see
+`OpenRouter.java`), then list it in `LlmPlugins`. The `settings` command picks it up through `Providers.STATUS`.

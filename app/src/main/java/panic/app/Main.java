@@ -59,7 +59,7 @@ public final class Main {
     boolean hasFile = file.toFile().exists();
     ObjectNode cfg = loader.load(file);
     if (!hasFile) {
-      System.err.println("[config] " + file + " not found: using OPENROUTER_API_KEY / MISTRAL_API_KEY / PANIC_MODEL");
+      System.err.println("[config] " + file + " not found: using OPENROUTER_API_KEY / PANIC_MODEL");
     }
 
     ObjectNode overrides = Json.object();

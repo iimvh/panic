@@ -25,7 +25,7 @@
 
 Because of that, the tree heals itself. Remove an API key and the parts that need an LLM stop. Add it back and they start again. Switch model while chatting and only the affected branch restarts, so the conversation is kept.
 
-- **Two providers out of the box:** [OpenRouter](https://openrouter.ai) and [Mistral](https://mistral.ai), both through one OpenAI-compatible client.
+- **Any OpenAI-compatible provider:** [OpenRouter](https://openrouter.ai) built in; Mistral, Ollama or any other OpenAI-compatible API is a config entry, all through one client.
 - **Streaming replies.** Answers stream over SSE, and stopping a reply aborts its HTTP request.
 - **Plugins are discovered.** Drop a module into `plugins/` and it is built, found and installed. Its config is the `panic.json` section with its name, and no wiring code is needed.
 - **Hot reload.** Save `panic.json` and only the plugins whose section changed are reconfigured, installed or removed.
@@ -42,7 +42,7 @@ Because of that, the tree heals itself. Remove an API key and the parts that nee
 
 - **JDK 21.** If the machine only has a JRE, Gradle finds or downloads a JDK through `gradle/gradle-daemon-jvm.properties`.
 - **Node.js 20+** to build the web UI. Without it, pass `-PskipUi`: everything else still builds, and the server shows a "UI not built" page.
-- **An API key** from [OpenRouter](https://openrouter.ai/keys) (free models are available) and/or [Mistral](https://console.mistral.ai/api-keys).
+- **An API key** from [OpenRouter](https://openrouter.ai/keys) (free models are available) and/or [Mistral](https://console.mistral.ai/api-keys), or a local [Ollama](https://ollama.com) (no key).
 
 ### Install
 
@@ -60,7 +60,7 @@ cd agent-panic
 
 ```bash
 cp panic.example.json panic.json
-export OPENROUTER_API_KEY=sk-or-...   # and/or MISTRAL_API_KEY
+export OPENROUTER_API_KEY=sk-or-...   # and/or MISTRAL_API_KEY (used by the custom-providers entry)
 ```
 
 `panic.json` is git-ignored. It has **one section per plugin, named after the plugin**. A missing section means the plugin's defaults, and `false` turns the plugin off. Any string can reference an environment variable as `${NAME}`, so keys stay out of the file:
@@ -68,7 +68,7 @@ export OPENROUTER_API_KEY=sk-or-...   # and/or MISTRAL_API_KEY
 ```json
 {
   "openrouter": { "apiKey": "${OPENROUTER_API_KEY}" },
-  "mistral": { "apiKey": "${MISTRAL_API_KEY}" },
+  "custom-providers": { "providers": { "mistral": { "baseUrl": "https://api.mistral.ai/v1", "apiKey": "${MISTRAL_API_KEY}" } } },
   "llm": { "provider": "openrouter", "model": "meta-llama/llama-3.3-70b-instruct:free", "temperature": 0.2, "maxTokens": 4096 },
   "chat": { "systemPrompt": "You are Panic, a concise and helpful assistant.", "maxHistory": 40 },
   "web": { "enabled": false, "host": "127.0.0.1", "port": 8080 }
@@ -77,8 +77,9 @@ export OPENROUTER_API_KEY=sk-or-...   # and/or MISTRAL_API_KEY
 
 | Key | Meaning |
 | --- | --- |
-| `openrouter.apiKey`, `mistral.apiKey` | Credential. If it is blank, the provider is not connected. |
-| `openrouter.baseUrl`, `mistral.baseUrl` | Optional endpoint override, for example a proxy. |
+| `openrouter.apiKey` | Credential. If it is blank, the provider is not connected. |
+| `openrouter.baseUrl` | Optional endpoint override, for example a proxy. |
+| `custom-providers.providers` | OpenAI-compatible providers by id: `baseUrl`, optional `apiKey` (left out = no key needed, blank = not connected), `maxRetries`, `enabled`. See [plugins/llm](plugins/llm/README.md#custom-providers). |
 | `llm.provider`, `llm.model` | The provider and model to chat with. |
 | `llm.temperature`, `llm.maxTokens` | Default options. Leave them out to use the provider's defaults. |
 | `chat.systemPrompt` | System message sent with every request. |
@@ -107,7 +108,7 @@ export OPENROUTER_API_KEY=sk-or-...   # and/or MISTRAL_API_KEY
 The older layout with a `"providers": { ... }` group is still accepted.
 
 > [!TIP]
-> Without `panic.json`, Panic reads `OPENROUTER_API_KEY`, `MISTRAL_API_KEY` and `PANIC_MODEL` from the environment. The `app` only passes the environment in; each plugin module says what it means (`PluginSet.environment`, here in `:llm`).
+> Without `panic.json`, Panic reads `OPENROUTER_API_KEY` and `PANIC_MODEL` from the environment. The `app` only passes the environment in; each plugin module says what it means (`PluginSet.environment`, here in `:llm`).
 
 ### Run
 
@@ -215,7 +216,7 @@ Run `panic --serve` and open `http://127.0.0.1:8080`:
 flowchart TD
   root(["panic"])
   or["openrouter<br/><small>config</small>"]
-  mi["mistral<br/><small>config</small>"]
+  mi["custom-providers<br/><small>config</small>"]
   llm["llm<br/><small>config</small>"]
   settings["settings"]
   active["active:&lt;provider&gt;"]
@@ -227,7 +228,7 @@ flowchart TD
   root --> or & mi & llm & conv & chat & settings & web & watch & cli
   llm --> active
   or -. "llm.provider.openrouter" .-> active
-  mi -. "llm.provider.mistral" .-> active
+  mi -. "llm.provider.&lt;id&gt;" .-> active
   active -. "llm" .-> chat
   conv -. "conversations" .-> chat
   cli -. "command.run" .-> chat & llm & conv & settings
@@ -240,7 +241,7 @@ Solid lines show ownership in the tree. Dotted lines show the services and hooks
 
 | Plugin | Role |
 | --- | --- |
-| `openrouter`, `mistral` | Provide `llm.provider.<id>` while they have a key. |
+| `openrouter`, `custom-providers` | Provide `llm.provider.<id>` while connected (`custom-providers`: one per entry). |
 | `llm` | Installs `active:<provider>`, which requires that provider and provides `llm` with the chosen model and options. |
 | `conversations` | Keeps chat history, saved on disk under `conversations.dir`, so it survives a restart. It does not depend on the LLM, so history also survives a provider or model switch. |
 | `chat` | Requires `llm` and `conversations`. Answers the `chat.ask` hook with an agent loop: it offers the registered tools, runs the calls and feeds the results back until the model answers (limits in its config). Emits `chat.step` and `chat.turn`, and declares `ask`. |
@@ -340,7 +341,7 @@ The plugin's config is now the `"memory": { "limit": 50 }` section of `panic.jso
 | `panic.plugin.App` | The terminal and `exit()`. It is provided last, so requiring it means "start once the whole tree is installed" |
 | `:llm`, `:chat` | `Llm.KEY`, `Providers.key(id)`, `Chat.ASK`, `Chat.TURN`, `Conversations.KEY` |
 
-A module may declare several plugins. For example `:llm` declares `openrouter`, `mistral`, `llm` and `settings`. A plain plugin without config uses `PluginSpec.of(name, Supplier<Plugin>)`.
+A module may declare several plugins. For example `:llm` declares `openrouter`, `custom-providers`, `llm` and `settings`. A plain plugin without config uses `PluginSpec.of(name, Supplier<Plugin>)`.
 
 ## Project structure
 
@@ -350,7 +351,7 @@ A module may declare several plugins. For example `:llm` declares `openrouter`, 
 │                     panic.trace    Trace (event SPAN, hooks GET, LIST), Span, OpenSpan
 │                     panic.util     Json (the one ObjectMapper), CancelToken
 ├── plugins/
-│   ├── llm/          panic.llm      openrouter, mistral, llm, settings; OpenAiCompatClient (SSE, cancellable)
+│   ├── llm/          panic.llm      openrouter, custom-providers, llm, settings; OpenAiCompatClient (SSE, cancellable)
 │   ├── chat/         panic.chat     conversations, chat; Chat (hook ASK, event TURN)
 │   ├── tools/        panic.tools    tools, permissions, files, clock, shell; Tools (hooks LIST, RUN, GATE, POLICY, APPROVE)
 │   ├── todo/         panic.todo     todo: todo_read, todo_write and the Tasks section
@@ -381,9 +382,10 @@ Compiler warnings are errors. The tests run against local fake HTTP servers, so 
 
 ### Working on the UI
 
-Run the server and the Vite dev server side by side. The dev server proxies `/api` to the Java server:
+Build the app once (and again after Java changes), then run the server and the Vite dev server side by side. The dev server proxies `/api` to the Java server:
 
 ```bash
+./gradlew :app:installDist              # build the app into app/build/install/app (once, or after Java changes)
 app/build/install/app/bin/app --serve   # terminal 1
 cd ui && npm install && npm run dev     # terminal 2: http://localhost:5173
 npm run check && npm test               # svelte-check and the unit tests (Markdown, SSE parser)
@@ -402,7 +404,7 @@ The API is small and uses only plain JSON and SSE:
 | `POST /api/command` `{session, line}` | SSE: command output as `delta`… then `done`, `unknown`, `usage` or `error` |
 | `PUT /api/settings` `{provider?, model?}` | Switches provider or model and returns the new state |
 
-To add a provider, write a `ConfigPlugin<ProviderConfig>` that provides `Providers.key("<id>")` and answers the `Providers.STATUS` hook, then list it in a `PluginSet`. For an OpenAI-compatible API, extend `OpenAiCompatProvider`. [`Mistral.java`](plugins/llm/src/main/java/panic/llm/Mistral.java) is a complete example in about 50 lines.
+To add an OpenAI-compatible provider, add an entry under `custom-providers.providers` in `panic.json`: no code. Only an API that behaves differently (its own key check, pricing or request shape) needs a class: a `ConfigPlugin<ProviderConfig>` that answers the `Providers.STATUS` hook and provides `Providers.key("<id>")`, extending `OpenAiCompatProvider` (see [`OpenRouter.java`](plugins/llm/src/main/java/panic/llm/OpenRouter.java)), listed in a `PluginSet`.
 
 ## Troubleshooting
 

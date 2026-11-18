@@ -1,6 +1,11 @@
 {
   "openrouter": { "apiKey": "${OPENROUTER_API_KEY}", "maxRetries": 2 },
-  "mistral": { "apiKey": "${MISTRAL_API_KEY}" },
+  "custom-providers": {
+    "providers": {
+      "mistral": { "baseUrl": "https://api.mistral.ai/v1", "apiKey": "${MISTRAL_API_KEY}" },
+      "ollama": { "baseUrl": "http://127.0.0.1:11434/v1", "enabled": false }
+    }
+  },
   "llm": {
     "provider": "openrouter",
     "model": "meta-llama/llama-3.3-70b-instruct:free",

@@ -71,13 +71,13 @@
 		<select id="provider" bind:value={provider}>
 			{#if !provider}<option value="" disabled>Choose a provider</option>{/if}
 			{#each providers as p (p.id)}
-				<option value={p.id}>{p.id}{p.connected ? '' : ' (no API key)'}</option>
+				<option value={p.id}>{p.id}{p.connected ? '' : ' (not connected)'}</option>
 			{/each}
 		</select>
 		{#if provider && !providers.find((p) => p.id === provider)?.connected}
 			<p class="note">
-				This provider has no API key. Set <code>{provider.toUpperCase()}_API_KEY</code> or add it to
-				<code>panic.json</code>; Panic picks it up without a restart.
+				This provider is not connected: its API key is missing or it is disabled in
+				<code>panic.json</code>. Panic picks up the change without a restart.
 			</p>
 		{/if}
 	</section>

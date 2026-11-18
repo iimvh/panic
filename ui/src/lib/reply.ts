@@ -342,7 +342,7 @@ export function createAnswer(reply: Message, schedule: (run: () => void) => void
 				reply.meta = meta(d);
 				if (typeof d.stop === 'string') reply.stop = d.stop;
 			}
-			else if (event === 'unavailable') failAnswer(reply, 'No LLM is connected. Open Settings to pick a provider with an API key.');
+			else if (event === 'unavailable') failAnswer(reply, 'No LLM is connected. Open Settings to pick a connected provider.');
 			else if (event === 'error') failAnswer(reply, String(d.message));
 			else if (event === 'cancelled') reply.meta = 'stopped';
 		},

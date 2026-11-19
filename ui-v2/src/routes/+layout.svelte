@@ -6,7 +6,8 @@
 	import { Inspector } from '$features/inspector';
 	import { Search } from '$features/search';
 	import { Settings } from '$features/settings';
-	import { TopBar } from '$features/shell';
+	import { Conversation, TopBar } from '$features/shell';
+	import { page } from '$app/state';
 	import { Sidebar } from '$features/sidebar';
 	import { chat } from '$lib/state/chat.svelte';
 	import { inspector } from '$lib/state/inspector.svelte';
@@ -79,7 +80,9 @@
 		{/if}
 		<main>
 			<TopBar {title} />
-			{@render children()}
+			<!-- one Conversation for every route: going from / to /c/<id> as the first answer starts must not
+			     remount it (a draft, an open card or folded groups would be lost). Routes only pick the session. -->
+			{#if page.error}{@render children()}{:else}<Conversation />{@render children()}{/if}
 		</main>
 		{#if inspector.panel}
 			<div class="inspector"><Inspector /></div>

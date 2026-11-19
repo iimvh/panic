@@ -2,7 +2,6 @@
 	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { Conversation } from '$features/shell';
 	import { chat } from '$lib/state/chat.svelte';
 	import { validId } from '$lib/state/session';
 
@@ -17,4 +16,3 @@
 	});
 </script>
 
-<Conversation />

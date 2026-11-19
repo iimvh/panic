@@ -51,6 +51,16 @@ test('opens a step and the trace in the inspector, and keeps them across a reloa
 	await expect(page.getByText('The project is Panic.')).toBeVisible();
 });
 
+test('keeps what is on screen when a new chat gets its route', async ({ page }) => {
+	await page.goto('/');
+	await ask(page, 'Run the tests');
+	// typed while the first answer starts: the route becomes /c/<id> under it, and nothing is rebuilt
+	await page.getByLabel('Message').fill('a draft');
+	await expect(page).toHaveURL(/\/c\/[0-9a-f]{24}$/);
+	await expect(page.getByRole('region', { name: 'Approve tool call' })).toBeVisible();
+	await expect(page.getByLabel('Message')).toHaveValue('a draft');
+});
+
 test('allows a tool call', async ({ page }) => {
 	await page.goto('/');
 	await ask(page, 'Run the tests');

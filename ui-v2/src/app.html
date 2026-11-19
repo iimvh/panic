@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<link rel="icon" href="%sveltekit.assets%/favicon.svg" type="image/svg+xml" />
+		<title>Panic</title>
+		<script>
+			// the theme picked in this browser, before the page shows (see src/lib/state/theme.svelte.ts)
+			try {
+				const t = localStorage.getItem('panic.theme');
+				if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+			} catch {}
+		</script>
+		%sveltekit.head%
+	</head>
+	<body>
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>

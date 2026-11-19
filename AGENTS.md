@@ -50,7 +50,9 @@ order, exactly once, after any call still running.
    The same goes for `AGENTS.md` and `CLAUDE.md`: if a change makes a sentence there false (a command, a
    path, a rule, a key name), fix that sentence in the same commit. Correct them, do not pad them.
 10. **No new libraries without a reason** that you write down in the change. The Java side uses only z and
-    Jackson. The UI uses only SvelteKit.
+    Jackson. `ui-v1` uses only SvelteKit; `ui-v2` adds Bits UI (headless primitives: dialogs, menus, tabs,
+    tooltips with tested focus and keyboard handling, styled only with our tokens) and, for tests only,
+    Testing Library, jsdom, Playwright and axe.
 
 `app/src/test/java/panic/app/ConventionsTest.java` enforces the rules a machine can check. Do not weaken it
 to make a change pass.

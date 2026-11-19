@@ -5,7 +5,7 @@
 	import { inspector } from '$lib/state/inspector.svelte';
 	import Button from '$lib/ui/Button.svelte';
 	import Icon from '$lib/ui/Icon.svelte';
-	import Spinner from '$lib/ui/Spinner.svelte';
+	import Shimmer from '$lib/ui/Shimmer.svelte';
 	import ApprovalCard from './ApprovalCard.svelte';
 	import PlanCard from './PlanCard.svelte';
 	import QuestionCard from './QuestionCard.svelte';
@@ -16,6 +16,8 @@
 	let { message, last = false }: { message: Message; last?: boolean } = $props();
 
 	const parts = $derived(blocks(message.parts ?? []));
+	/** Waiting for the user (an approval, a plan, questions): the system is not working, so nothing moves. */
+	const waiting = $derived(!!(message.approval || message.plan || message.question));
 
 	// the one live counter of the interface: seconds while an answer runs
 	let now = $state(Date.now());
@@ -84,8 +86,11 @@
 			<QuestionCard {message} />
 			{#if message.streaming}
 				<div class="progress" aria-live="polite">
-					<Spinner />
-					<span>{activity(message)}</span>
+					{#if waiting}
+						<span>{activity(message)}</span>
+					{:else}
+						<Shimmer>{activity(message)}</Shimmer>
+					{/if}
 					{#if message.startedAt}<span class="time">{duration(now - message.startedAt)}</span>{/if}
 				</div>
 			{:else if meta}

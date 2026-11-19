@@ -28,10 +28,19 @@ const RULES: Record<string, RegExp> = {
 	decoration: /gradient\(|@keyframes\s+(?!spin\b)[\w-]+/g
 };
 
+/**
+ * The one sanctioned exception: the shimmer of status text while the system works (lib/ui/Shimmer.svelte) may
+ * use its gradient and its keyframes, and nothing else may. Only those exact pieces are allowed there.
+ */
+const SHIMMER = '/src/lib/ui/Shimmer.svelte';
+const SHIMMER_ALLOWED = [/background:\s*linear-gradient\(90deg, var\(--muted\)[^;]*var\(--text\)[^;]*\);/, /@keyframes shimmer\b/];
+
 function offenders(rule: RegExp): string[] {
 	const out: string[] = [];
 	for (const [path, text] of Object.entries(sources)) {
-		const found = [...styles(text).matchAll(rule)];
+		let style = styles(text);
+		if (path === SHIMMER) for (const ok of SHIMMER_ALLOWED) style = style.replace(ok, '');
+		const found = [...style.matchAll(rule)];
 		if (found.length) out.push(`${path}: ${found.map((m) => m[0]).join(', ')}`);
 	}
 	return out;
@@ -49,6 +58,13 @@ describe('tokens', () => {
 			expect(offenders(rule)).toEqual([]);
 		});
 	}
+
+	it('keeps the shimmer in its primitive', () => {
+		// a copy elsewhere (text clipped to a moving background) would spread motion past what was agreed
+		const copies = Object.entries(sources).filter(([path, text]) => path !== SHIMMER && /background-clip\s*:\s*text|ui-shimmer/.test(styles(text)));
+		expect(copies.map(([p]) => p)).toEqual([]);
+		expect(styles(sources[SHIMMER])).toMatch(/prefers-reduced-motion: reduce/);
+	});
 
 	it('catches what it should, and only that', () => {
 		const bad: [string, string][] = [

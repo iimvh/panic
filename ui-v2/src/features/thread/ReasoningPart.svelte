@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { reasoningLabel, type Reasoning } from '$lib/core/reply';
 	import Icon from '$lib/ui/Icon.svelte';
+	import Shimmer from '$lib/ui/Shimmer.svelte';
 
 	/**
 	 * What the model thought: one quiet line, "Thought for 12s", folded by default. Open, it shows the whole thought
@@ -16,7 +17,7 @@
 <div class="reasoning">
 	<button type="button" class="toggle" aria-expanded={open} onclick={() => (open = !open)}>
 		<span class="chev" class:open><Icon name="chevron-right" size={14} /></span>
-		{label}
+		{#if live}<Shimmer>{label}</Shimmer>{:else}{label}{/if}
 	</button>
 	{#if open}
 		<div class="text">{part.text}</div>

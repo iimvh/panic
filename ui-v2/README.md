@@ -13,7 +13,12 @@ The interface steps back so the agent's work is what you see.
   Steps, the trace and a run's totals are one click away in the inspector, never in the way.
 - **One place per control.** There is one New chat, one Settings, and the run mode is shown once. What is
   used less often waits in a menu, and anything destructive is confirmed.
-- **No decoration.** No gradients, offset shadows, uppercase labels or animation beyond a spinner.
+- **No decoration.** No gradients, offset shadows or uppercase labels. Motion only says the system works:
+  - a shimmer across the status line ("Thinking…", "Running exec…") and the live "Thinking" label;
+  - a small spinner on each running tool call.
+
+  Nothing moves while Panic waits for you (an approval, a plan, questions). The shimmer lives only in
+  `lib/ui/Shimmer.svelte`, and the tokens test fails on a copy elsewhere.
 - **The URL is the state.** `/` is a new chat and `/c/<id>` a stored one. `?panel=overview|step|trace`
   (with `&step=<call id>` or `&trace=<trace id>`) opens the inspector, so Back, a reload and a shared link
   keep the context.

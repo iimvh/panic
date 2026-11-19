@@ -49,6 +49,15 @@ describe('ToolGroup', () => {
 });
 
 describe('ReasoningPart', () => {
+	it('shimmers "Thinking" while the thought runs, not after', async () => {
+		const part: Reasoning = { kind: 'reasoning', text: 'hmm', startedAt: 0 };
+		const { rerender } = render(ReasoningPart, { part });
+		expect(document.querySelector('.ui-shimmer')?.textContent).toBe('Thinking');
+		await rerender({ part: { ...part, endedAt: 2000 } });
+		expect(document.querySelector('.ui-shimmer')).toBeNull();
+		expect(screen.getByRole('button', { name: 'Thought for 2s' })).toBeTruthy();
+	});
+
 	it('is one folded line until opened', async () => {
 		const part: Reasoning = { kind: 'reasoning', text: 'secret plan', startedAt: 0, endedAt: 4200 };
 		render(ReasoningPart, { part });
@@ -86,6 +95,28 @@ describe('MessageView', () => {
 		render(MessageView, { message: answer({ streaming: true, startedAt: Date.now(), parts: [{ kind: 'tool', step: step('a', 'running') }] }) });
 		expect(screen.getByText('Running read_file…')).toBeTruthy();
 		expect(document.querySelector('.meta')).toBeNull();
+	});
+
+	it('shimmers the progress line while the system works, and only the progress line', () => {
+		render(MessageView, { message: answer({ streaming: true, startedAt: Date.now(), parts: [{ kind: 'tool', step: step('a', 'running') }] }) });
+		const shimmering = [...document.querySelectorAll('.ui-shimmer')].map((e) => e.textContent);
+		expect(shimmering).toEqual(['Running read_file…']);
+		// the tool row keeps its small spinner
+		expect(document.querySelector('.row [role="status"]')).not.toBeNull();
+	});
+
+	it('does not shimmer while waiting for the user', () => {
+		render(MessageView, {
+			message: answer({
+				streaming: true,
+				startedAt: Date.now(),
+				parts: [{ kind: 'tool', step: step('c1', 'running', 'exec', { command: 'npm test' }) }],
+				approval: { id: 'ap', callId: 'c1', name: 'exec', arguments: '{"command":"npm test"}', risk: 'exec' }
+			})
+		});
+		expect(screen.getByText('Waiting for approval')).toBeTruthy();
+		expect(document.querySelector('.ui-shimmer')).toBeNull();
+		expect(screen.getByRole('region', { name: 'Approve tool call' }).querySelector('.ui-shimmer')).toBeNull();
 	});
 
 	it('offers Continue after a limit, on the last answer only', () => {

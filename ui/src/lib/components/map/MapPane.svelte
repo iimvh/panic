@@ -19,14 +19,14 @@
 	let {
 		scene,
 		cast,
-		thought,
+		thoughts = [],
 		floating = false,
 		narrow = false,
 		onclose
-	}: { scene: Scene; cast: Actor[]; thought?: Thought; floating?: boolean; narrow?: boolean; onclose?: () => void } =
+	}: { scene: Scene; cast: Actor[]; thoughts?: Thought[]; floating?: boolean; narrow?: boolean; onclose?: () => void } =
 		$props();
-	/** What the map shows: which answer, live or replayed. Characters start over at home when it changes. */
-	const epoch = $derived(`${view.subject?.id ?? '-'}:${view.atStep === undefined ? 'live' : 'replay'}`);
+	/** What the map shows: which conversation, live or replayed. Characters start over at home when it changes, not with each new answer. */
+	const epoch = $derived(`${chat.session}:${view.atStep === undefined ? 'live' : 'replay'}`);
 
 	const traceId = $derived(chat.inspected?.kind === 'trace' ? chat.inspected.traceId : view.subject?.traceId);
 	const focus = $derived(view.size === 'focus' && !floating);
@@ -75,7 +75,7 @@
 				<div class="board">
 					<MapHud hud={scene.hud} />
 					<div class="stage-wrap">
-						<AgentMap {scene} {cast} {thought} {epoch} label="Agent map: {scene.caption}" />
+						<AgentMap {scene} {cast} {thoughts} {epoch} label="Agent map: {scene.caption}" />
 						{#if view.atStep !== undefined}
 							<span class="replay-tag">Replay · step {scene.current + 1}/{scene.steps.length}</span>
 						{/if}
@@ -83,7 +83,7 @@
 					<StepRail {scene} />
 					<MapLegend />
 				</div>
-				{#if focus}<Narration {scene} {thought} />{/if}
+				{#if focus}<Narration {scene} {thoughts} />{/if}
 			</div>
 		{:else if view.tab === 'step'}
 			<StepDetail />

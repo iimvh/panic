@@ -9,7 +9,7 @@
 	import MessageView from '$lib/components/MessageView.svelte';
 	import Settings from '$lib/components/Settings.svelte';
 	import { actors } from '$lib/actors';
-	import { liveThought, scene } from '$lib/scene';
+	import { liveThoughts, replayThoughts, scene } from '$lib/scene';
 	import { view } from '$lib/view.svelte';
 	import { load, save } from '$lib/storage';
 
@@ -70,12 +70,12 @@
 	// the agent map: one scene for the panel and the strip, ticking each second while the answer runs
 	let now = $state(Date.now());
 	$effect(() => {
-		if (!view.subject?.streaming) return;
+		if (!view.streaming) return;
 		const timer = setInterval(() => (now = Date.now()), 1000);
 		return () => clearInterval(timer);
 	});
 	const map = $derived(
-		scene(view.subject, {
+		scene(view.turns, {
 			model: chat.state?.model ?? null,
 			connected: chat.state ? chat.state.connected : true,
 			mode: view.mode,
@@ -85,11 +85,11 @@
 	);
 
 	// who stands where on the map: apart from the scene, which rebuilds every second for the clock
-	const cast = $derived(actors(view.subject, { atStep: view.atStep }));
+	const cast = $derived(actors(view.turns, { atStep: view.atStep }));
 
-	// what the model thinks now, for the narration and the bubble: apart from the scene and the cast, which must not
-	// rebuild with every frame of streamed thinking
-	const thought = $derived(view.atStep === undefined ? liveThought(view.subject) : undefined);
+	// what is thought now (Panic and each sub-agent), or before the step replayed, for the narration and the bubbles:
+	// apart from the scene and the cast, which must not rebuild with every frame of streamed thinking
+	const thoughts = $derived(view.atStep === undefined ? liveThoughts(view.turns.at(-1)) : replayThoughts(view.turns, view.atStep));
 
 	let width = $state(0);
 	/** Under 860px the map is a sheet over the chat, with the strip always shown. */
@@ -114,9 +114,10 @@
 			view.tab = picked.kind === 'trace' ? 'trace' : 'step';
 		});
 	});
-	// another answer on the map: its replay starts over
+	// another conversation, or a new answer in it: the replay stops and the map follows what happens now
 	$effect(() => {
-		void view.subject?.id;
+		void chat.session;
+		void view.turns.length;
 		untrack(() => {
 			view.replay = undefined;
 			view.playing = false;
@@ -152,7 +153,7 @@
 		if ((e.key === 'm' || e.key === 'M') && !narrow) view.cycle();
 		else if (e.key === 'ArrowLeft' && usable) view.step(-1);
 		else if (e.key === 'ArrowRight' && usable) view.step(1);
-		else if ((e.key === 'r' || e.key === 'R') && usable && !view.subject?.streaming) view.play(true);
+		else if ((e.key === 'r' || e.key === 'R') && usable && !view.streaming) view.play(true);
 		else if (e.key === ' ' && usable && !t?.closest('button')) {
 			e.preventDefault();
 			view.toggle();
@@ -254,12 +255,12 @@
 		></div>
 	{/if}
 	<div class="dock" style:--share="{view.width * 100}vw">
-		<MapPane scene={map} {cast} {thought} />
+		<MapPane scene={map} {cast} {thoughts} />
 	</div>
 {:else if floating}
 	<button class="scrim" aria-label="Close the map panel" onclick={closeFloating}></button>
 	<div class="float" class:sheet={narrow}>
-		<MapPane scene={map} {cast} {thought} floating {narrow} onclose={closeFloating} />
+		<MapPane scene={map} {cast} {thoughts} floating {narrow} onclose={closeFloating} />
 	</div>
 {/if}
 </div>

@@ -1,5 +1,5 @@
 import { chat, type Message } from './chat.svelte';
-import { flatten, type Mode } from './scene';
+import { flattenTurns, turnsOf, type Mode } from './scene';
 import { load, save } from './storage';
 
 /**
@@ -40,7 +40,7 @@ class MapView {
 		save(WIDTH_KEY, String(this.width));
 	}
 
-	/** The answer the map draws: the one of the call or trace picked in the chat, else the latest. */
+	/** The answer picked (the one of the call or trace picked in the chat, else the latest), for the Step and Trace tabs. */
 	get subject(): Message | undefined {
 		const picked = chat.inspected;
 		if (picked?.kind === 'tool') return chat.messages.find((m) => m.id === picked.messageId);
@@ -48,18 +48,27 @@ class MapView {
 		return chat.messages.findLast((m) => m.role === 'assistant');
 	}
 
-	/** The step the map shows: the one replayed, else the call picked in the chat; undefined is live. */
+	/** The answers of the conversation: the map draws them all, the last one live. */
+	get turns(): Message[] {
+		return turnsOf(chat.messages);
+	}
+
+	/** The conversation's last answer is still running. */
+	get streaming(): boolean {
+		return !!this.turns.at(-1)?.streaming;
+	}
+
+	/** The step the map shows (an index over the whole conversation): the one replayed, else the call picked in the chat; undefined is live. */
 	get atStep(): number | undefined {
 		if (this.replay !== undefined) return this.replay;
 		const picked = chat.inspected;
-		const subject = this.subject;
-		if (picked?.kind !== 'tool' || !subject) return undefined;
-		const i = flatten(subject.parts).findIndex((f) => f.step.id === picked.id);
+		if (picked?.kind !== 'tool') return undefined;
+		const i = flattenTurns(this.turns).findIndex((f) => f.messageId === picked.messageId && f.step.id === picked.id);
 		return i >= 0 ? i : undefined;
 	}
 
 	get stepCount(): number {
-		return flatten(this.subject?.parts).length;
+		return flattenTurns(this.turns).length;
 	}
 
 	get mode(): Mode {
@@ -71,15 +80,14 @@ class MapView {
 
 	/** Picks step `i` on the rail: the map shows it and the Step tab holds its detail, without switching to it. */
 	pick(i: number) {
-		const subject = this.subject;
-		const f = flatten(subject?.parts)[i];
-		if (!subject || !f) return;
+		const f = flattenTurns(this.turns)[i];
+		if (!f || f.messageId === undefined) return;
 		this.show(i);
 		this.fromRail = true;
-		chat.inspected = { kind: 'tool', messageId: subject.id, id: f.step.id, agent: f.agent };
+		chat.inspected = { kind: 'tool', messageId: f.messageId, id: f.step.id, agent: f.agent };
 	}
 
-	/** Shows step `i` of the answer on the map. */
+	/** Shows step `i` of the conversation on the map. */
 	show(i: number) {
 		const n = this.stepCount;
 		if (n === 0) return;
@@ -99,7 +107,7 @@ class MapView {
 		if (chat.inspected?.kind === 'tool') chat.inspected = null;
 	}
 
-	/** Plays the answer's steps from the start (R), or pauses and resumes it (Space). */
+	/** Plays the conversation's steps from the start (R), or pauses and resumes it (Space). */
 	play(fromStart = false) {
 		if (this.stepCount === 0) return;
 		if (fromStart || this.replay === undefined || this.replay >= this.stepCount - 1) this.replay = 0;

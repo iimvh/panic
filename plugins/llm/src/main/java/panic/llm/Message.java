@@ -5,14 +5,20 @@ import java.util.Objects;
 
 /**
  * One chat message. An assistant message may carry {@code toolCalls} (its text may then be empty); a
- * {@link Role#TOOL} message is the result of one of them and names it with {@code toolCallId}.
+ * {@link Role#TOOL} message is the result of one of them and names it with {@code toolCallId}. An assistant message
+ * may also carry {@code reasoning}: what the model thought before it wrote (see {@link Completion#reasoning}), kept
+ * for the user to read. It is never sent to a model ("" when there is none).
  */
-public record Message(Role role, String content, List<ToolCall> toolCalls, String toolCallId) {
+public record Message(Role role, String content, List<ToolCall> toolCalls, String toolCallId, String reasoning) {
 
   public Message {
     Objects.requireNonNull(role, "role");
     Objects.requireNonNull(content, "content");
     toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
+    if (reasoning == null) reasoning = "";
+    if (!reasoning.isEmpty() && role != Role.ASSISTANT) {
+      throw new IllegalArgumentException("only assistant messages carry reasoning");
+    }
     if (!toolCalls.isEmpty() && role != Role.ASSISTANT) {
       throw new IllegalArgumentException("only assistant messages carry tool calls");
     }
@@ -22,6 +28,10 @@ public record Message(Role role, String content, List<ToolCall> toolCalls, Strin
     if (role != Role.TOOL && toolCallId != null) {
       throw new IllegalArgumentException("only tool messages carry a tool call id");
     }
+  }
+
+  public Message(Role role, String content, List<ToolCall> toolCalls, String toolCallId) {
+    this(role, content, toolCalls, toolCallId, "");
   }
 
   public Message(Role role, String content) {
@@ -43,6 +53,11 @@ public record Message(Role role, String content, List<ToolCall> toolCalls, Strin
   /** An assistant turn that asks for tools, with whatever text came along (may be empty). */
   public static Message assistant(String content, List<ToolCall> toolCalls) {
     return new Message(Role.ASSISTANT, content == null ? "" : content, toolCalls, null);
+  }
+
+  /** An assistant turn with what the model thought before it (never sent back to a model). */
+  public static Message assistant(String content, List<ToolCall> toolCalls, String reasoning) {
+    return new Message(Role.ASSISTANT, content == null ? "" : content, toolCalls, null, reasoning);
   }
 
   /** The result of the tool call {@code toolCallId}, fed back to the model. */

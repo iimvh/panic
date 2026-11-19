@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from './chat.svelte';
 import { toolStep } from './reply';
-import { failure, lineDelta, liveThought, route, scene, stepLabel, todos, type SceneContext } from './scene';
+import { failure, lineDelta, liveThoughts, replayThoughts, route, scene, stepLabel, todos, type SceneContext } from './scene';
 
 const ctx: SceneContext = { model: 'acme/fast-1', connected: true, mode: 'ask', now: 10_000 };
 const answer = (over: Partial<Message> = {}): Message => ({ id: 1, role: 'assistant', text: '', parts: [], streaming: true, startedAt: 0, ...over });
@@ -117,26 +117,95 @@ describe('scene', () => {
 		const all = scene(m, ctx);
 		expect(all.hud).toMatchObject({ elapsed: 4000, tokens: 120, steps: 2 });
 	});
+
+	it('keeps adding up over the answers of the conversation', () => {
+		const usage = { promptTokens: 100, completionTokens: 20, reasoningTokens: 0 };
+		const first = answer({ id: 1, streaming: false, endedAt: 3000, usage });
+		toolStep(first, { id: 'a', name: 'read_file', arguments: '{"path":"a"}', status: 'ok' });
+		toolStep(first, { id: 'b', name: 'write_file', arguments: '{"path":"b","content":"x"}', status: 'ok' });
+		const second = answer({ id: 3, startedAt: 5000 });
+		toolStep(second, { id: 'c', name: 'read_file', arguments: '{"path":"c"}', status: 'running' });
+		const s = scene([first, second], ctx);
+		// the workspace of the first answer is still there, with its counts
+		expect(node(s, 'workspace')).toMatchObject({ state: 'active', badge: '+1 −0' });
+		expect(s.steps.map((r) => r.turn)).toEqual([0, 0, 1]);
+		expect(s.current).toBe(2);
+		expect(s.hud).toMatchObject({ steps: 3, turnSteps: 1, turn: 2, turns: 2, reads: 2, writes: 1, tokens: 120, elapsed: 5000 });
+		// replayed at a step of the first answer: later steps are not on the map, its own time shows
+		const back = scene([first, second], { ...ctx, atStep: 0 });
+		expect(back.hud).toMatchObject({ steps: 1, turnSteps: 1, turn: 1, writes: 0 });
+		expect(back.caption).toBe('reads a');
+	});
+
+	it('works the model, not the block, while a call is still being written', () => {
+		const m = answer();
+		m.parts!.push({ kind: 'tool', step: { id: 'w', name: 'write_file', arguments: '{"path":"a.ts","con', status: 'drafting', draft: 0 } });
+		const s = scene(m, ctx);
+		expect(node(s, 'model')).toMatchObject({ state: 'active', pill: { text: 'drafting write_file call' } });
+		expect(node(s, 'workspace')?.state).toBe('ghost');
+		expect(node(s, 'gate')?.state).toBe('ghost');
+		expect(s.focus).toBe('model');
+		expect(s.hud.writes).toBe(0);
+		// the rail still shows it, as the step happening
+		expect(s.current).toBe(0);
+	});
 });
 
-describe('liveThought', () => {
+describe('replayThoughts', () => {
+	const done = (over: Partial<Message> = {}) => answer({ streaming: false, ...over });
+	it('gives the thought before the step shown, shared by the calls made at once', () => {
+		const m = done({ parts: [{ kind: 'reasoning', text: 'a\nb\nc\nd', startedAt: 0, endedAt: 0 }] });
+		toolStep(m, { id: 'x', name: 'read_file', arguments: '{}', status: 'ok' });
+		toolStep(m, { id: 'y', name: 'read_file', arguments: '{}', status: 'ok' });
+		m.parts!.push({ kind: 'reasoning', text: 'now edit', startedAt: 0, endedAt: 0 });
+		toolStep(m, { id: 'z', name: 'edit_file', arguments: '{}', status: 'ok' });
+		expect(replayThoughts([m], 0)).toEqual([{ id: 'panic', text: 'b\nc\nd', past: true }]);
+		expect(replayThoughts([m], 1)).toEqual(replayThoughts([m], 0));
+		expect(replayThoughts([m], 2)).toEqual([{ id: 'panic', text: 'now edit', past: true }]);
+	});
+
+	it('finds it across turns and in a sub-agent, by actor id', () => {
+		const first = done({ id: 1 });
+		toolStep(first, { id: 'x', name: 'read_file', arguments: '{}', status: 'ok' });
+		const second = done({ id: 2 });
+		toolStep(second, { id: 'p', name: 'agent', arguments: '{}', status: 'ok' });
+		const call = second.parts![0];
+		if (call.kind !== 'tool') throw new Error('no call');
+		const inner = done({ id: 3, parts: [{ kind: 'reasoning', text: 'look at parse()', startedAt: 0, endedAt: 0 }] });
+		toolStep(inner, { id: 'i', name: 'read_file', arguments: '{}', status: 'ok' });
+		call.step.agent = { name: 'reviewer', text: '', parts: inner.parts ?? [] };
+		expect(replayThoughts([first, second], 0)).toEqual([]);
+		expect(replayThoughts([first, second], 1)).toEqual([]);
+		expect(replayThoughts([first, second], 2)).toEqual([{ id: 'a:p', text: 'look at parse()', agent: 'reviewer', past: true }]);
+		expect(replayThoughts([first, second], 9)).toEqual([]);
+	});
+});
+
+describe('liveThoughts', () => {
 	it('gives the newest line of the thought at the end of the answer', () => {
 		const m = answer({ parts: [{ kind: 'reasoning', text: 'first idea\nsecond idea\n', startedAt: 0 }] });
-		expect(liveThought(m)).toEqual({ text: 'second idea' });
+		expect(liveThoughts(m)).toEqual([{ id: 'panic', text: 'second idea' }]);
 	});
 
 	it('has nothing once the thought ended or the answer stopped', () => {
-		expect(liveThought(answer({ parts: [{ kind: 'reasoning', text: 'x', startedAt: 0, endedAt: 1 }] }))).toBeUndefined();
-		expect(liveThought(answer({ streaming: false, parts: [{ kind: 'reasoning', text: 'x', startedAt: 0 }] }))).toBeUndefined();
-		expect(liveThought(undefined)).toBeUndefined();
+		expect(liveThoughts(answer({ parts: [{ kind: 'reasoning', text: 'x', startedAt: 0, endedAt: 1 }] }))).toEqual([]);
+		expect(liveThoughts(answer({ streaming: false, parts: [{ kind: 'reasoning', text: 'x', startedAt: 0 }] }))).toEqual([]);
+		expect(liveThoughts(undefined)).toEqual([]);
 	});
 
-	it('names a running sub-agent that thinks', () => {
+	it('gives each running sub-agent that thinks its own thought, by actor id', () => {
 		const m = answer();
 		toolStep(m, { id: 'p', name: 'agent', arguments: '{}', status: 'running' });
-		const step = m.parts![0].kind === 'tool' ? m.parts![0].step : undefined;
-		step!.agent = { name: 'explorer', text: '', parts: [{ kind: 'reasoning', text: 'where is parse()?', startedAt: 0 }] };
-		expect(liveThought(m)).toEqual({ text: 'where is parse()?', agent: 'explorer' });
+		toolStep(m, { id: 'q', name: 'agent', arguments: '{}', status: 'running' });
+		toolStep(m, { id: 'r', name: 'agent', arguments: '{}', status: 'running' });
+		const steps = m.parts!.flatMap((p) => (p.kind === 'tool' ? [p.step] : []));
+		steps[0].agent = { name: 'reviewer', text: '', parts: [{ kind: 'reasoning', text: 'where is parse()?', startedAt: 0 }] };
+		steps[1].agent = { name: 'reviewer', text: '', parts: [{ kind: 'reasoning', text: 'aria labels?', startedAt: 0 }] };
+		steps[2].agent = { name: 'done', text: '', parts: [{ kind: 'reasoning', text: 'over', startedAt: 0, endedAt: 1 }] };
+		expect(liveThoughts(m)).toEqual([
+			{ id: 'a:p', text: 'where is parse()?', agent: 'reviewer' },
+			{ id: 'a:q', text: 'aria labels?', agent: 'reviewer' }
+		]);
 	});
 });
 

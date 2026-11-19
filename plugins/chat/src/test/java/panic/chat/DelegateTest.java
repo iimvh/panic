@@ -150,7 +150,8 @@ class DelegateTest {
     assertTrue(first.messages().get(0).content().startsWith("you explore"));
     assertFalse(first.messages().get(0).content().contains("main prompt"));
     List<Message> results = llm.requests.get(1).messages().stream().filter(m -> m.role() == Role.TOOL).toList();
-    assertEquals(List.of(Message.tool("a", Chat.TOOL_ERROR_PREFIX + "change is not available to this agent"),
+    assertEquals(List.of(
+        Message.tool("a", Chat.TOOL_ERROR_PREFIX + "change is not available to this agent; its tools are: look"),
         Message.tool("b", "look ran")), results);
     assertTrue(approvals.isEmpty(), "a refused call is never put to the user");
 

@@ -91,6 +91,19 @@ class ConversationsPluginTest {
   }
 
   @Test
+  void reasoningIsKeptAcrossRestartsAndOldLinesStillLoad() throws Exception {
+    start();
+    Message thought = Message.assistant("", List.of(new ToolCall("c1", "read", "{}")), "look first");
+    get("a").append(Message.user("q"), thought, Message.tool("c1", "x"), Message.assistant("done"));
+    restart();
+    assertEquals(List.of(Message.user("q"), thought, Message.tool("c1", "x"), Message.assistant("done")),
+        get("a").recent(0));
+    String text = Files.readString(file("a"), StandardCharsets.UTF_8);
+    assertEquals(1, text.split("\"reasoning\"", -1).length - 1, "only where there is some: " + text);
+    assertTrue(warnings.isEmpty(), warnings.toString());
+  }
+
+  @Test
   void compactionIsKeptAcrossRestarts() {
     start();
     Conversation c = get("a");

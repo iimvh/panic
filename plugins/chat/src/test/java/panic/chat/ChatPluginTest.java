@@ -307,7 +307,7 @@ class ChatPluginTest {
   }
 
   @Test
-  void reasoningIsShownButNeverSaved() {
+  void reasoningIsShownAndKeptButNeverSentBack() {
     ThinkingLlm think = new ThinkingLlm();
     root.plugin("llm", (ctx, on) -> {
       ctx.provide(Llm.KEY, think);
@@ -333,8 +333,11 @@ class ChatPluginTest {
 
     StringBuilder out = new StringBuilder();
     Commands.run(root, "ask", "again", new Session("c", out::append, new CancelToken()));
-    assertEquals(List.of(Message.system("sys"), Message.user("17*23?"), Message.assistant("n=2"),
-        Message.user("again")), think.inner.requests.get(1).messages(), "the history has no reasoning");
+    Message first = Message.assistant("n=2", List.of(), "17*23\n= 391");
+    assertEquals(List.of(Message.system("sys"), Message.user("17*23?"), first, Message.user("again")),
+        think.inner.requests.get(1).messages(), "the history keeps the reasoning for the user to read");
+    assertEquals(first, panic.command.Hooks.bail(root, Conversations.HISTORY, new Conversations.HistoryQuery("c"))
+        .orElseThrow().messages().get(1));
     assertTrue(out.toString().startsWith("│ 17*23\n│ = 391\n[thought 0s]\nn=4\n"), out.toString());
     assertTrue(out.toString().contains("(4 thinking)"), out.toString());
   }

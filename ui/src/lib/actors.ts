@@ -1,13 +1,13 @@
-import type { Message } from './chat.svelte';
-import { flatten, route, stepLabel, type Flat, type PacketKind, type Scene } from './scene';
+import { asTurns, flattenTurns, route, stepLabel, type Flat, type PacketKind, type Scene, type Turns } from './scene';
 
 /**
  * Who is where on the agent map now: Panic and its clones, and the block each of them should be at. A pure function
  * of the answer, like `scene`; how they walk there is `motion.ts`.
  *
  * - Panic goes to the block of the call it runs, through the gate when the block is behind it. It waits at the gate
- *   for an approval and at your screen for a plan or a question. Between calls it is at the model, and at home when
- *   the answer is done or only its helpers work.
+ *   for an approval and at your screen for a plan or a question. Between calls, and while the model still writes a
+ *   call (`drafting`: nothing runs yet), it is at the model; at home when the answer is done
+ *   or only its helpers work.
  * - Each more call running at once gets a small clone (`parallel`), each sub-agent a small named clone (`agent`) that
  *   goes to the block of its own call, or to the model while it thinks. A clone whose work ended is no longer listed:
  *   motion walks it back to Panic, where it merges.
@@ -32,19 +32,26 @@ export type Actor = {
 	thinking?: boolean;
 };
 
-const running = (f: Flat) => f.step.status === 'running' || f.step.status === 'drafting';
+const running = (f: Flat) => f.step.status === 'running';
+/** The model still writes the call: it has not run, so its author waits at the model. */
+const drafting = (f: Flat) => f.step.status === 'drafting';
 
-/** Who stands where in answer `m` (live), or at step `atStep` of it (replay). */
-export function actors(m: Message | undefined, ctx: { atStep?: number }): Actor[] {
+/**
+ * Who stands where in the conversation's last answer (live), or at step `atStep` of the conversation (replay, an
+ * index into `flattenTurns`).
+ */
+export function actors(input: Turns, ctx: { atStep?: number }): Actor[] {
+	const turns = asTurns(input);
+	const m = turns.at(-1);
 	if (!m) return [{ id: 'panic', kind: 'main', target: 'home' }];
-	const flat = flatten(m.parts);
+	const flat = flattenTurns(turns);
 	const replay = ctx.atStep !== undefined;
 	const live = !replay && !!m.streaming;
 	let busy: Flat[];
 	if (replay) {
 		const at = flat[Math.max(0, Math.min(ctx.atStep!, flat.length - 1))];
 		busy = at ? [at] : [];
-	} else busy = live ? flat.filter(running) : [];
+	} else busy = live ? flat.filter((f) => f.turn === turns.length - 1 && running(f)) : [];
 
 	// a sub-agent works while its own call runs, or (replayed) while one of its calls is the step shown
 	const agentIds = new Set<string>();
@@ -62,13 +69,19 @@ export function actors(m: Message | undefined, ctx: { atStep?: number }): Actor[
 
 	const out: Actor[] = [];
 	const own = busy.filter((f) => !f.parent && f.step.name !== 'agent');
+	/** The packet of the call `who` (a sub-agent's call id; none: the main agent) is drafting, live. */
+	const draft = (who?: string) => {
+		const f = live ? flat.find((g) => g.parent === who && g.turn === turns.length - 1 && drafting(g)) : undefined;
+		return f && route(f.step.name).packet;
+	};
 	let main: Actor;
+	const mainDraft = draft();
 	if (live && (m.plan || m.question)) main = { id: 'panic', kind: 'main', target: 'you', carry: 'waiting', waiting: true };
 	else if (own.length) main = { id: 'panic', kind: 'main', ...visit(own[0]) };
-	else if (live && agentIds.size === 0) {
+	else if (live && (mainDraft || agentIds.size === 0)) {
 		const last = m.parts?.at(-1);
 		const thinking = last?.kind === 'reasoning' && last.endedAt === undefined;
-		main = { id: 'panic', kind: 'main', target: 'model', carry: 'prompt', thinking };
+		main = { id: 'panic', kind: 'main', target: 'model', carry: mainDraft ?? 'prompt', thinking };
 	} else main = { id: 'panic', kind: 'main', target: 'home' };
 	out.push(main);
 
@@ -82,7 +95,7 @@ export function actors(m: Message | undefined, ctx: { atStep?: number }): Actor[
 		else {
 			const last = call.step.agent?.parts?.at(-1);
 			const thinking = live && last?.kind === 'reasoning' && last.endedAt === undefined;
-			out.push({ id: `a:${id}`, kind: 'agent', name, target: 'model', carry: 'prompt', thinking });
+			out.push({ id: `a:${id}`, kind: 'agent', name, target: 'model', carry: draft(id) ?? 'prompt', thinking });
 		}
 	}
 	return out;

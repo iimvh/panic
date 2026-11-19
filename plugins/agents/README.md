@@ -15,7 +15,7 @@ of a change) then stays out of the main context, and several sub-agents can work
   "profiles": {
     "explore": {
       "description": "Searches the codebase broadly (many files or folders) and reports each finding with its path, line numbers and the relevant code quoted, so you need not read those files again. Read-only. Not for reading one file you know.",
-      "tools": ["read_file", "list_dir", "grep", "glob"],
+      "tools": ["@read"],
       "maxSteps": 12
     }
   },
@@ -28,7 +28,13 @@ of a change) then stays out of the main context, and several sub-agents can work
 
 - **Profiles** are named sub-agents (`[a-z][a-z0-9_-]*`). `description` (required) tells the model when to use
   it, and is the sub-agent's role in the built-in prompt; `systemPrompt` replaces that prompt. `tools` lists the
-  only tools it may see and call (left out = all). `maxSteps` and `maxTokens` are its own limits (0 = the chat's).
+  only tools it may see and call (left out = all), by name or by group: `@read`, `@write`, `@exec`, `@network`
+  stand for every tool of that risk registered **when the sub-agent starts**, so a new read tool or an MCP server
+  is covered without editing the config (`["@read", "check"]` mixes both; an unknown group is a config error).
+  `maxSteps` and `maxTokens` are its own limits (0 = the chat's).
+- **What the main agent sees.** The `agent` tool's description lists each profile with its tools (groups in
+  words: `every read tool`), so it does not hand a profile work it has no tool for. A sub-agent's call to a tool
+  outside its list is refused with the list of the tools it has, so it goes on with those.
 - **`general`** (on by default) is a built-in sub-agent with every tool, whose instructions the model writes in
   the call (`instructions`). `"general": false` removes it, and then `general` may name a profile.
 - **`maxDepth`**: how deep sub-agents nest. At the default 1 a sub-agent cannot start another one: `agent` is
@@ -85,8 +91,9 @@ Profiles written with `description` only get the same prompt, so describe the pr
 | Key | From | Use |
 | --- | --- | --- |
 | `Chat.ASK`, `Chat.Delegate` | `plugins/chat` | Runs a sub-agent: a delegated ask |
-| `Tools.register`, `Tools.specs`, `ToolContext`, `ToolProgress` | `plugins/tools` | Registers `agent`, lists the tools of a sub-agent, reports its progress |
+| `Tools.register`, `Tools.specs`, `Tools.infos`, `Risk`, `ToolContext`, `ToolProgress` | `plugins/tools` | Registers `agent`, lists the tools of a sub-agent (groups by risk), reports its progress |
 
 ## Commands
 
-`agents` lists the sub-agents: name, tools, limits and description.
+`agents` lists the sub-agents: name, tools (groups resolved against the tools registered now; names no tool has
+are shown as `(unknown: …)`, to catch a stale config or a typo), limits and description.

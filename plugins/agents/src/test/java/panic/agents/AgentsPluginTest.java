@@ -405,9 +405,43 @@ class AgentsPluginTest {
     Commands.run(root, "agents", "", new Session("s", out::append, new CancelToken()));
     assertEquals("""
         general  every tool  instructions written by the bot
-        explore  tools: look  maxSteps 5  looks around
+        explore  tools: none (unknown: look)  maxSteps 5  looks around
         (depth 1, 2 at once, timeout 300s)
-        """, out.toString());
+        """, out.toString(), "a name no tool has shows, so a stale config is seen");
+  }
+
+  @Test
+  void aGroupStandsForEveryToolOfItsRiskRegisteredWhenTheSubAgentStarts() {
+    tools(tool("look", Risk.READ, c -> { }), tool("change", Risk.WRITE, c -> { }));
+    chat(1);
+    agents(new AgentsConfig(Map.of("explore", new AgentsConfig.Profile("looks around", null,
+        List.of("@read", "change"), 0, 0)), false, 1, 4, 0));
+    // registered after agents started: still covered
+    root.plugin("later", ctx -> {
+      Tools.register(ctx, tool("grep", Risk.READ, c -> { }));
+      Tools.register(ctx, tool("run", Risk.EXEC, c -> { }));
+      return null;
+    });
+    mainCalls(r -> results(r).isEmpty() ? calls(new ToolCall("x", "grep", "{}")) : text("found"),
+        agent("a", "explore", "search"));
+    assertEquals("main got: found", ask("go").text());
+    ChatRequest sub = llm.requests.stream().filter(AgentsPluginTest::sub).findFirst().orElseThrow();
+    assertEquals(List.of("change", "grep", "look"), toolNames(sub), "read tools and the names; no exec, no agent");
+    assertEquals("explore>grep ran", steps.stream().filter(s -> s.nested() && s.done())
+        .map(s -> s.agent() + ">" + s.result().content()).findFirst().orElseThrow());
+
+    StringBuilder out = new StringBuilder();
+    Commands.run(root, "agents", "", new Session("s", out::append, new CancelToken()));
+    assertTrue(out.toString().contains("explore  tools: agent, change, grep, look"), out.toString());
+  }
+
+  @Test
+  void theMainAgentIsToldWhatEachProfileCanUse() {
+    chat(1);
+    agents(new AgentsConfig(Map.of("explore", new AgentsConfig.Profile("looks around", null,
+        List.of("@read", "check"), 0, 0)), true, 1, 4, 0));
+    String description = Tools.find(root, AgentsPlugin.TOOL).orElseThrow().description();
+    assertTrue(description.contains("- explore (tools: every read tool, check): looks around"), description);
   }
 
   @Test
@@ -415,6 +449,8 @@ class AgentsPluginTest {
     assertThrows(IllegalArgumentException.class, () -> new AgentsConfig(Map.of("Bad Name", EXPLORE), true, 0, 0, 0));
     assertThrows(IllegalArgumentException.class, () -> new AgentsConfig(Map.of("general", EXPLORE), true, 0, 0, 0));
     assertThrows(IllegalArgumentException.class, () -> new AgentsConfig.Profile(" ", null, null, 0, 0));
+    assertThrows(IllegalArgumentException.class,
+        () -> new AgentsConfig.Profile("x", null, List.of("@readonly"), 0, 0), "an unknown group");
     assertEquals(EXPLORE, new AgentsConfig(Map.of("general", EXPLORE), false, 0, 0, 0).profiles().get("general"));
     assertTrue(AgentsConfig.DEFAULT.profiles().isEmpty());
     assertEquals(600, AgentsConfig.DEFAULT.timeoutSeconds());

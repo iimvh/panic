@@ -34,9 +34,9 @@
 		scene,
 		label,
 		cast,
-		thought,
+		thoughts = [],
 		epoch
-	}: { scene: Scene; label: string; cast: Actor[]; thought?: Thought; epoch: string } = $props();
+	}: { scene: Scene; label: string; cast: Actor[]; thoughts?: Thought[]; epoch: string } = $props();
 
 	const PAD = 40;
 	const box = $derived.by(() => {
@@ -105,8 +105,41 @@
 	});
 	const extra = $derived(bodies.length - shown.length);
 	const home = $derived(byId.get('home'));
-	/** Thought bubbles go to whoever thinks: Panic, or the sub-agent named in the thought. */
-	const thinks = (b: Body) => !b.moving && !!b.thinking && (thought?.agent ? b.name === thought.agent : b.kind === 'main');
+	/**
+	 * Each one thinking gets its own bubble: Panic, and every sub-agent, by actor id (two sub-agents may share a name).
+	 * Replayed, the one who made the step shown gets the thought it had before it, wherever it stands.
+	 */
+	const said = $derived(new Map(thoughts.map((t) => [t.id, t.text])));
+	const past = $derived(new Set(thoughts.filter((t) => t.past).map((t) => t.id)));
+	const thinks = (b: Body) => !b.moving && said.has(b.id) && (!!b.thinking || past.has(b.id));
+	/**
+	 * Where each thought bubble goes. One alone sits over its head; several (sub-agents thinking at the model at once)
+	 * are made narrower and laid side by side, in rows going up, so none covers another.
+	 */
+	const BUBBLE = { w: 190, h: 56, small: 136, smallH: 50, gap: 6 };
+	const placed = $derived.by(() => {
+		const who = shown.filter((b) => !b.waiting && thinks(b)).sort((p, q) => p.x - q.x);
+		const out = new Map<string, { left?: number; top?: number; w: number; h: number }>();
+		if (who.length <= 1) {
+			for (const b of who) out.set(b.id, { w: BUBBLE.w, h: BUBBLE.h });
+			return out;
+		}
+		const w = BUBBLE.small;
+		const h = BUBBLE.smallH;
+		const perRow = Math.max(1, Math.floor((box.w - 8) / (w + BUBBLE.gap)));
+		const headTop = Math.min(...who.map((b) => b.y - (b.kind === 'main' ? 44 : 30)));
+		const mid = who.reduce((n, b) => n + b.x, 0) / who.length;
+		who.forEach((b, i) => {
+			const row = Math.floor(i / perRow);
+			const inRow = Math.min(perRow, who.length - row * perRow);
+			const span = inRow * w + (inRow - 1) * BUBBLE.gap;
+			const start = Math.max(box.x + 4, Math.min(mid - span / 2, box.x + box.w - span - 4));
+			const left = start + (i % perRow) * (w + BUBBLE.gap);
+			const top = Math.max(box.y + 4, headTop - h - 18 - row * (h + BUBBLE.gap));
+			out.set(b.id, { left, top, w, h });
+		});
+		return out;
+	});
 
 	// pills need about half scale to be read; under that only names stay
 	let width = $state(0);
@@ -165,7 +198,21 @@
 				{#if b.waiting && !b.moving}
 					<Bubble x={b.x} y={b.y - head} {box} tone="wait" label="Waiting for you" text={b.note ?? (b.at === 'you' ? 'answer in the chat' : 'approve in the chat')} />
 				{:else if thinks(b)}
-					<Bubble x={b.x} y={b.y - head} {box} tone="think" label={b.kind === 'main' ? 'Model is thinking' : `${b.name} is thinking`} text={thought?.text ?? '…'} />
+					{@const at = placed.get(b.id)}
+					<Bubble
+						x={b.x}
+						y={b.y - head}
+						{box}
+						tone="think"
+						label={past.has(b.id)
+							? b.kind === 'main' ? 'Model thought' : `${b.name} thought`
+							: b.kind === 'main' ? 'Model is thinking' : `${b.name} is thinking`}
+						text={said.get(b.id) ?? '…'}
+						w={at?.w}
+						h={at?.h}
+						left={at?.left}
+						top={at?.top}
+					/>
 				{/if}
 			{/each}
 		</g>

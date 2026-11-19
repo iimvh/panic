@@ -335,8 +335,9 @@ export function review(m: Message, d: Record<string, unknown>) {
 }
 
 /**
- * Folds stored messages into what the page shows: each question, then one answer holding the text, tool
- * calls, their results and review rejections of that turn, in order. `id` numbers the messages.
+ * Folds stored messages into what the page shows: each question, then one answer holding the thoughts, text, tool
+ * calls, their results and review rejections of that turn, in order. `id` numbers the messages. A stored thought
+ * has no time: it shows as "Thought".
  */
 export function fromHistory(history: HistoryMessage[], id: () => number): Message[] {
 	const out: Message[] = [];
@@ -359,6 +360,10 @@ export function fromHistory(history: HistoryMessage[], id: () => number): Messag
 			traceId = m.traceId;
 		} else if (m.role === 'assistant') {
 			const a = reply();
+			if (m.reasoning) {
+				appendReasoning(a, m.reasoning, 0);
+				endReasoning(a, 0);
+			}
 			if (m.content) appendText(a, m.content);
 			for (const c of m.toolCalls ?? []) toolStep(a, { ...c, status: 'running' });
 		} else if (m.role === 'tool') {
@@ -481,7 +486,7 @@ export function activity(m: Message): string {
 		return `${last.step.agent.name}: ${what}…`;
 	}
 	if (last?.kind === 'tool' && last.step.status === 'running') return `Running ${last.step.name}…`;
-	if (last?.kind === 'tool' && last.step.status === 'drafting') return `Writing ${last.step.name || 'a tool'} call…`;
+	if (last?.kind === 'tool' && last.step.status === 'drafting') return `Drafting ${last.step.name || 'a tool'} call…`;
 	if (last?.kind === 'text') return 'Writing…';
 	if (last?.kind === 'reasoning' && last.endedAt === undefined) return 'Thinking…';
 	if (last?.kind === 'review' && !last.pass) return 'Trying again…';

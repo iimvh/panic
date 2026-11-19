@@ -7,7 +7,7 @@
 	 * (KEY IDEA), what the model thinks while it thinks, the agent's checklist when it keeps one, and buttons to walk
 	 * through the steps.
 	 */
-	let { scene, thought }: { scene: Scene; thought?: Thought } = $props();
+	let { scene, thoughts = [] }: { scene: Scene; thoughts?: Thought[] } = $props();
 
 	const node = $derived(scene.nodes.find((n) => n.id === scene.focus));
 	// a sub-agent has no block: the focus then names its kind
@@ -20,12 +20,12 @@
 	<span class="label-caps">{view.atStep !== undefined ? `Step ${at} of ${n}` : 'Now'}</span>
 	<h2>{scene.caption}</h2>
 	<p class="who">{role.title}{node && node.label !== role.title.toLowerCase() ? ` · ${node.label}` : ''}</p>
-	{#if thought}
+	{#each thoughts as thought (thought.id)}
 		<div class="thinking">
-			<span class="label-caps">{thought.agent ? `${thought.agent} is thinking` : 'Model is thinking'}</span>
+			<span class="label-caps">{`${thought.agent ?? 'Model'} ${thought.past ? 'thought' : 'is thinking'}`}</span>
 			<p>{thought.text}</p>
 		</div>
-	{/if}
+	{/each}
 	<div class="idea">
 		<span class="label-caps">Key idea</span>
 		<p>{role.idea}</p>

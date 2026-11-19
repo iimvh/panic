@@ -10,14 +10,27 @@
 		tone,
 		label,
 		text,
-		box
-	}: { x: number; y: number; tone: 'think' | 'wait'; label: string; text: string; box: { x: number; y: number; w: number; h: number } } =
-		$props();
+		box,
+		w: W = 190,
+		h: H = 56,
+		left: atLeft,
+		top: atTop
+	}: {
+		x: number;
+		y: number;
+		tone: 'think' | 'wait';
+		label: string;
+		text: string;
+		box: { x: number; y: number; w: number; h: number };
+		/** Size, and a place given by the map when several bubbles show at once (else over the head, kept in `box`). */
+		w?: number;
+		h?: number;
+		left?: number;
+		top?: number;
+	} = $props();
 
-	const W = 190;
-	const H = 56;
-	const left = $derived(Math.max(box.x + 4, Math.min(x - 40, box.x + box.w - W - 4)));
-	const top = $derived(Math.max(box.y + 4, y - H - 18));
+	const left = $derived(atLeft ?? Math.max(box.x + 4, Math.min(x - 40, box.x + box.w - W - 4)));
+	const top = $derived(atTop ?? Math.max(box.y + 4, y - H - 18));
 </script>
 
 <g class="bubble {tone}" aria-hidden="true">

@@ -237,6 +237,22 @@ describe('fromHistory', () => {
 		expect(out.map((m) => m.id)).toEqual([1, 2, 3, 4]);
 	});
 
+	it('puts a stored thought before what the model then wrote, ended and without a time', () => {
+		const out = fromHistory(
+			[
+				{ role: 'user', content: 'q' },
+				{ role: 'assistant', content: '', reasoning: 'read it first', toolCalls: [{ id: 'a', name: 'read_file', arguments: '{}' }] },
+				{ role: 'tool', toolCallId: 'a', status: 'ok', content: 'text' },
+				{ role: 'assistant', content: 'done', reasoning: 'enough' }
+			],
+			() => 0
+		);
+		expect(kinds(out[1])).toEqual(['reasoning', 'tool', 'reasoning', 'text']);
+		const first = out[1].parts![0];
+		expect(first).toEqual({ kind: 'reasoning', text: 'read it first', startedAt: 0, endedAt: 0 });
+		expect(first.kind === 'reasoning' && reasoningLabel(first, 99)).toBe('Thought');
+	});
+
 	it('gives each answer the trace of its question', () => {
 		const out = fromHistory(
 			[
@@ -262,7 +278,7 @@ describe('toolDelta', () => {
 			['write_file', 'drafting', '{"path":"x"}'],
 			['time', 'drafting', '{}']
 		]);
-		expect(activity(m)).toBe('Writing time call…');
+		expect(activity(m)).toBe('Drafting time call…');
 
 		toolStep(m, { id: 'a', name: 'write_file', arguments: '{"path":"x"}', status: 'running' });
 		toolStep(m, { id: 'a', name: 'write_file', status: 'ok' });

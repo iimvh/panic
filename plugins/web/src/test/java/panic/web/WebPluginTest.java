@@ -247,14 +247,15 @@ class WebPluginTest {
   }
 
   @Test
-  void reasoningIsStreamedBeforeTheAnswerAndNotKept() throws Exception {
+  void reasoningIsStreamedBeforeTheAnswerAndKeptInTheHistory() throws Exception {
     fake.think = "the user greets me";
     List<Event> ev = events(send("POST", "/api/chat", "{\"session\":\"r1\",\"text\":\"hi\"}").body());
     assertEquals(List.of("reasoning", "delta", "delta", "done"), ev.stream().map(Event::name).toList());
     assertEquals("the user greets me", ev.get(0).data().path("text").asText());
     assertEquals(7, ev.get(3).data().path("usage").path("reasoningTokens").asInt());
-    String history = get("/api/history?session=r1").body();
-    assertFalse(history.contains("greets"), history);
+    JsonNode history = Json.parseOrNull(get("/api/history?session=r1").body());
+    assertEquals("the user greets me", history.path(1).path("reasoning").asText(), history.toString());
+    assertFalse(history.path(0).has("reasoning"), "only answers carry it");
   }
 
   @Test

@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -304,7 +305,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         if (last.truncated()) {
           // cut at the output limit: not an answer to review, and its last call is incomplete, so nothing runs
           truncations++;
-          add(Message.assistant(last.text()));
+          add(Message.assistant(last.text(), List.of(), last.reasoning()));
           if (steps >= maxSteps()) {
             stop = Chat.MAX_STEPS;
           } else if (maxTokens() > 0 && usage.totalTokens() >= maxTokens()) {
@@ -866,7 +867,11 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         repeats = key.equals(lastCall) ? repeats + 1 : 1;
         lastCall = key;
         if (ask.delegate() != null && !ask.delegate().allows(call.name())) {
-          planned.add(new Planned(call, ToolResult.error(call.name() + " is not available to this agent")));
+          // say what it can use, so the model goes on with those instead of retrying
+          String can = ask.delegate().tools().isEmpty() ? "none"
+              : String.join(", ", new TreeSet<>(ask.delegate().tools()));
+          planned.add(new Planned(call, ToolResult.error(call.name() + " is not available to this agent; "
+              + "its tools are: " + can)));
         } else if (repeats > cfg.maxRepeats()) {
           // feedback, not a stop: only the hard limits end a turn
           planned.add(new Planned(call, ToolResult.error("the same call was made " + repeats + " times in a row; "

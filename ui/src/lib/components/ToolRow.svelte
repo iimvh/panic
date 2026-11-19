@@ -31,7 +31,7 @@
 	{#if step.status === 'drafting'}
 		<!-- the end of what is being written, right-aligned so the newest text shows -->
 		<span class="args tail"><bdi>{step.arguments.slice(-200)}</bdi></span>
-		<span class="status">writing · {size(step.arguments)}</span>
+		<span class="status">drafting call · {size(step.arguments)}</span>
 	{:else}
 		<span class="args">{command ?? step.arguments}</span>
 		<span class="status">{working ? '…' : step.status}</span>

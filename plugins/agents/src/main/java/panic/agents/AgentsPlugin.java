@@ -8,11 +8,14 @@ import context.Context;
 import core.CancelledException;
 import core.Disposable;
 import core.Signal;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -67,7 +70,7 @@ public final class AgentsPlugin implements ConfigPlugin<AgentsConfig> {
       for (Map.Entry<String, AgentsConfig.Profile> e : cfg.profiles().entrySet()) {
         AgentsConfig.Profile p = e.getValue();
         StringBuilder line = new StringBuilder(e.getKey()).append("  ")
-            .append(p.tools() == null ? "every tool" : "tools: " + String.join(", ", p.tools()));
+            .append(p.tools() == null ? "every tool" : "tools: " + listed(ctx, p.tools()));
         if (p.maxSteps() > 0) line.append("  maxSteps ").append(p.maxSteps());
         if (p.maxTokens() > 0) line.append("  maxTokens ").append(p.maxTokens());
         call.out().println(line.append("  ").append(p.description()).toString());
@@ -76,6 +79,49 @@ public final class AgentsPlugin implements ConfigPlugin<AgentsConfig> {
           + cfg.timeoutSeconds() + "s)");
     });
     return null;
+  }
+
+  /**
+   * The tools a profile's {@code tools} stand for now: its names, and every tool registered with the risk of each
+   * group it names ({@link AgentsConfig#GROUPS}). Resolved when a sub-agent starts, so later tools are covered.
+   */
+  static Set<String> resolve(Context ctx, List<String> tools) {
+    Set<String> out = new TreeSet<>();
+    List<Tools.Info> infos = null;
+    for (String t : tools) {
+      Risk group = AgentsConfig.GROUPS.get(t);
+      if (group == null) {
+        out.add(t);
+        continue;
+      }
+      if (infos == null) infos = Tools.infos(ctx);
+      for (Tools.Info i : infos) {
+        if (i.risk() == group) out.add(i.spec().name());
+      }
+    }
+    return out;
+  }
+
+  /** For the {@code agents} command: the tools resolved now, and the names no registered tool has (drift, typos). */
+  private static String listed(Context ctx, List<String> tools) {
+    Set<String> known = new HashSet<>();
+    for (ToolSpec s : Tools.specs(ctx)) known.add(s.name());
+    List<String> have = new ArrayList<>();
+    List<String> unknown = new ArrayList<>();
+    for (String t : resolve(ctx, tools)) (known.contains(t) ? have : unknown).add(t);
+    String line = have.isEmpty() ? "none" : String.join(", ", have);
+    return unknown.isEmpty() ? line : line + " (unknown: " + String.join(", ", unknown) + ")";
+  }
+
+  /** For the main agent, in the tool's description: what a profile can use, groups in words. */
+  private static String described(List<String> tools) {
+    if (tools == null) return "every tool";
+    List<String> parts = new ArrayList<>();
+    for (String t : tools) {
+      Risk group = AgentsConfig.GROUPS.get(t);
+      parts.add(group == null ? t : "every " + group.name().toLowerCase(Locale.ROOT) + " tool");
+    }
+    return parts.isEmpty() ? "no tools" : String.join(", ", parts);
   }
 
   private static final class AgentTool implements Tool {
@@ -114,7 +160,9 @@ public final class AgentsPlugin implements ConfigPlugin<AgentsConfig> {
         list.append("\n- ").append(AgentsConfig.GENERAL).append(": any task, every tool; describe how to work in ")
             .append("`instructions`");
       }
-      cfg.profiles().forEach((n, p) -> list.append("\n- ").append(n).append(": ").append(p.description()));
+      // with what each can use, so the task asks only for what it can do (no grep to a profile without it)
+      cfg.profiles().forEach((n, p) -> list.append("\n- ").append(n).append(" (tools: ").append(described(p.tools()))
+          .append("): ").append(p.description()));
       return new ToolSpec(TOOL, "Hand a self-contained task to a sub-agent, which works on it with its own tools "
           + "and context and answers with its result only. Use it for broad work whose details you do not need in "
           + "your own context: searching many files or folders for something, researching, or a separate part of a "
@@ -190,7 +238,7 @@ public final class AgentsPlugin implements ConfigPlugin<AgentsConfig> {
       Set<String> allowed = null;
       boolean last = depth + 1 >= cfg.maxDepth();
       if (tools != null) {
-        allowed = new HashSet<>(tools);
+        allowed = new HashSet<>(resolve(ctx, tools));
       } else if (last) {
         allowed = new HashSet<>();
         for (ToolSpec s : Tools.specs(ctx)) allowed.add(s.name());

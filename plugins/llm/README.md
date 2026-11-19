@@ -98,7 +98,7 @@ What a reasoning model thinks before it answers is kept apart from its answer, s
 | Type | Meaning |
 | --- | --- |
 | `ChatModel.stream(request, signal, onDelta, onToolDelta, onReasoning)` | Also hands each piece of the reasoning to `onReasoning` as it streams; the default reports nothing. A wrapper must forward it (`Llm`'s does) |
-| `Completion.reasoning()` | The whole reasoning, empty when the provider shows none. Not part of `message()`: it is never sent back to the model nor saved |
+| `Completion.reasoning()` | The whole reasoning, empty when the provider shows none. Goes with `message()` (`Message.reasoning()`, assistant messages only) so the conversation keeps it for the user; no provider sends it back to the model |
 | `Usage.reasoningTokens()` | The part of `completionTokens` spent thinking (`completion_tokens_details.reasoning_tokens`), also when the text is hidden |
 | `Usage.cachedTokens()` | The part of `promptTokens` served from the provider's prompt cache (`prompt_tokens_details.cached_tokens`, or DeepSeek's `prompt_cache_hit_tokens`); 0 when the provider reports none |
 | `Content.reasoning(message)` | Reads `reasoning` (OpenRouter, Ollama), else `reasoning_content` (DeepSeek, vLLM, LM Studio), plus `thinking` content parts (Mistral) |

@@ -26,7 +26,7 @@ export type Model = {
 /** One stored message: questions, answers with their tool calls, tool results and reviewer rejections. */
 export type HistoryMessage =
 	| { role: 'user'; content: string; traceId?: string }
-	| { role: 'assistant'; content: string; toolCalls?: { id: string; name: string; arguments: string }[] }
+	| { role: 'assistant'; content: string; toolCalls?: { id: string; name: string; arguments: string }[]; reasoning?: string }
 	| { role: 'tool'; toolCallId: string; status: 'ok' | 'error'; content: string }
 	| { role: 'review'; reason: string };
 

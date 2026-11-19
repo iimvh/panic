@@ -301,7 +301,8 @@ final class Api {
   }
 
   /**
-   * The stored conversation, as the page shows it: questions, answers with their tool calls, tool results
+   * The stored conversation, as the page shows it: questions, answers with their tool calls (and {@code reasoning}
+   * when the model showed what it thought), tool results
    * (cut like {@code tool} events, with {@code status} ok/error) and reviewer rejections ({@code role: review}).
    */
   private void history(HttpExchange ex) throws IOException {
@@ -327,8 +328,9 @@ final class Api {
           }
         }
         case ASSISTANT -> {
-          if (m.content().isBlank() && m.toolCalls().isEmpty()) continue;
+          if (m.content().isBlank() && m.toolCalls().isEmpty() && m.reasoning().isEmpty()) continue;
           ObjectNode o = out.addObject().put("role", "assistant").put("content", m.content());
+          if (!m.reasoning().isEmpty()) o.put("reasoning", m.reasoning());
           ArrayNode calls = o.putArray("toolCalls");
           for (ToolCall c : m.toolCalls()) {
             calls.addObject().put("id", c.id()).put("name", c.name()).put("arguments", c.arguments());

@@ -62,6 +62,49 @@ describe('actors', () => {
 		expect(actors(m, {}).map((a) => a.id)).toEqual(['panic']);
 	});
 
+	const draft = (m: Message, name: string, args: string) =>
+		m.parts!.push({ kind: 'tool', step: { id: '', name, arguments: args, status: 'drafting', draft: 0 } });
+
+	it('keeps Panic at the model while the model still writes a call, and sends no clone for a sub-agent not started', () => {
+		const m = answer();
+		draft(m, 'agent', '{"agent":"reviewer","prompt":"look at');
+		expect(actors(m, {})).toEqual([{ id: 'panic', kind: 'main', target: 'model', carry: 'prompt', thinking: false }]);
+		const w = answer();
+		draft(w, 'write_file', '{"path":"a.ts","content":"x');
+		expect(main(w)).toMatchObject({ target: 'model', carry: 'write' });
+		// once it runs, Panic takes it to the workspace
+		toolStep(w, { id: 'w', name: 'write_file', arguments: '{"path":"a.ts","content":"x"}', status: 'running' });
+		expect(main(w)).toMatchObject({ target: 'workspace', carry: 'write' });
+	});
+
+	it('puts Panic at the model when it drafts while its sub-agents work', () => {
+		const m = answer();
+		toolStep(m, { id: 's', name: 'agent', arguments: '{"agent":"explorer"}', status: 'running' });
+		expect(main(m)).toMatchObject({ target: 'home' });
+		draft(m, 'agent', '{"agent":"second');
+		expect(main(m)).toMatchObject({ target: 'model', carry: 'prompt' });
+		expect(actors(m, {}).map((a) => a.id)).toEqual(['panic', 'a:s']);
+	});
+
+	it('keeps a sub-agent at the model while it drafts its own call', () => {
+		const m = answer();
+		toolStep(m, { id: 's', name: 'agent', arguments: '{"agent":"explorer"}', status: 'running' });
+		const call = m.parts![0].kind === 'tool' ? m.parts![0].step : undefined;
+		call!.agent = { name: 'explorer', text: '', parts: [{ kind: 'tool', step: { id: '', name: 'exec', arguments: '{"comm', status: 'drafting', draft: 0 } }] };
+		expect(actors(m, {})[1]).toMatchObject({ id: 'a:s', target: 'model', carry: 'command' });
+		call!.agent.parts = [{ kind: 'tool', step: { id: 'c', name: 'exec', arguments: '{"command":"ls"}', status: 'running' } }];
+		expect(actors(m, {})[1]).toMatchObject({ id: 'a:s', target: 'shell', carry: 'command' });
+	});
+
+	it('follows the last answer of the conversation, and replays any step of it', () => {
+		const first = answer({ id: 1, streaming: false });
+		toolStep(first, { id: 'a', name: 'read_file', arguments: '{"path":"a"}', status: 'ok' });
+		const second = answer({ id: 3 });
+		toolStep(second, { id: 'b', name: 'exec', arguments: '{"command":"ls"}', status: 'running' });
+		expect(actors([first, second], {})).toEqual([{ id: 'panic', kind: 'main', target: 'shell', carry: 'command' }]);
+		expect(actors([first, second], { atStep: 0 })).toEqual([{ id: 'panic', kind: 'main', target: 'workspace', carry: 'read' }]);
+	});
+
 	it('replays where everyone was at a step', () => {
 		const m = answer({ streaming: false });
 		toolStep(m, { id: 'a', name: 'read_file', arguments: '{"path":"a"}', status: 'ok' });

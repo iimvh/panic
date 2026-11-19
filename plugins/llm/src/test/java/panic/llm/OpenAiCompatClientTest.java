@@ -147,7 +147,7 @@ class OpenAiCompatClientTest {
         "{\"choices\":[{\"message\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}"))) {
       ChatRequest request = new ChatRequest(List.of(
           Message.user("weather in Hue?"),
-          Message.assistant("", List.of(new ToolCall("c1", "weather", "{\"city\":\"Hue\"}"))),
+          Message.assistant("", List.of(new ToolCall("c1", "weather", "{\"city\":\"Hue\"}")), "ask the tool"),
           Message.tool("c1", "31C, sunny")), "m-1", null, null)
           .withTools(List.of(WEATHER), ToolChoice.named("weather"));
       new OpenAiCompatClient("fake", server.url(), "k").complete(request, new CancelToken());
@@ -162,6 +162,7 @@ class OpenAiCompatClientTest {
 
       var assistant = body.path("messages").path(1);
       assertTrue(assistant.path("content").isNull(), "empty text next to tool calls is sent as null");
+      assertEquals(List.of("content", "role", "tool_calls"), fieldNames(assistant), "kept reasoning is never sent");
       var call = assistant.path("tool_calls").path(0);
       assertEquals("c1", call.path("id").asText());
       assertEquals("function", call.path("type").asText());
@@ -441,5 +442,12 @@ class OpenAiCompatClientTest {
       assertEquals("391", c.text());
       assertEquals("17*23", c.reasoning());
     }
+  }
+
+  private static List<String> fieldNames(com.fasterxml.jackson.databind.JsonNode node) {
+    List<String> names = new java.util.ArrayList<>();
+    node.fieldNames().forEachRemaining(names::add);
+    names.sort(null);
+    return names;
   }
 }

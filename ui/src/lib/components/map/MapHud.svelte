@@ -2,13 +2,16 @@
 	import { duration } from '$lib/reply';
 	import type { Hud } from '$lib/scene';
 
-	/** The numbers of the answer on the map, in tiles: time, steps, files, commands, tokens and the chat's mode. */
+	/**
+	 * The numbers of the chat on the map, in tiles: the time of the answer shown, steps (of the chat, and of that
+	 * answer), files, commands, tokens and the chat's mode.
+	 */
 	let { hud }: { hud: Hud } = $props();
 
 	const MODE = { ask: 'ASK FIRST', plan: 'PLAN', auto: 'AUTO-RUN' };
 	const tiles = $derived([
-		{ label: 'Time', value: hud.elapsed === null ? '—' : duration(hud.elapsed) },
-		{ label: 'Steps', value: String(hud.steps) },
+		{ label: hud.turns > 1 ? `Time · T${hud.turn}` : 'Time', value: hud.elapsed === null ? '—' : duration(hud.elapsed) },
+		{ label: 'Steps', value: hud.turns > 1 ? `${hud.steps} (+${hud.turnSteps})` : String(hud.steps) },
 		{ label: 'Files R/W', value: `${hud.reads}/${hud.writes}` },
 		{ label: 'Commands', value: String(hud.commands) },
 		{ label: 'Tokens', value: hud.tokens === null ? '—' : compact(hud.tokens) },

@@ -5,11 +5,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.regex.Pattern;
+import panic.tools.Risk;
 
 /**
  * The sub-agents the model may start, by name: {@code profiles = {"explore": {"description": "...", "tools":
- * ["read_file", "list_dir", "grep", "glob"]}}}. With {@code general} (default true) there is also {@code general}, which gets
- * every tool and the instructions the model writes for it.
+ * ["@read"]}}}. With {@code general} (default true) there is also {@code general}, which gets every tool and the
+ * instructions the model writes for it.
  *
  * {@code maxDepth}: how deep sub-agents nest (default 1: a sub-agent cannot start another one).
  * {@code maxParallel}: how many sub-agents run at once in the whole app (default 4; more calls wait their turn).
@@ -26,9 +27,17 @@ public record AgentsConfig(Map<String, Profile> profiles, Boolean general, int m
   private static final Pattern NAME = Pattern.compile("[a-z][a-z0-9_-]{0,31}");
 
   /**
+   * Tool groups a profile may name in {@code tools}: every tool of that risk registered when the sub-agent starts,
+   * so tools added later (a new read tool, an MCP server) are covered without changing the config.
+   */
+  public static final Map<String, Risk> GROUPS = Map.of("@read", Risk.READ, "@write", Risk.WRITE, "@exec", Risk.EXEC,
+      "@network", Risk.NETWORK);
+
+  /**
    * One kind of sub-agent. {@code description} tells the model when to use it (required). {@code systemPrompt}
    * replaces the built-in sub-agent prompt (null = built in, with the description as its role). {@code tools}:
-   * the only tools it may call (null = all). {@code maxSteps} / {@code maxTokens}: its limits (0 = the chat's).
+   * the only tools it may call, by name or by group ({@link #GROUPS}, e.g. {@code @read}); null = all.
+   * {@code maxSteps} / {@code maxTokens}: its limits (0 = the chat's).
    */
   public record Profile(String description, String systemPrompt, List<String> tools, int maxSteps, int maxTokens) {
     public Profile {
@@ -42,6 +51,12 @@ public record AgentsConfig(Map<String, Profile> profiles, Boolean general, int m
           throw new IllegalArgumentException("tool names must not be blank");
         }
         tools = List.copyOf(tools.stream().map(String::strip).distinct().sorted().toList());
+        for (String t : tools) {
+          if (t.startsWith("@") && !GROUPS.containsKey(t)) {
+            throw new IllegalArgumentException("unknown tool group '" + t + "': use one of "
+                + GROUPS.keySet().stream().sorted().toList());
+          }
+        }
       }
       if (maxSteps < 0) maxSteps = 0;
       if (maxTokens < 0) maxTokens = 0;

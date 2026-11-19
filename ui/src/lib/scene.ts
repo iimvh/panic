@@ -2,10 +2,14 @@ import type { Message } from './chat.svelte';
 import { activity, ASK_USER_TOOL, EXIT_PLAN_TOOL, shellCommand, thoughtTail, type Part, type ToolStep } from './reply';
 
 /**
- * The agent map: what one answer does, drawn as blocks that stay put (you, Panic's home dock, the model, the
+ * The agent map: what a conversation does, drawn as blocks that stay put (you, Panic's home dock, the model, the
  * permission gate, the workspace, the shell, MCP servers...) joined by links. Panic and its clones walk between them:
- * who stands where is `actors.ts`, how they get there is `motion.ts`. `scene` is a pure function of the answer and a
- * little context, so the map follows the stream live and can replay any step of a finished answer.
+ * who stands where is `actors.ts`, how they get there is `motion.ts`. `scene` is a pure function of the answers and a
+ * little context, so the map follows the stream live and can replay any step of the conversation.
+ *
+ * The map covers the whole conversation: blocks, counts and the rail add up over its answers (turns), and the last
+ * answer is the one that happens now. A call the model is still writing (`drafting`) has not run: the model works
+ * on it, nothing reaches its block yet.
  */
 
 export type NodeKind =
@@ -51,16 +55,20 @@ export type Mode = 'ask' | 'plan' | 'auto';
 export type Hud = {
 	/** ms; null before the answer started */
 	elapsed: number | null;
+	/** Steps of the whole conversation, and of the answer shown (`turn`, 1-based, of `turns`). */
 	steps: number;
+	turnSteps: number;
+	turn: number;
+	turns: number;
 	reads: number;
 	writes: number;
 	commands: number;
-	/** null while unknown (tokens come with the end of the answer) */
+	/** Of the answers that ended; null while none said (tokens come with the end of an answer). */
 	tokens: number | null;
 	mode: Mode;
 };
 /** One tool call on the step rail, in the order they started; sub-agents' calls included. */
-export type RailStep = { id: string; name: string; status: ToolStep['status']; node: string; label: string; agent?: string };
+export type RailStep = { id: string; name: string; status: ToolStep['status']; node: string; label: string; agent?: string; turn: number };
 export type Scene = {
 	nodes: SceneNode[];
 	links: SceneLink[];
@@ -75,8 +83,11 @@ export type Scene = {
 	/** The agent's checklist as its last `todo_write` (up to the step shown) left it; empty when it wrote none. */
 	todo: TodoItem[];
 };
-/** A thought streaming now: its newest line, and the sub-agent thinking it (none: the main agent). */
-export type Thought = { text: string; agent?: string };
+/**
+ * A thought: who thinks it (an actor id, see `actors.ts`), its newest lines, and the sub-agent's name (none: the main
+ * agent). `past` when it is the thought before a step replayed, not one streaming now.
+ */
+export type Thought = { id: string; text: string; agent?: string; past?: boolean };
 export type TodoItem = { text: string; status: 'pending' | 'in_progress' | 'done' };
 
 export type SceneContext = {
@@ -154,7 +165,7 @@ export function lineDelta(step: Pick<ToolStep, 'name' | 'arguments'>): { added: 
 	return { added: 0, removed: 0 };
 }
 
-export type Flat = { step: ToolStep; agent?: string; parent?: string };
+export type Flat = { step: ToolStep; agent?: string; parent?: string; turn?: number; messageId?: number };
 
 /** Every tool call of the answer in the order they appeared, a sub-agent's calls right after the call running it. */
 export function flatten(parts: Part[] | undefined, agent?: string, parent?: string): Flat[] {
@@ -165,6 +176,22 @@ export function flatten(parts: Part[] | undefined, agent?: string, parent?: stri
 		if (p.step.agent) out.push(...flatten(p.step.agent.parts, p.step.agent.name || 'sub-agent', p.step.id));
 	}
 	return out;
+}
+
+/** The answers of a conversation, in order: its turns on the map. */
+export function turnsOf(messages: Message[]): Message[] {
+	return messages.filter((m) => m.role === 'assistant');
+}
+
+/** Every tool call of the conversation, turn after turn, each tagged with its turn and answer. */
+export function flattenTurns(turns: readonly Message[]): Flat[] {
+	return turns.flatMap((m, turn) => flatten(m.parts).map((f) => ({ ...f, turn, messageId: m.id })));
+}
+
+/** The conversation's answers (see `turnsOf`), or a single answer. */
+export type Turns = readonly Message[] | Message | undefined;
+export function asTurns(t: Turns): readonly Message[] {
+	return t === undefined ? [] : Array.isArray(t) ? t : [t as Message];
 }
 
 // stage layout: you on the left, Panic's home in the middle, the model above it, tools behind the gate on the right
@@ -181,9 +208,12 @@ const AT: Record<string, [number, number]> = {
 	todo: [220, 490]
 };
 
-/** The map of answer `m` (undefined: no answer yet, only the setup is drawn). */
-export function scene(m: Message | undefined, ctx: SceneContext): Scene {
-	const flat = flatten(m?.parts);
+/** The map of a conversation's answers, or of one answer (none yet: only the setup is drawn). */
+export function scene(input: Turns, ctx: SceneContext): Scene {
+	const turns = asTurns(input);
+	const m = turns.at(-1);
+	const lastTurn = turns.length - 1;
+	const flat = flattenTurns(turns);
 	const live = ctx.atStep === undefined && !!m?.streaming;
 	const cursor = ctx.atStep === undefined ? -1 : Math.max(0, Math.min(ctx.atStep, flat.length - 1));
 	const seen = ctx.atStep === undefined ? flat : flat.slice(0, cursor + 1);
@@ -253,22 +283,25 @@ export function scene(m: Message | undefined, ctx: SceneContext): Scene {
 	let focus = m ? 'home' : 'model';
 	const calls = new Map<string, number>();
 	// the rail lists every call, also those after the step replayed
-	const steps: RailStep[] = flat.map(({ step, agent }) => ({
-		id: step.id,
-		name: step.name,
-		status: step.status,
-		node: route(step.name).node,
-		label: stepLabel(step),
-		agent
+	const steps: RailStep[] = flat.map((f) => ({
+		id: f.step.id,
+		name: f.step.name,
+		status: f.step.status,
+		node: route(f.step.name).node,
+		label: stepLabel(f.step),
+		agent: f.agent,
+		turn: f.turn ?? 0
 	}));
 
 	// sub-agents are clones of Panic (see actors.ts): they leave from home as Panic does, and have no block
 	seen.forEach(({ step }, i) => {
 		const status = statusOf(i);
+		// still being written by the model: nothing reached a block yet (the model is shown at work below)
+		if (status === 'drafting') return;
 		const r = route(step.name);
 		const from = home;
 		if (step.name === 'agent') {
-			if (status === 'running' || status === 'drafting') focus = 'agent';
+			if (status === 'running') focus = 'agent';
 			return;
 		}
 		const to = target(r);
@@ -277,18 +310,16 @@ export function scene(m: Message | undefined, ctx: SceneContext): Scene {
 		if (to !== you) set(to, 'idle');
 		if (gated) set(gate, 'idle');
 		calls.set(to.id, (calls.get(to.id) ?? 0) + 1);
-		if (status !== 'drafting') {
-			if (r.packet === 'read') reads++;
-			if (r.packet === 'write' && to.kind === 'workspace') {
-				writes++;
-				const d = lineDelta(step);
-				added += d.added;
-				removed += d.removed;
-			}
-			if (r.packet === 'command') commands++;
+		if (r.packet === 'read') reads++;
+		if (r.packet === 'write' && to.kind === 'workspace') {
+			writes++;
+			const d = lineDelta(step);
+			added += d.added;
+			removed += d.removed;
 		}
+		if (r.packet === 'command') commands++;
 		const label = stepLabel(step);
-		if (status === 'running' || status === 'drafting') {
+		if (status === 'running') {
 			for (const h of hops) link(...ends(h), 'active');
 			if (gated) set(gate, 'active');
 			set(to, 'active');
@@ -355,8 +386,16 @@ export function scene(m: Message | undefined, ctx: SceneContext): Scene {
 			focus = 'you';
 		}
 		const last = m.parts?.at(-1);
-		const running = flat.some((f) => f.step.status === 'running' || f.step.status === 'drafting');
-		if (!running && !waiting && !m.plan && !m.question) {
+		const now = flat.filter((f) => f.turn === lastTurn);
+		const running = now.some((f) => f.step.status === 'running');
+		// the model writes a call (the main agent's or a sub-agent's): it works, the call has not run yet
+		const draft = now.findLast((f) => f.step.status === 'drafting');
+		if (draft && !waiting && !m.plan && !m.question) {
+			set(model, 'active');
+			link('home', 'model', 'active');
+			model.pill = { text: `drafting ${draft.step.name || 'a'} call`, tone: 'info' };
+			if (!running) focus = 'model';
+		} else if (!running && !waiting && !m.plan && !m.question) {
 			if (!last || last.kind === 'reasoning') {
 				set(model, 'active');
 				link('home', 'model', 'active');
@@ -373,7 +412,7 @@ export function scene(m: Message | undefined, ctx: SceneContext): Scene {
 	}
 	if (m?.error && ctx.atStep === undefined && !m.streaming) {
 		const lastError = m.parts?.at(-1);
-		if (lastError?.kind === 'error' && !flat.some((f) => f.step.status === 'error')) {
+		if (lastError?.kind === 'error' && !flat.some((f) => f.turn === lastTurn && f.step.status === 'error')) {
 			model.state = 'error';
 			model.pill = { text: 'FAILED', tone: 'error' };
 		}
@@ -383,16 +422,23 @@ export function scene(m: Message | undefined, ctx: SceneContext): Scene {
 		caption = `${s.agent ? `${s.agent}: ` : ''}${verb(s)} ${s.label}`;
 	}
 
-	// replayed: the time when the step shown ended, and no tokens (they are only known for the whole answer)
-	const shownStep = cursor >= 0 ? seen[cursor]?.step : undefined;
-	const end = shownStep ? (shownStep.endedAt ?? shownStep.startedAt) : (m?.endedAt ?? (m?.streaming ? ctx.now : undefined));
+	// replayed: the time when the step shown ended in its answer, and no tokens (they are only known per answer)
+	const shown = cursor >= 0 ? seen[cursor] : undefined;
+	const turn = shown?.turn ?? Math.max(0, lastTurn);
+	const tm = turns[turn];
+	const shownStep = shown?.step;
+	const end = shownStep ? (shownStep.endedAt ?? shownStep.startedAt) : (tm?.endedAt ?? (tm?.streaming ? ctx.now : undefined));
+	const used = turns.filter((t) => t.usage);
 	const hud: Hud = {
-		elapsed: m?.startedAt !== undefined && end !== undefined ? Math.max(0, end - m.startedAt) : null,
+		elapsed: tm?.startedAt !== undefined && end !== undefined ? Math.max(0, end - tm.startedAt) : null,
 		steps: seen.length,
+		turnSteps: seen.filter((f) => (f.turn ?? 0) === turn).length,
+		turn: turn + 1,
+		turns: turns.length,
 		reads,
 		writes,
 		commands,
-		tokens: m?.usage && cursor < 0 ? m.usage.promptTokens + m.usage.completionTokens : null,
+		tokens: used.length && cursor < 0 ? used.reduce((n, t) => n + t.usage!.promptTokens + t.usage!.completionTokens, 0) : null,
 		mode: ctx.mode
 	};
 	const current = cursor >= 0 ? cursor : live ? lastRunning(flat) : -1;
@@ -401,25 +447,64 @@ export function scene(m: Message | undefined, ctx: SceneContext): Scene {
 }
 
 /**
- * What the model is thinking now, for the narration: the newest line of the unfinished thought at the end of answer
- * `m`, else of a running sub-agent (with its name). Kept out of `scene` on purpose: it changes with every frame of
- * streamed thinking, and the map should not be rebuilt that often.
+ * What is being thought now, for the bubbles and the narration: the newest line of each unfinished thought, at the
+ * end of answer `m` (the main agent, `panic`) and of each running sub-agent (`a:<call id>`, as in `actors.ts`), main
+ * first. Kept out of `scene` on purpose: it changes with every frame of streamed thinking, and the map should not be
+ * rebuilt that often.
  */
-export function liveThought(m: Message | undefined): Thought | undefined {
-	if (!m?.streaming) return undefined;
+export function liveThoughts(m: Message | undefined): Thought[] {
+	const out: Thought[] = [];
+	if (!m?.streaming) return out;
 	const thinking = (parts: Part[] | undefined) => {
 		const last = parts?.at(-1);
 		return last?.kind === 'reasoning' && last.endedAt === undefined ? thoughtTail(last.text, 1, 140) : undefined;
 	};
 	const text = thinking(m.parts);
-	if (text) return { text };
-	for (let i = (m.parts?.length ?? 0) - 1; i >= 0; i--) {
-		const p = m.parts![i];
-		if (p.kind !== 'tool' || p.step.status !== 'running' || !p.step.agent) continue;
-		const inner = thinking(p.step.agent.parts);
-		if (inner) return { text: inner, agent: p.step.agent.name || 'sub-agent' };
+	if (text) out.push({ id: 'panic', text });
+	const walk = (parts: Part[] | undefined) => {
+		for (const p of parts ?? []) {
+			if (p.kind !== 'tool' || p.step.status !== 'running' || !p.step.agent) continue;
+			const inner = thinking(p.step.agent.parts);
+			if (inner) out.push({ id: `a:${p.step.id}`, text: inner, agent: p.step.agent.name || 'sub-agent' });
+			walk(p.step.agent.parts);
+		}
+	};
+	walk(m.parts);
+	return out;
+}
+
+/**
+ * The thought before step `atStep` of the conversation (an index into `flattenTurns`), for the replay: the nearest
+ * reasoning before that call in the timeline it is in (the answer's, or its sub-agent's), past the calls and text of
+ * the same model step. Calls made at once share it. Empty when the model showed no thought there.
+ */
+export function replayThoughts(input: Turns, atStep: number): Thought[] {
+	const turns = asTurns(input);
+	const f = flattenTurns(turns)[atStep];
+	if (!f) return [];
+	const where = (parts: Part[] | undefined): Part[] | undefined => {
+		for (const p of parts ?? []) {
+			if (p.kind !== 'tool') continue;
+			if (p.step === f.step) return parts;
+			const inner = where(p.step.agent?.parts);
+			if (inner) return inner;
+		}
+		return undefined;
+	};
+	const parts = where(turns[f.turn ?? 0]?.parts) ?? [];
+	const at = parts.findIndex((p) => p.kind === 'tool' && p.step === f.step);
+	for (let i = at - 1; i >= 0; i--) {
+		const p = parts[i];
+		if (p.kind === 'reasoning') {
+			const text = thoughtTail(p.text, 3, 400);
+			if (!text) return [];
+			const t: Thought = { id: f.parent ? `a:${f.parent}` : 'panic', text, past: true };
+			if (f.parent) t.agent = f.agent ?? 'sub-agent';
+			return [t];
+		}
+		if (p.kind !== 'tool' && p.kind !== 'text') break;
 	}
-	return undefined;
+	return [];
 }
 
 /** The items of the last `todo_write` call among `steps`. */

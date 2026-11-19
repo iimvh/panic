@@ -3,16 +3,17 @@
 	import { view } from '$lib/view.svelte';
 
 	/**
-	 * "In this answer": every tool call as a numbered dot, in order. Clicking one shows the map as it was at that step;
-	 * the buttons replay the answer, step through it, and go back to what happens now.
+	 * "In this chat": every tool call of the conversation as a numbered dot, in order, each answer after a `Turn N`
+	 * mark. Clicking one shows the map as it was at that step; the buttons replay the conversation, step through it,
+	 * and go back to what happens now.
 	 */
 	let { scene }: { scene: Scene } = $props();
 
 	const replaying = $derived(view.atStep !== undefined);
 	let rail = $state<HTMLElement>();
 	$effect(() => {
-		// keep the current dot in view
-		const i = scene.current;
+		// keep the current dot in view; live with nothing running, the newest one
+		const i = scene.current >= 0 ? scene.current : view.streaming ? scene.steps.length - 1 : -1;
 		if (i < 0 || !rail) return;
 		rail.querySelectorAll('button.dot')[i]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 	});
@@ -20,14 +21,14 @@
 
 <div class="rail-box">
 	<div class="head">
-		<span class="label-caps">In this answer · {scene.steps.length} {scene.steps.length === 1 ? 'step' : 'steps'}</span>
+		<span class="label-caps">In this chat · {scene.steps.length} {scene.steps.length === 1 ? 'step' : 'steps'}</span>
 		<div class="controls">
 			<button class="ctl" onclick={() => view.step(-1)} disabled={!scene.steps.length} aria-label="Previous step" title="Previous step (←)">←</button>
 			<button
 				class="ctl"
 				onclick={() => (view.playing ? view.toggle() : view.play(true))}
-				disabled={!scene.steps.length || !!view.subject?.streaming}
-				title={view.playing ? 'Pause (Space)' : 'Replay this answer (R)'}
+				disabled={!scene.steps.length || view.streaming}
+				title={view.playing ? 'Pause (Space)' : 'Replay this chat (R)'}
 			>
 				{view.playing ? 'Pause' : 'Replay'}
 			</button>
@@ -41,6 +42,9 @@
 		<ol class="rail" bind:this={rail}>
 			{#each scene.steps as s, i (i)}
 				{@const later = replaying && i > scene.current}
+				{#if scene.hud.turns > 1 && (i === 0 || scene.steps[i - 1].turn !== s.turn)}
+					<li class="turn" title="Answer {s.turn + 1}"><span>T{s.turn + 1}</span></li>
+				{/if}
 				<li>
 					<button
 						class="dot {s.status}"
@@ -124,6 +128,24 @@
 		height: 1.5px;
 		background: var(--edge);
 		opacity: 0.5;
+	}
+	/* the start of an answer: a mark, with a gap before it instead of the joining line */
+	li.turn + li::before {
+		display: none;
+	}
+	li.turn:not(:first-child) {
+		margin-left: 8px;
+	}
+	li.turn:not(:first-child)::before {
+		display: none;
+	}
+	li.turn span {
+		margin-right: 4px;
+		padding: 0 5px;
+		border-left: 2px solid var(--edge);
+		font-size: 10px;
+		font-weight: 700;
+		color: var(--muted);
 	}
 	.dot {
 		width: 24px;

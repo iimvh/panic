@@ -5,8 +5,8 @@ import java.util.List;
 /**
  * The full answer of one request. {@code finishReason} may be null when the provider sent none; it is
  * {@code tool_calls} when the model stopped to call {@code toolCalls}. {@code reasoning} is what the model
- * thought before it answered, when the provider shows it (empty otherwise). It is for the user to read: it is not
- * part of {@link #message()}, so it is never sent back to the model nor saved with the conversation.
+ * thought before it answered, when the provider shows it (empty otherwise). It is for the user to read: it goes
+ * with {@link #message()} into the conversation, but a provider never sends it back to the model.
  */
 public record Completion(String text, String model, String finishReason, Usage usage, List<ToolCall> toolCalls,
     String reasoning) {
@@ -37,8 +37,8 @@ public record Completion(String text, String model, String finishReason, Usage u
     return !toolCalls.isEmpty();
   }
 
-  /** This answer as the assistant message to put back into the history (without the reasoning). */
+  /** This answer as the assistant message to put back into the history, with its reasoning to show. */
   public Message message() {
-    return Message.assistant(text, toolCalls);
+    return Message.assistant(text, toolCalls, reasoning);
   }
 }

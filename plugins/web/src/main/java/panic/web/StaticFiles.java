@@ -23,7 +23,7 @@ final class StaticFiles {
       <body style="font:16px system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem">
       <h1>Panic</h1><p>The web UI was not built into this jar (built with <code>-PskipUi</code>?).</p>
       <p>Build it with <code>./gradlew :app:installDist</code> (needs Node), or run
-      <code>npm run dev</code> in <code>ui/</code>. The API is up at <code>/api/state</code>.</p></body>""";
+      <code>npm run dev</code> in the UI folder. The API is up at <code>/api/state</code>.</p></body>""";
 
   private final ClassLoader loader = StaticFiles.class.getClassLoader();
 

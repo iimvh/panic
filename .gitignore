@@ -54,6 +54,6 @@ SCRATCH*.md
 .code-review-graph/
 
 # ---- UI (SvelteKit) ----
-ui/node_modules/
-ui/build/
-ui/.svelte-kit/
+ui*/node_modules/
+ui*/build/
+ui*/.svelte-kit/

@@ -369,8 +369,8 @@ A module may declare several plugins. For example `:llm` declares `openrouter`, 
 │   ├── agents/       panic.agents   agents (agent tool: sub-agents as delegated chat asks)
 │   ├── trace/        panic.trace.store  tracing: keeps spans, traces/trace/stats commands
 │   ├── cli/          panic.cli      cli: REPL and the one-shot runner
-│   └── web/          panic.web      web: HTTP + SSE API, static files; builds and packs ui/
-├── ui/                              SvelteKit SPA: lib/api.ts, lib/chat.svelte.ts, lib/markdown.ts, components/
+│   └── web/          panic.web      web: HTTP + SSE API, static files; builds and packs ui-v1/ (-Pui=<dir> picks another)
+├── ui-v1/                           SvelteKit SPA: lib/api.ts, lib/chat.svelte.ts, lib/markdown.ts, components/
 ├── app/              panic.app      Panic (discovers PluginSets), PluginHost (configs by name), ConfigLoader, ConfigWatch, Main
 ├── buildSrc/                        Shared conventions: Java 21, -Xlint:all -Werror, JUnit 5
 └── z/                               The z kernel (git submodule, consumed as a Gradle composite build)
@@ -392,7 +392,7 @@ Build the app once (and again after Java changes), then run the server and the V
 ```bash
 ./gradlew :app:installDist              # build the app into app/build/install/app (once, or after Java changes)
 app/build/install/app/bin/app --serve   # terminal 1
-cd ui && npm install && npm run dev     # terminal 2: http://localhost:5173
+cd ui-v1 && npm install && npm run dev  # terminal 2: http://localhost:5173
 npm run check && npm test               # svelte-check and the unit tests (Markdown, SSE parser)
 ```
 
@@ -418,7 +418,7 @@ To add an OpenAI-compatible provider, add an entry under `custom-providers.provi
 > Gradle is running on a JRE. Keep `gradle/gradle-daemon-jvm.properties` in place so Gradle can pick or download a JDK 21, or point `JAVA_HOME` at a JDK. Then run `./gradlew --stop` and try again.
 
 - **`web: cannot listen on 127.0.0.1:8080`.** The port is taken. Set `web.port` in `panic.json`.
-- **The page says "UI not built".** The jar was built with `-PskipUi`. Rebuild with Node installed, or use `npm run dev` in `ui/`.
+- **The page says "UI not built".** The jar was built with `-PskipUi`. Rebuild with Node installed, or use `npm run dev` in `ui-v1/`.
 - **`[no LLM connected]`.** The selected provider has no key, or no provider is selected. Run `/status`, then set the key or use `/provider`.
 - **`openrouter answered 404: No endpoints found ...`.** The model id is wrong or the model is no longer available. Run `/models free` to see what you can use.
 - **`z` directory is empty.** Run `git submodule update --init`.

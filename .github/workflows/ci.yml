@@ -36,7 +36,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: ui/package-lock.json
+          cache-dependency-path: ui-v1/package-lock.json
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
@@ -47,11 +47,11 @@ jobs:
 
       # node_modules was installed by the Gradle build (:web:installUi).
       - name: UI type check
-        working-directory: ui
+        working-directory: ui-v1
         run: npm run check
 
       - name: UI tests
-        working-directory: ui
+        working-directory: ui-v1
         run: npm test
 
       - name: Upload test reports

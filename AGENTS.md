@@ -94,7 +94,7 @@ to make a change pass.
 ```bash
 ./gradlew check                     # Java tests (+ UI build); compiler warnings are errors
 ./gradlew check -PskipUi            # without Node
-cd ui && npm run check && npm test  # when you touch ui/
+cd ui-v1 && npm run check && npm test  # when you touch ui-v1/
 ```
 
 CI (`.github/workflows/ci.yml`, job **Build and test**) runs the same checks on every push to `master` and
@@ -109,7 +109,7 @@ every pull request. A change is not done until it passes.
 - Commits use Conventional Commits (`feat(web): ...`, `fix(llm): ...`, `docs: ...`), one logical change
   per commit. Do not add AI co-author trailers.
 - Work and commit directly on `master`. Do not create feature or phase branches.
-- The UI is in `ui/` (SvelteKit SPA, Svelte 5 runes, plain scoped CSS). It talks only to the `web` plugin's
+- The UI is in `ui-v1/` (SvelteKit SPA, Svelte 5 runes, plain scoped CSS). It talks only to the `web` plugin's
   JSON + SSE API, never to anything else.
 
 ## Map

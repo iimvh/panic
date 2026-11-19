@@ -1,9 +1,9 @@
 # plugins/web
 
-The web front-end: an HTTP + SSE API and the SvelteKit UI from `ui/` (built by Gradle into
+The web front-end: an HTTP + SSE API and the SvelteKit UI from `ui-v1/` (pick another folder with `-Pui=<folder>`; built by Gradle into
 `panic/web/ui/` in this jar; `-PskipUi` skips it). Like `cli`, it owns no feature.
 
-Beside the chat, the UI draws an agent map (`ui/src/lib/scene.ts`): you, Panic's home dock, the model, the
+Beside the chat, the archived UI v1 draws an agent map (`ui-v1/src/lib/scene.ts`): you, Panic's home dock, the model, the
 permission gate, the workspace, the shell and MCP servers as blocks. Panic walks between them carrying the work
 (`actors.ts`, `motion.ts`), waits at the gate for approvals, and sends small clones for sub-agents and calls that run
 at once. While the model is still writing a call (drafting), Panic, or the sub-agent writing it, waits at the

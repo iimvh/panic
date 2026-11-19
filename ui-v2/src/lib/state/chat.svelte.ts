@@ -239,12 +239,7 @@ class Chat {
 
 	/** Shows stored conversation `id` (the `/c/<id>` route). A running answer goes on in the chat left (see `#leave`). */
 	async open(id: string) {
-		if (id === this.session && !this.fresh) return;
-		if (id === this.session && this.fresh) {
-			// the new conversation just got its route: nothing to load
-			this.fresh = false;
-			return;
-		}
+		if (id === this.session) return; // shown already (a new chat that just got its route, too)
 		await this.#leave();
 		this.session = id;
 		this.fresh = false;
@@ -429,7 +424,11 @@ class Chat {
 			if (!listed && e.event === 'start') {
 				listed = true;
 				void this.loadConversations();
-				if (this.fresh) this.onStarted?.(this.session);
+				if (this.fresh) {
+					// stored from now on: its route is /c/<id> whatever the address bar says yet (inspector links build on it)
+					this.fresh = false;
+					this.onStarted?.(this.session);
+				}
 			}
 		};
 		await this.#run(

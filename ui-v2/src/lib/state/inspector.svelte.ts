@@ -1,5 +1,6 @@
 import { goto } from '$app/navigation';
 import { page } from '$app/state';
+import { chat } from './chat.svelte';
 
 /**
  * The inspector lives in the URL, so a link, Back and a reload keep it:
@@ -7,6 +8,17 @@ import { page } from '$app/state';
  */
 export type Panel = 'overview' | 'step' | 'trace';
 const PANELS: Panel[] = ['overview', 'step', 'trace'];
+
+/**
+ * The page's URL on the conversation's own path. Built from the chat, not from the address bar: as a new chat's
+ * first answer starts, its move to /c/<id> may still be loading, and a navigation started now would cancel it and
+ * leave the chat on `/` (a reload would then show a new, empty chat).
+ */
+function here(): URL {
+	const url = new URL(page.url);
+	url.pathname = chat.fresh ? '/' : `/c/${chat.session}`;
+	return url;
+}
 
 export const inspector = {
 	get panel(): Panel | null {
@@ -24,7 +36,7 @@ export const inspector = {
 	 * tabs keeps both). Moving within the open inspector replaces the history entry, opening it adds one.
 	 */
 	open(panel: Panel, params: { step?: string; trace?: string } = {}) {
-		const url = new URL(page.url);
+		const url = here();
 		url.searchParams.set('panel', panel);
 		for (const [k, v] of Object.entries(params)) {
 			if (v) url.searchParams.set(k, v);
@@ -33,7 +45,7 @@ export const inspector = {
 		return goto(url, { keepFocus: true, noScroll: true, replaceState: inspector.panel !== null });
 	},
 	close() {
-		const url = new URL(page.url);
+		const url = here();
 		for (const k of ['panel', 'step', 'trace']) url.searchParams.delete(k);
 		return goto(url, { keepFocus: true, noScroll: true });
 	},

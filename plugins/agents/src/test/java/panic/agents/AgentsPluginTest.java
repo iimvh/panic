@@ -301,7 +301,8 @@ class AgentsPluginTest {
     started.await();
     token.cancel();
     assertTimeoutPreemptively(Duration.ofSeconds(10), () -> assertThrows(CancelledException.class, pending::await));
-    assertTrue(all.get("c").snapshot().messages().isEmpty(), "a cancelled turn is not saved");
+    assertEquals(List.of(Message.user("go")), all.get("c").snapshot().messages(),
+        "a cancelled turn keeps its question, not the call to the sub-agent that never got a result");
   }
 
   @Test

@@ -64,7 +64,9 @@ import panic.trace.Trace;
  *
  * Runs only while both services exist; tools are optional and found through hooks, so none are required. A
  * reply in flight when the plugin is disposed (LLM switched, config changed, app stopping) is cancelled, its
- * tool calls included, and the disposal waits for it to return; a cancelled turn is not saved.
+ * tool calls included, and the disposal waits for it to return. Each step is saved as soon as every tool call in it has its result (the
+ * question before the first model call), so a turn that fails or is cancelled keeps its question and its finished
+ * steps; only the step in flight is lost.
  *
  * Command: {@code ask <text...>}, in the session's conversation. It exists only while an LLM is connected.
  */
@@ -228,7 +230,10 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private int steps;
     private String stop = Chat.DONE;
     private String model;
+    /** Whether the conversation holds this turn's question (and so its trace can be linked to it). */
     private boolean saved;
+    /** How many of {@link #added} are in the conversation already (see {@link #flush}). */
+    private int persisted;
     /** Guards the asker's callbacks while tool calls run in parallel. */
     private final Object callbacks = new Object();
     /** The root span of this turn's trace; open from {@link #run()} to its end. */
@@ -283,11 +288,13 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       add(Message.user(ask.text()));
       if (ask.delegate() == null) expand(); // a sub-agent's task is the model's text: it never triggers a prompt
       head = added.size();
+      flush(conversation); // the question is kept before anything can fail
       // a sub-agent's conversation lives for one task: nothing to gain from summarising it
       if (budget.limited() && cfg.compact() && ask.delegate() == null) compact(conversation);
 
       Completion last;
       while (true) {
+        flush(conversation); // every call of the previous step has its result here
         steps++;
         ChatRequest request = request();
         last = callModel(request);
@@ -313,6 +320,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         truncations = 0;
         add(last.message());
         if (!last.hasToolCalls()) {
+          flush(conversation); // an answer is kept even if its review fails or is cancelled
           Chat.Verdict verdict = review(last.text());
           if (verdict == null || verdict.pass()) break;
           if (reviews >= cfg.maxReviews() || steps >= maxSteps()) {
@@ -334,9 +342,8 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
         if (!Chat.DONE.equals(stop)) break;
       }
 
+      flush(conversation);
       signal.throwIfCancelled();
-      conversation.append(added.toArray(Message[]::new));
-      saved = true;
       String text = last.text();
       String closing = closing(text);
       if (closing != null) {
@@ -1094,6 +1101,18 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
 
     private void add(Message m) {
       added.add(m);
+    }
+
+    /**
+     * Appends to the conversation what the turn added since the last flush, so a turn that fails, is cancelled or
+     * dies with the process keeps its question and finished steps. Called only where every tool call in
+     * {@link #added} has its result, so the stored history stays valid for a provider.
+     */
+    private void flush(Conversation conversation) {
+      if (persisted == added.size()) return;
+      conversation.append(added.subList(persisted, added.size()).toArray(Message[]::new));
+      persisted = added.size();
+      saved = true;
     }
 
     /**

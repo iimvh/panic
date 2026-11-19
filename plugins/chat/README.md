@@ -103,9 +103,13 @@ come back as `error: ...` results. A tool may set its own limit (`Tool.timeoutSe
 `toolTimeoutSeconds`. The timeout starts when the tool starts, so the time the user takes to
 approve a call does not count (that wait has its own limit, `permissions.askTimeoutSeconds`). Tool output is
 cut at `maxToolOutput` characters (default 16000). When a turn stops early, the calls that were not run get an
-error result, so the saved history stays valid. The whole turn (user, assistant tool calls, tool results,
-answer) is appended at once. A cancelled turn is not saved. `tools: false` turns tools off for models that do
-not support them.
+error result, so the saved history stays valid. The turn is saved as it goes (write-ahead): the question
+before the first model call, then each step once every tool call in it has its result, and the answer before
+it is reviewed. A turn that fails (the provider returned an error, such as a 402 or a rate limit), is cancelled,
+or dies with the process keeps its question and finished steps; only the step in flight is lost, so the
+history is never left with a call that has no result. Asking again ("continue") goes on from there. What
+went wrong is in the turn's trace (`ERROR` / `CANCELLED`, see [Tracing](#tracing)). `tools: false` turns tools
+off for models that do not support them.
 
 **Parallel calls.** When the model asks for several tools in one reply, they run one after the other by default.
 With `parallelTools` above 1, up to that many run at once (on tasks of the chat plugin, so cancelling the ask or
@@ -146,7 +150,8 @@ to the model as a user message, and the loop goes on. That happens at most `maxR
 turns reviews off); after that the turn stops with `rejected`. A reviewer that throws counts as no verdict, so a
 broken reviewer never blocks an answer, but the failure shows: its `review` span ends as ERROR with the message,
 and `onReview` / `Chat.REVIEWED` get a `Reviewed` with `verdict` null and `error` set (`ask` prints
-`[review failed: ...]`); cancelling the ask during a review cancels it as usual. The reviewer's
+`[review failed: ...]`); cancelling the ask during a review cancels it as usual (the answer
+under review is already saved). The reviewer's
 tokens count in the turn's `usage`, and `Reply.review` holds the reason of the last verdict. Each verdict is also
 emitted as `Chat.REVIEWED`. `plugins/verify` provides a reviewer that judges against the acceptance criteria of
 the conversation's plan.
@@ -184,8 +189,8 @@ reading the same 7 files for 150 steps). Where the provider's model list gives n
   (`Conversation.summary()`) and sent in the system message under `## Summary of the earlier conversation`;
   the summarised messages are removed from the history. It compacts down to half the budget, so the next asks
   do not each pay for a summary. Its tokens count in the turn's `usage` (and `maxTokens`). If the summary call
-  fails, the old turns are only left out of the request; a cancelled ask is cancelled as usual and changes
-  nothing. `maxHistory` alone never triggers a summary. The summary call never asks the model to think
+  fails, the old turns are only left out of the request; a cancelled ask is cancelled as usual and summarises
+  nothing (its question is kept, as for any turn). `maxHistory` alone never triggers a summary. The summary call never asks the model to think
   (`ChatRequest.NO_REASONING_EFFORT`), whatever `llm.reasoningEffort` says: its limit is small (at most 2048 tokens).
   - **What the summary keeps.** The prompt (`SUMMARY_PROMPT`) asks for the sections of Claude Code's compaction:
     the primary request, every user message word for word, key facts, work done and current state, pending tasks
@@ -271,7 +276,7 @@ The trace id is `Ask.traceId` when the asker gives one (web does, to tell the UI
 
 | Span | Parent | Attributes |
 | --- | --- | --- |
-| `turn` | none (root); a sub-agent's under the `tool` span that runs it | `conversationId`, `question` (first 200 chars), `prompt` (a [slash prompt](#slash-prompts)'s name), `questionHash` (`Trace.QUESTION_HASH`, from `Trace.questionHash`), `model`, `stop`, `steps`, `toolCalls`, `promptTokens`, `completionTokens`, `cachedTokens` (whole turn), `contextTokens` (the turn's budget, 0 = none), `refetches`, `unchanged`, `turnCompactions` (when any), `saved`; `agent`, `origin` for a sub-agent |
+| `turn` | none (root); a sub-agent's under the `tool` span that runs it | `conversationId`, `question` (first 200 chars), `prompt` (a [slash prompt](#slash-prompts)'s name), `questionHash` (`Trace.QUESTION_HASH`, from `Trace.questionHash`), `model`, `stop`, `steps`, `toolCalls`, `promptTokens`, `completionTokens`, `cachedTokens` (whole turn), `contextTokens` (the turn's budget, 0 = none), `refetches`, `unchanged`, `turnCompactions` (when any), `saved` (the question is in the conversation: true for any turn that got that far, failed or cancelled ones too); `agent`, `origin` for a sub-agent |
 | `llm` | `turn` | `step`, `messages`, `clearedToolResults`, `compactedToolResults`, `summarisedMessages` (when any), `model`, `finishReason`, `promptTokens`, `completionTokens`, `toolCalls`, `firstTokenMicros` (first text, reasoning or tool-call piece), and when the model thought: `firstReasoningMicros`, `reasoningChars`, `reasoningTokens` (sizes only, never the text), `cachedTokens` (when the provider served part of the prompt from its cache) |
 | `tool` | `turn` | `tool`, `callId`, `approvalMicros` (until the tool started), `outputChars`, `truncated`, `refused` (a repeated call, or a tool a sub-agent may not use), `timedOut`, `promptTokens` / `completionTokens` (a tool's own spending), and when the result names a `Resource`: `resource`, `version`, `lines`, `unchanged` (answered with a pointer), `refetch` (read again after its view was cleared or summarised). An error result is an `ERROR` span |
 | `stop` | `turn` | `attempt`, `checks`, `blocked`, `names`, `reason` (the first block's). `ERROR` when a check failed. Only when a check answered |

@@ -283,7 +283,7 @@ class ContextPluginTest {
   }
 
   @Test
-  void cancellingDuringTheSummaryChangesNothing() throws Exception {
+  void cancellingDuringTheSummaryKeepsOnlyTheQuestion() throws Exception {
     CountDownLatch summarising = new CountDownLatch(1);
     llm.onSummary = (r, s) -> {
       summarising.countDown();
@@ -300,7 +300,7 @@ class ContextPluginTest {
     summarising.await();
     token.cancel();
     assertThrows(CancelledException.class, pending::await);
-    assertEquals(8, conversation().size());
+    assertEquals(9, conversation().size(), "the old turns and the new question, not summarised");
     assertNull(conversation().summary());
   }
 

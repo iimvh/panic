@@ -200,7 +200,7 @@ class ReviewTest {
   }
 
   @Test
-  void cancelDuringAReviewSavesNothing() {
+  void cancelDuringAReviewKeepsTheAnswer() {
     chat(null);
     CountDownLatch reviewing = new CountDownLatch(1);
     reviewer(r -> {
@@ -229,6 +229,6 @@ class ReviewTest {
       assertThrows(CancelledException.class,
           () -> Chat.ask(root, new Chat.Ask("c", "do it", token, d -> { })));
     });
-    assertEquals(0, conversations.get("c").size());
+    assertEquals(2, conversations.get("c").size(), "the question and the answer under review are kept");
   }
 }

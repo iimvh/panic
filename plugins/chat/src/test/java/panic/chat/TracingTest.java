@@ -200,7 +200,7 @@ class TracingTest {
   }
 
   @Test
-  void aCancelledTurnIsTracedAsCancelledAndNotSaved() {
+  void aCancelledTurnIsTracedAsCancelledAndKeepsItsQuestion() {
     chat(ChatConfig.DEFAULT);
     CancelToken token = new CancelToken();
     llm.then(r -> {
@@ -211,7 +211,7 @@ class TracingTest {
 
     Span turn = root();
     assertEquals(Span.Status.CANCELLED, turn.status());
-    assertEquals(false, turn.attrs().get(Trace.SAVED));
+    assertEquals(true, turn.attrs().get(Trace.SAVED));
     assertEquals(Span.Status.CANCELLED, named("llm").get(0).status());
   }
 

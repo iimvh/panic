@@ -30,7 +30,10 @@ public final class Trace {
   /** Root attribute: {@link #questionHash} of the question a turn answered. */
   public static final String QUESTION_HASH = "questionHash";
 
-  /** Root attribute: whether the turn's trace was kept by a tracer ({@code true}) or only emitted. */
+  /**
+   * Root attribute: whether the turn's question was saved in its conversation ({@code true}), so the trace can be
+   * linked to it in the history. A turn that fails or is cancelled keeps its question too.
+   */
   public static final String SAVED = "saved";
 
   /**

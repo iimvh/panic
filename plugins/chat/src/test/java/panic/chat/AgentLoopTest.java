@@ -436,7 +436,7 @@ class AgentLoopTest {
   }
 
   @Test
-  void disposingChatCancelsARunningToolAndSavesNothing() throws Exception {
+  void disposingChatCancelsARunningToolAndKeepsOnlyTheQuestion() throws Exception {
     CountDownLatch started = new CountDownLatch(1);
     tools(waiting(started));
     ConfigHandle<ChatConfig> chat = chat(ChatConfig.DEFAULT);
@@ -451,8 +451,41 @@ class AgentLoopTest {
     llm.script.clear();
     llm.then(r -> answer("fresh"));
     ask("again");
-    assertEquals(List.of(Message.system("restart"), Message.user("again")),
-        llm.requests.get(llm.requests.size() - 1).messages(), "the cancelled turn was not saved");
+    assertEquals(List.of(Message.system("restart"), Message.user("go"), Message.user("again")),
+        llm.requests.get(llm.requests.size() - 1).messages(),
+        "the question is kept; the call in flight has no result, so it is not");
+  }
+
+  @Test
+  void aFailedModelCallKeepsTheQuestionAndTheFinishedSteps() {
+    tools(ECHO);
+    chat(ChatConfig.DEFAULT);
+    llm.then(r -> calls(call("a", "echo", "{\"text\":\"hi\"}"))).then(r -> {
+      throw new IllegalStateException("402 payment required");
+    });
+    assertThrows(IllegalStateException.class, () -> ask("go"));
+
+    List<Message> saved = conversation("c");
+    assertEquals(List.of(Role.USER, Role.ASSISTANT, Role.TOOL), saved.stream().map(Message::role).toList());
+    assertEquals(Message.user("go"), saved.get(0));
+    assertEquals(Message.tool("a", "HI"), saved.get(2));
+
+    llm.script.clear();
+    llm.then(r -> answer("ok"));
+    ask("continue");
+    assertEquals(List.of(Role.SYSTEM, Role.USER, Role.ASSISTANT, Role.TOOL, Role.USER),
+        llm.requests.get(llm.requests.size() - 1).messages().stream().map(Message::role).toList(),
+        "the next turn goes on from what was saved");
+  }
+
+  @Test
+  void aTurnThatFailsAtOnceKeepsItsQuestion() {
+    chat(ChatConfig.DEFAULT);
+    llm.then(r -> {
+      throw new IllegalStateException("429 rate limited");
+    });
+    assertThrows(IllegalStateException.class, () -> ask("go"));
+    assertEquals(List.of(Message.user("go")), conversation("c"));
   }
 
   @Test

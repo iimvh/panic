@@ -269,7 +269,7 @@ class ChatPluginTest {
     assertThrows(CancelledException.class, pending::await);
 
     fake.block = null;
-    assertEquals("n=2", ask("fast", d -> { }).orElseThrow().text(), "the cancelled turn was not saved");
+    assertEquals("n=3", ask("fast", d -> { }).orElseThrow().text(), "the cancelled turn kept its question");
   }
 
   /** Thinks "17*23\n= 391" in two pieces, then answers like {@link FakeLlm}. */

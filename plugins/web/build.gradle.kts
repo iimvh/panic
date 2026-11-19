@@ -12,9 +12,9 @@ dependencies {
 }
 
 // The UI (a SvelteKit folder at the repo root) is built with npm and packed into the jar under panic/web/ui.
-// -Pui=<folder> picks which one (default ui-v1). Pass -PskipUi to build without Node: the server then
+// -Pui=<folder> picks which one (default ui-v2; ui-v1 is deprecated). Pass -PskipUi to build without Node: the server then
 // answers with a "UI not built" page.
-val uiDir = rootProject.layout.projectDirectory.dir(providers.gradleProperty("ui").getOrElse("ui-v1"))
+val uiDir = rootProject.layout.projectDirectory.dir(providers.gradleProperty("ui").getOrElse("ui-v2"))
 val skipUi = providers.gradleProperty("skipUi").isPresent
 val npm = if (System.getProperty("os.name").lowercase().contains("win")) "npm.cmd" else "npm"
 
@@ -28,7 +28,7 @@ val installUi = tasks.register<Exec>("installUi") {
 }
 
 val buildUi = tasks.register<Exec>("buildUi") {
-    description = "Builds the selected SvelteKit UI (-Pui, default ui-v1) into <ui>/build."
+    description = "Builds the selected SvelteKit UI (-Pui, default ui-v2) into <ui>/build."
     group = BasePlugin.BUILD_GROUP
     dependsOn(installUi)
     workingDir = uiDir.asFile

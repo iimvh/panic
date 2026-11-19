@@ -50,7 +50,7 @@ order, exactly once, after any call still running.
    The same goes for `AGENTS.md` and `CLAUDE.md`: if a change makes a sentence there false (a command, a
    path, a rule, a key name), fix that sentence in the same commit. Correct them, do not pad them.
 10. **No new libraries without a reason** that you write down in the change. The Java side uses only z and
-    Jackson. `ui-v1` uses only SvelteKit; `ui-v2` adds Bits UI (headless primitives: dialogs, menus, tabs,
+    Jackson. The UI (`ui-v2`) uses SvelteKit and Bits UI (headless primitives: dialogs, menus, tabs,
     tooltips with tested focus and keyboard handling, styled only with our tokens) and, for tests only,
     Testing Library, jsdom, Playwright and axe.
 
@@ -96,7 +96,6 @@ to make a change pass.
 ```bash
 ./gradlew check                     # Java tests (+ UI build); compiler warnings are errors
 ./gradlew check -PskipUi            # without Node
-cd ui-v1 && npm run check && npm test  # when you touch ui-v1/ (archived: only to keep it building)
 cd ui-v2 && npm run check && npm test && npm run build && npm run budget && npm run test:e2e  # when you touch ui-v2/
 ```
 
@@ -113,7 +112,7 @@ every pull request. A change is not done until it passes.
   per commit. Do not add AI co-author trailers.
 - Work and commit directly on `master`. Do not create feature or phase branches.
 - The UI is in `ui-v2/` (SvelteKit SPA, Svelte 5 runes, scoped CSS on the tokens of `src/app.css`; see its README
-  for the layers and design rules); `ui-v1/` is the archived first UI. Both talk only to the `web` plugin's
+  for the layers and design rules). `ui-v1/` is deprecated and frozen: do not change it. The UI talks only to the `web` plugin's
   JSON + SSE API, never to anything else. When that API changes (an event, a field, an endpoint), change
   `ui-v2/e2e/fake-api.ts` in the same commit, or the end-to-end tests test a server that no longer exists.
 

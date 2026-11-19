@@ -36,41 +36,27 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: |
-            ui-v1/package-lock.json
-            ui-v2/package-lock.json
+          cache-dependency-path: ui-v2/package-lock.json
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      # Builds the UI into the web jar, compiles with -Werror, runs every Java test (ConventionsTest included).
+      # Builds the UI (ui-v2) into the web jar, compiles with -Werror, runs every Java test (ConventionsTest included).
       - name: Gradle check
         run: ./gradlew check --console=plain
 
-      # node_modules was installed by the Gradle build (:web:installUi).
-      - name: UI type check
-        working-directory: ui-v1
-        run: npm run check
-
-      - name: UI tests
-        working-directory: ui-v1
-        run: npm test
-
-      # ui-v2, beside ui-v1 until it becomes the default: types, unit and component tests, the size budget, and
-      # end-to-end tests on the built app with a scripted fake API (no server, no keys).
-      - name: UI v2 install
-        working-directory: ui-v2
-        run: npm ci --no-audit --no-fund
-
-      - name: UI v2 type check and tests
+      # node_modules and build/ come from the Gradle build (:web:installUi, :web:buildUi).
+      # ui-v1 is deprecated and not checked.
+      - name: UI type check and tests
         working-directory: ui-v2
         run: npm run check && npm test
 
-      - name: UI v2 build and size budget
+      - name: UI size budget
         working-directory: ui-v2
-        run: npm run build && npm run budget
+        run: npm run budget
 
-      - name: UI v2 end-to-end tests
+      # On the built app with a scripted fake API (no server, no keys).
+      - name: UI end-to-end tests
         working-directory: ui-v2
         run: npx playwright install --with-deps chromium && npm run test:e2e
 

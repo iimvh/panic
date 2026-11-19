@@ -1,7 +1,7 @@
 # ui-v2
 
 The Panic web UI: a SvelteKit SPA (Svelte 5 runes) that talks only to the `web` plugin's JSON + SSE API.
-It replaces `ui-v1/` (archived). Until it becomes the default, pack it with `-Pui=ui-v2`.
+It replaces `ui-v1/` (deprecated) and is what the web jar packs.
 
 ## Principles
 

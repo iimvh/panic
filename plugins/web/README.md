@@ -1,16 +1,13 @@
 # plugins/web
 
-The web front-end: an HTTP + SSE API and the SvelteKit UI from `ui-v1/` (pick another folder with `-Pui=<folder>`; built by Gradle into
-`panic/web/ui/` in this jar; `-PskipUi` skips it). Like `cli`, it owns no feature.
+The web front-end: an HTTP + SSE API and the SvelteKit UI from `ui-v2/`, built by Gradle into `panic/web/ui/` in
+this jar. `-PskipUi` skips the UI, and `-Pui=ui-v1` packs the deprecated first UI instead. Like `cli`, it owns no
+feature.
 
-Beside the chat, the archived UI v1 draws an agent map (`ui-v1/src/lib/scene.ts`): you, Panic's home dock, the model, the
-permission gate, the workspace, the shell and MCP servers as blocks. Panic walks between them carrying the work
-(`actors.ts`, `motion.ts`), waits at the gate for approvals, and sends small clones for sub-agents and calls that run
-at once. While the model is still writing a call (drafting), Panic, or the sub-agent writing it, waits at the
-model: nothing reaches a block until the call runs. Each one thinking (Panic and every sub-agent) shows its own
-thought bubble. The map covers the whole conversation: blocks, counts and the step rail (marked per answer) add up
-over its answers, and characters only start over at home when another conversation opens. It is built from the
-same SSE events as the chat (no endpoint of its own), and can replay the conversation step by step.
+The UI is client-routed (`/`, `/c/<id>`, the inspector in `?panel=...`), so static files fall back to
+`index.html` for any path without an extension. Its end-to-end tests run against a scripted fake of this API
+(`ui-v2/e2e/fake-api.ts`). When an endpoint, an event or a field changes here, change that file in the same
+commit.
 
 ## Plugins
 

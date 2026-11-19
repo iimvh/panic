@@ -31,7 +31,7 @@ Because of that, the tree heals itself. Remove an API key and the parts that nee
 - **Hot reload.** Save `panic.json` and only the plugins whose section changed are reconfigured, installed or removed.
 - **Koishi-style commands.** Each plugin declares its own commands, and a command exists only while its plugin runs.
 - **Two front-ends, both plugins.** A terminal CLI (interactive or one command at a time) and a web UI. Both own no feature: they run whatever the other plugins offer right now.
-- **Minimal stack.** Plain Java 21 and Gradle, with Jackson as the only library. The web UI is a SvelteKit SPA of about 190 KB, packed into the jar.
+- **Minimal stack.** Plain Java 21 and Gradle, with Jackson as the only library. The web UI is a SvelteKit SPA of about 120 KB (gzipped, with a size budget in CI), packed into the jar.
 
 > [!NOTE]
 > The rebuild is in progress. It covers LLM providers, the chat bot, the CLI and the web UI. Agents come in a later stage.
@@ -208,10 +208,22 @@ Edit `panic.json` while Panic is running and the change is applied as soon as yo
 
 Run `panic --serve` and open `http://127.0.0.1:8080`:
 
-- **Streaming chat** with Markdown, code blocks and a copy button. **Stop** aborts the answer, and the upstream request is aborted as well.
-- **Settings** to pick a provider and a model. A provider without a key is shown as such, and the model list can be searched or limited to free models.
+- **Streaming chat** with Markdown, code blocks and a copy button.
+  - **Stop** aborts the answer, and the upstream request is aborted as well.
+  - Tool calls and thinking fold into one line each. Under every answer, one muted line shows the model, tokens, tools and time; click it to see the answer's trace.
+- **Decisions in the thread.** Approve or deny a tool call, approve a plan or send it back, and answer the agent's questions.
+  - The mode of each chat is beside the message box: **Ask first**, **Plan** or **Auto-run**.
+- **Inspector** (Ctrl+I), with three tabs:
+  - **Overview:** time, tokens, files and commands, plus the agent's checklist.
+  - **Steps:** every tool call with its arguments and result, stepped through with ← →.
+  - **Trace:** where the time went.
+- **Chats and projects** in the sidebar, stored on the server. Each chat has its own URL (`/c/<id>`), and so does the inspector (`?panel=...`): a reload, Back or a shared link keeps the context. **Ctrl+K** searches chats.
+- **Settings** to pick a provider, a model, a reasoning effort and the theme (system, light or dark).
+  - A provider without a key is shown as such.
+  - The model list can be searched or limited to free models.
 - **Commands** work as in the terminal: type `/` to get suggestions for the commands available now.
-- **History** is kept per browser, so reloading the page keeps the conversation. **New chat** forgets it.
+
+The UI is `ui-v2/` (see its README for its design rules). The first UI, `ui-v1/` with the agent map, is deprecated; it can still be packed with `./gradlew :app:installDist -Pui=ui-v1` but is no longer maintained.
 
 ## How it works
 
@@ -369,8 +381,9 @@ A module may declare several plugins. For example `:llm` declares `openrouter`, 
 │   ├── agents/       panic.agents   agents (agent tool: sub-agents as delegated chat asks)
 │   ├── trace/        panic.trace.store  tracing: keeps spans, traces/trace/stats commands
 │   ├── cli/          panic.cli      cli: REPL and the one-shot runner
-│   └── web/          panic.web      web: HTTP + SSE API, static files; builds and packs ui-v1/ (-Pui=<dir> picks another)
-├── ui-v1/                           SvelteKit SPA: lib/api.ts, lib/chat.svelte.ts, lib/markdown.ts, components/
+│   └── web/          panic.web      web: HTTP + SSE API, static files; builds and packs ui-v2/ (-Pui=<dir> picks another)
+├── ui-v2/                           SvelteKit SPA: lib/core (logic), lib/state, lib/ui (primitives), features/, e2e/
+├── ui-v1/                           the first UI with the agent map (deprecated, frozen)
 ├── app/              panic.app      Panic (discovers PluginSets), PluginHost (configs by name), ConfigLoader, ConfigWatch, Main
 ├── buildSrc/                        Shared conventions: Java 21, -Xlint:all -Werror, JUnit 5
 └── z/                               The z kernel (git submodule, consumed as a Gradle composite build)
@@ -392,8 +405,9 @@ Build the app once (and again after Java changes), then run the server and the V
 ```bash
 ./gradlew :app:installDist              # build the app into app/build/install/app (once, or after Java changes)
 app/build/install/app/bin/app --serve   # terminal 1
-cd ui-v1 && npm install && npm run dev  # terminal 2: http://localhost:5173
-npm run check && npm test               # svelte-check and the unit tests (Markdown, SSE parser)
+cd ui-v2 && npm install && npm run dev  # terminal 2: http://localhost:5173
+npm run check && npm test               # svelte-check; unit, layer, design-token and component tests
+npm run test:e2e                        # Playwright on the built app with a scripted fake API
 ```
 
 The API is small and uses only plain JSON and SSE:
@@ -418,7 +432,7 @@ To add an OpenAI-compatible provider, add an entry under `custom-providers.provi
 > Gradle is running on a JRE. Keep `gradle/gradle-daemon-jvm.properties` in place so Gradle can pick or download a JDK 21, or point `JAVA_HOME` at a JDK. Then run `./gradlew --stop` and try again.
 
 - **`web: cannot listen on 127.0.0.1:8080`.** The port is taken. Set `web.port` in `panic.json`.
-- **The page says "UI not built".** The jar was built with `-PskipUi`. Rebuild with Node installed, or use `npm run dev` in `ui-v1/`.
+- **The page says "UI not built".** The jar was built with `-PskipUi`. Rebuild with Node installed, or use `npm run dev` in `ui-v2/`.
 - **`[no LLM connected]`.** The selected provider has no key, or no provider is selected. Run `/status`, then set the key or use `/provider`.
 - **`openrouter answered 404: No endpoints found ...`.** The model id is wrong or the model is no longer available. Run `/models free` to see what you can use.
 - **`z` directory is empty.** Run `git submodule update --init`.

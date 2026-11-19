@@ -1,15 +1,16 @@
-# ui-v1 (archived)
+# ui-v1 (deprecated)
 
 The first Panic web UI: a SvelteKit SPA with the isometric agent map, the step inspector and the trace view.
+It is replaced by `ui-v2/`, which the web jar packs by default.
 
-It is **frozen** at commit `76572c3` and no longer maintained. The `web` plugin's JSON + SSE API may change
-without this folder following it. Its successor is `ui-v2/`.
+This folder is **deprecated and frozen** at commit `76572c3`. CI does not check it and it is not maintained:
+when the `web` plugin's JSON + SSE API changes, this UI is not updated and may stop working. Do not fix bugs
+here; change `ui-v2/` instead.
 
-Until `ui-v2` becomes the default, the web jar still packs this folder. Afterwards it can be packed with:
+It can still be packed into the jar, as long as the API it was written for holds:
 
 ```bash
 ./gradlew :app:installDist -Pui=ui-v1
 ```
 
-Development as before: `npm install && npm run dev` (proxies `/api` to `127.0.0.1:8080`),
-`npm run check && npm test`.
+Or run it beside a running server: `npm install && npm run dev` (proxies `/api` to `127.0.0.1:8080`).

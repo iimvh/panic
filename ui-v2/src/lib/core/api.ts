@@ -27,7 +27,7 @@ export type Model = {
 export type HistoryMessage =
 	| { role: 'user'; content: string; traceId?: string }
 	| { role: 'assistant'; content: string; toolCalls?: { id: string; name: string; arguments: string }[]; reasoning?: string }
-	| { role: 'tool'; toolCallId: string; status: 'ok' | 'error'; content: string }
+	| { role: 'tool'; toolCallId: string; status: 'ok' | 'error'; content: string; diff?: string }
 	| { role: 'review'; reason: string };
 
 /** One span of a trace, as `GET /api/trace` returns it. Times are microseconds. */

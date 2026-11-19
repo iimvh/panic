@@ -288,6 +288,23 @@ class FilesPluginTest {
   }
 
   @Test
+  void writesAndEditsShowTheUserWhatChanged() throws IOException {
+    assertEquals("@@ -1,3 +1,3 @@\n one\n-two\n+2\n three\n",
+        raw("edit_file", "{\"path\":\"a.txt\",\"old_str\":\"two\",\"new_str\":\"2\"}").diff());
+    assertEquals("@@ -0,0 +1,2 @@\n+new\n+file\n",
+        raw("write_file", "{\"path\":\"n.txt\",\"content\":\"new\\nfile\\n\"}").diff(), "a new file: all added");
+    assertEquals("@@ -1,2 +1,1 @@\n-new\n-file\n+other\n",
+        raw("write_file", "{\"path\":\"n.txt\",\"content\":\"other\\n\"}").diff(), "an overwrite: against the old text");
+    assertEquals("@@ -1,1 +1,2 @@\n other\n+more\n",
+        raw("write_file", "{\"path\":\"n.txt\",\"content\":\"more\\n\",\"append\":true}").diff());
+    assertEquals(null, raw("write_file", "{\"path\":\"n.txt\",\"content\":\"other\\nmore\\n\"}").diff(),
+        "the same text: nothing changed");
+    Files.write(workspace.resolve("bin"), new byte[] {1, 0, 2});
+    assertEquals(null, raw("write_file", "{\"path\":\"bin\",\"content\":\"text\"}").diff(), "was binary: not shown");
+    assertEquals(null, raw("read_file", "{\"path\":\"a.txt\"}").diff(), "a read changes nothing");
+  }
+
+  @Test
   void longReadsCarryAnOutline() throws IOException {
     StringBuilder js = new StringBuilder("import React from 'react'\nimport { a } from './a'\n\n");
     js.append("export function Header({ title }) {\n");

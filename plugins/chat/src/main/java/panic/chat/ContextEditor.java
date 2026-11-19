@@ -147,7 +147,7 @@ final class ContextEditor {
     for (int i = 0; i < messages.size(); i++) {
       Message m = messages.get(i);
       if (m.role() == Role.TOOL && cleared.containsKey(m.toolCallId())) {
-        m = Message.tool(m.toolCallId(), cleared.get(m.toolCallId()));
+        m = m.withContent(cleared.get(m.toolCallId()));
         messages.set(i, m);
       }
       total += est.estimate(m);
@@ -159,7 +159,7 @@ final class ContextEditor {
         Message m = messages.get(index);
         String replacement = replacement(m);
         if (replacement.length() >= m.content().length()) continue;
-        Message cut = Message.tool(m.toolCallId(), replacement);
+        Message cut = m.withContent(replacement);
         total += est.estimate(cut) - est.estimate(m);
         messages.set(index, cut);
         cleared.put(m.toolCallId(), replacement);
@@ -202,7 +202,7 @@ final class ContextEditor {
       Entry e = entries.get(m.toolCallId());
       String bare = String.format(Locale.ROOT, CLEARED, e.tool(), e.length());
       if (bare.length() >= m.content().length()) continue;
-      Message cut = Message.tool(m.toolCallId(), bare);
+      Message cut = m.withContent(bare);
       total += est.estimate(cut) - est.estimate(m);
       messages.set(index, cut);
       cleared.put(m.toolCallId(), bare);

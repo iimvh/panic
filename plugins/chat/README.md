@@ -19,7 +19,7 @@ conversation id (`repl.jsonl`), or `~` + the id in base64url when the id is not 
 Header lines come first: `{"parent": ...}` for a conversation that works for another (a sub-agent's, set by
 `chat` from `Chat.Delegate.origin`), `{"title": ...}` (the first question, written with it, so it stays the title
 after a compaction removes that question), and `{"summary": ...}` for the compaction summary. Every other line is a
-message (`{"role", "content", "toolCalls"?, "toolCallId"?, "reasoning"?}`, `reasoning` on an assistant message when the model showed what it thought).
+message (`{"role", "content", "toolCalls"?, "toolCallId"?, "reasoning"?, "diff"?}`, `reasoning` on an assistant message when the model showed what it thought, `diff` on a tool result whose call changed a file: `ToolResult.diff`, kept for the user and never sent to the model).
 
 - **Loaded on first use.** A conversation is read the first time it is asked for after a start.
 - **Written through.** An exchange is appended in one write, under the conversation's lock, so concurrent

@@ -148,7 +148,7 @@ class OpenAiCompatClientTest {
       ChatRequest request = new ChatRequest(List.of(
           Message.user("weather in Hue?"),
           Message.assistant("", List.of(new ToolCall("c1", "weather", "{\"city\":\"Hue\"}")), "ask the tool"),
-          Message.tool("c1", "31C, sunny")), "m-1", null, null)
+          Message.tool("c1", "31C, sunny", "@@ -0,0 +1,1 @@\n+31C\n")), "m-1", null, null)
           .withTools(List.of(WEATHER), ToolChoice.named("weather"));
       new OpenAiCompatClient("fake", server.url(), "k").complete(request, new CancelToken());
 
@@ -173,6 +173,7 @@ class OpenAiCompatClientTest {
       assertEquals("tool", result.path("role").asText());
       assertEquals("c1", result.path("tool_call_id").asText());
       assertEquals("31C, sunny", result.path("content").asText());
+      assertEquals(List.of("content", "role", "tool_call_id"), fieldNames(result), "a kept diff is never sent");
     }
   }
 

@@ -33,6 +33,14 @@ so it needs no parser per language; a file the patterns do not fit gets its firs
 of the content once that no longer fits, so the model can read back only the part it needs. `write_file` and
 `edit_file` report the file's new version, which marks earlier views of it stale.
 
+`write_file` and `edit_file` also carry what they changed, for the user (`ToolResult.diff`, never sent to the
+model): unified-diff hunks (`@@ -a,b +c,d @@`, then lines starting with space, `+` or `-`) with 3 lines of
+context, from `Diff` (Myers over the lines between the common start and end, hand-written: no library). A new file
+is all added lines (`@@ -0,0 +1,N @@`); an overwrite is compared with the old text, read just before the write.
+Past 1000 differences the changed middle shows as removed then added; past 500 lines the rest becomes one
+`\ not shown: +A -R` line. A file that was binary or larger than `maxWriteBytes` gets no diff, nor does a write
+that changed no line.
+
 `glob {pattern, path?}` lists the files whose path matches (a pattern without `/` matches file names at any depth,
 `*.jsx`; with `/`, the path from the search directory, `src/**/*.ts`), most recently changed first, at most
 `maxEntries`. `grep {pattern, path?, glob?, ignore_case?, context?, files_only?}` finds the lines matching a Java
@@ -227,7 +235,8 @@ to its section restarts only it and applies from the next call.
 - `progress` hears `ToolProgress` (a piece of `text`, marked `reasoning` when it is what a sub-agent thinks, or one of the tool's own calls starting or ending) while a
   long tool runs. The agent loop passes it on to the asker; nobody has to listen.
 
-`ToolResult(content, isError, usage?, resource?, compact?)`: `usage` is what the tool spent on a model of its own
+`ToolResult(content, isError, usage?, resource?, compact?, diff?)`: `diff` is what the call changed in a file,
+for the user only (`result.withDiff(diff)`; the chat keeps it with the conversation and front-ends show it). `usage` is what the tool spent on a model of its own
 (a sub-agent). The agent loop adds it to the turn's usage and budget. `resource` says what the result shows or
 changes: `Resource.view(key, version, from, to)` (lines of a thing at a version) or `Resource.write(key, version)`;
 `compact` is a short form of the content that can stand in for it (`result.about(resource, compact)`). The chat

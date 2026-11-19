@@ -1,4 +1,5 @@
 import { ASK_USER_TOOL, EXIT_PLAN_TOOL, shellCommand, type Part, type ToolStep } from './reply';
+import { diffStats, fallbackDiff, parseUnified } from './diff';
 import type { Message } from './types';
 export { compact } from './format';
 
@@ -37,13 +38,16 @@ export function failure(step: Pick<ToolStep, 'content'>): string {
 	return step.content === 'not run' ? 'not run' : 'failed';
 }
 
-/** Lines a write or an edit adds and removes, from its arguments. */
-export function lineDelta(step: Pick<ToolStep, 'name' | 'arguments'>): { added: number; removed: number } {
-	const a = args(step.arguments);
-	const lines = (v: unknown) => (typeof v === 'string' && v ? v.split('\n').length : 0);
-	if (step.name === 'edit_file') return { added: lines(a.new_str), removed: lines(a.old_str) };
-	if (step.name === 'write_file') return { added: lines(a.content), removed: 0 };
-	return { added: 0, removed: 0 };
+/**
+ * Lines a write or an edit adds and removes: from the diff the server sent, else from its arguments (a call still
+ * running, or stored before diffs were). A failed call changed nothing.
+ */
+export function lineDelta(step: Pick<ToolStep, 'name' | 'arguments'> & Partial<Pick<ToolStep, 'status' | 'content' | 'diff'>>): {
+	added: number;
+	removed: number;
+} {
+	if (step.status === 'error') return { added: 0, removed: 0 };
+	return diffStats(step.diff ? parseUnified(step.diff) : fallbackDiff({ content: undefined, ...step }));
 }
 
 export type Flat = { step: ToolStep; agent?: string; messageId: number };

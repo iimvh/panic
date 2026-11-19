@@ -1,15 +1,18 @@
 <script lang="ts">
+	import { diffStats, stepDiff } from '$lib/core/diff';
 	import { duration, shellCommand, size } from '$lib/core/reply';
 	import { allSteps, failure, stepLabel } from '$lib/core/summary';
 	import { chat } from '$lib/state/chat.svelte';
 	import { inspector } from '$lib/state/inspector.svelte';
+	import DiffView from '$lib/ui/DiffView.svelte';
 	import Icon from '$lib/ui/Icon.svelte';
 	import IconButton from '$lib/ui/IconButton.svelte';
 	import Spinner from '$lib/ui/Spinner.svelte';
 
 	/**
 	 * Every tool call of the conversation as a timeline; one picked, its arguments and result in full, with the
-	 * previous and next call a key away (← →). This is how a run is replayed: as data, step by step.
+	 * previous and next call a key away (← →). This is how a run is replayed: as data, step by step. A call that
+	 * changed a file shows the change first; its arguments (the whole text written) are folded under it.
 	 */
 	const steps = $derived(allSteps(chat.messages));
 	const index = $derived(steps.findIndex((f) => f.step.id === inspector.step));
@@ -38,6 +41,8 @@
 {#if picked}
 	{@const step = picked.step}
 	{@const command = shellCommand(step.arguments)}
+	{@const diff = stepDiff(step)}
+	{@const stats = diffStats(diff)}
 	<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 	<div class="detail" tabindex="0" {onkeydown} role="region" aria-label="Tool call {index + 1} of {steps.length}">
 		<div class="nav">
@@ -58,8 +63,19 @@
 						· {duration(step.endedAt - step.startedAt)}</span
 					>{/if}
 			</dd>
-			<dt>{command ? 'Command' : 'Arguments'} <span class="muted">{size(step.arguments)}</span></dt>
-			<dd><pre>{command ?? pretty(step.arguments)}</pre></dd>
+			{#if diff && diff.hunks.length}
+				<dt>Changes <span class="muted">+{stats.added} −{stats.removed}</span></dt>
+				<dd><DiffView {diff} label="Changes to {stepLabel(step) || 'the file'}" /></dd>
+				<dt>
+					<details>
+						<summary>Arguments <span class="muted">{size(step.arguments)}</span></summary>
+						<pre>{pretty(step.arguments)}</pre>
+					</details>
+				</dt>
+			{:else}
+				<dt>{command ? 'Command' : 'Arguments'} <span class="muted">{size(step.arguments)}</span></dt>
+				<dd><pre>{command ?? pretty(step.arguments)}</pre></dd>
+			{/if}
 			{#if step.content !== undefined}
 				<dt>Result <span class="muted">{size(step.content)}</span></dt>
 				<dd><pre>{step.content}</pre></dd>
@@ -130,6 +146,14 @@
 	}
 	.status.error {
 		color: var(--danger);
+	}
+	summary {
+		cursor: pointer;
+	}
+	details pre {
+		margin-top: var(--sp-1);
+		font-weight: 400;
+		color: var(--text);
 	}
 	pre {
 		margin: 0;

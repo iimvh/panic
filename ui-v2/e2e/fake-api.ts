@@ -11,7 +11,10 @@ import type { Page, Route } from '@playwright/test';
  */
 export type Ev = { event: string; data: Record<string, unknown> };
 export type Decision = { kind: 'approve' | 'plan' | 'answer'; body: Record<string, unknown> };
-export type Script = (question: string) => { segments: ((decision?: Decision) => Ev[])[]; answer: string } | null;
+/** `history`: what the turn stores besides the final answer (its tool calls and results), as `/api/history` lists it. */
+export type Script = (
+	question: string
+) => { segments: ((decision?: Decision) => Ev[])[]; answer: string; history?: Record<string, unknown>[] } | null;
 
 type Session = {
 	title: string;
@@ -161,7 +164,7 @@ export class FakeApi {
 			if (i + 1 < plan.segments.length) s.waiting = (next) => run(i + 1, next);
 			else {
 				s.running = false;
-				s.history.push({ role: 'assistant', content: plan.answer });
+				s.history.push(...(plan.history ?? []), { role: 'assistant', content: plan.answer });
 			}
 		};
 		run(0);
@@ -202,6 +205,26 @@ export const scripts: Script = (question) => {
 					{ event: 'tool', data: { id: 't2', name: 'read_file', arguments: '{"path":"README.md"}', status: 'ok', content: '# Panic' } },
 					{ event: 'delta', data: { text: 'The project is **Panic**.' } },
 					done({ traceId: 'tr-1' })
+				]
+			]
+		};
+	}
+	if (question.startsWith('Fix the typo')) {
+		const call = { id: 'e1', name: 'edit_file', arguments: JSON.stringify({ path: 'src/app.ts', old_str: 'cosnt x = 1;', new_str: 'const x = 1;' }) };
+		const content = 'edited src/app.ts: replaced 1 occurrence (first at line 3)';
+		const diff = '@@ -1,5 +1,5 @@\n import a;\n \n-cosnt x = 1;\n+const x = 1;\n \n export {};\n';
+		return {
+			answer: 'Fixed.',
+			history: [
+				{ role: 'assistant', content: '', toolCalls: [call] },
+				{ role: 'tool', toolCallId: 'e1', status: 'ok', content, diff }
+			],
+			segments: [
+				() => [
+					{ event: 'tool', data: { ...call, status: 'running' } },
+					{ event: 'tool', data: { ...call, status: 'ok', content, diff } },
+					{ event: 'delta', data: { text: 'Fixed.' } },
+					done({ toolCalls: 1 })
 				]
 			]
 		};

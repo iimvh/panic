@@ -139,6 +139,11 @@ describe('contrast (WCAG AA, 4.5:1 for text)', () => {
 					const c = contrast(t(fg), t(bg));
 					if (c < 4.5) low.push(`${fg} on ${bg}: ${c.toFixed(2)}`);
 				}
+			for (const kind of ['add', 'del'])
+				for (const fg of ['text', 'muted', `diff-${kind}-fg`]) {
+					const c = contrast(t(fg), t(`diff-${kind}-bg`));
+					if (c < 4.5) low.push(`${fg} on diff-${kind}-bg: ${c.toFixed(2)}`);
+				}
 			const button = contrast(t('accent-fg'), t('accent-bg'));
 			if (button < 4.5) low.push(`accent-fg on accent-bg: ${button.toFixed(2)}`);
 			expect(low).toEqual([]);

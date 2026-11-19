@@ -550,7 +550,7 @@ class WebPluginTest {
 
         @Override
         public ToolResult call(JsonNode args, ToolContext tc) {
-          return ToolResult.ok("pong");
+          return ToolResult.ok("pong").withDiff("@@ -0,0 +1,1 @@\n+pong\n");
         }
       });
       return null;
@@ -565,6 +565,8 @@ class WebPluginTest {
     assertEquals("echo", ev.get(2).data().path("name").asText());
     assertEquals("ok", ev.get(3).data().path("status").asText());
     assertEquals("pong", ev.get(3).data().path("content").asText());
+    assertFalse(ev.get(2).data().has("diff"), "nothing changed yet");
+    assertEquals("@@ -0,0 +1,1 @@\n+pong\n", ev.get(3).data().path("diff").asText());
     assertEquals(1, ev.get(6).data().path("toolCalls").asInt());
     assertEquals("done", ev.get(6).data().path("stop").asText());
 
@@ -577,6 +579,7 @@ class WebPluginTest {
     assertEquals("t1", history.path(2).path("toolCallId").asText());
     assertEquals("ok", history.path(2).path("status").asText());
     assertEquals("pong", history.path(2).path("content").asText());
+    assertEquals("@@ -0,0 +1,1 @@\n+pong\n", history.path(2).path("diff").asText(), "kept for a reload");
     assertEquals("Hello m1", history.path(3).path("content").asText());
   }
 

@@ -339,8 +339,9 @@ final class Api {
         case TOOL -> {
           boolean error = m.content().startsWith(Chat.TOOL_ERROR_PREFIX);
           String content = error ? m.content().substring(Chat.TOOL_ERROR_PREFIX.length()) : m.content();
-          out.addObject().put("role", "tool").put("toolCallId", m.toolCallId())
+          ObjectNode o = out.addObject().put("role", "tool").put("toolCallId", m.toolCallId())
               .put("status", error ? "error" : "ok").put("content", cut(content));
+          if (!m.diff().isEmpty()) o.put("diff", m.diff());
         }
         default -> { }
       }
@@ -520,7 +521,8 @@ final class Api {
         .put("arguments", step.call().arguments());
     if (step.nested()) o.put("parent", step.parentCallId()).put("agent", step.agent());
     if (!step.done()) return o.put("status", "running");
-    return o.put("status", step.result().isError() ? "error" : "ok").put("content", cut(step.result().content()));
+    o.put("status", step.result().isError() ? "error" : "ok").put("content", cut(step.result().content()));
+    return step.result().diff() == null ? o : o.put("diff", step.result().diff());
   }
 
   /** A verdict as {@code {attempt, pass, reason}}, or a failed review as {@code {attempt, error}}. */

@@ -29,7 +29,7 @@ import panic.llm.ToolCall;
  * One conversation stored as JSON lines: optional header lines first ({@code {"parent": ...}} for a conversation
  * that works for another, {@code {"title": ...}} (its first question, kept through compaction),
  * {@code {"summary": ...}}), then one message per line (an assistant message with {@code "reasoning"} when the
- * model showed what it thought). An exchange is appended in a single write, so a crash leaves at most a torn last line. Compaction
+ * model showed what it thought, a tool result with {@code "diff"} when the call changed a file). An exchange is appended in a single write, so a crash leaves at most a torn last line. Compaction
  * rewrites the file through a temporary file and an atomic rename. Loading skips lines that are not valid
  * messages and turns that would be rejected by a provider (a tool call without its result), with a warning,
  * and then rewrites the file clean so later appends start on a fresh line.
@@ -279,6 +279,7 @@ final class ConversationFile implements Conversation.Journal {
     }
     if (m.toolCallId() != null) n.put("toolCallId", m.toolCallId());
     if (!m.reasoning().isEmpty()) n.put("reasoning", m.reasoning());
+    if (!m.diff().isEmpty()) n.put("diff", m.diff());
     return n;
   }
 
@@ -292,8 +293,10 @@ final class ConversationFile implements Conversation.Journal {
     }
     JsonNode callId = n.get("toolCallId");
     JsonNode reasoning = n.get("reasoning");
+    JsonNode diff = n.get("diff");
     return new Message(role, text(n, "content"), calls, callId == null || callId.isNull() ? null : callId.asText(),
-        reasoning == null || !reasoning.isTextual() ? "" : reasoning.asText());
+        reasoning == null || !reasoning.isTextual() ? "" : reasoning.asText(),
+        diff == null || !diff.isTextual() ? "" : diff.asText());
   }
 
   private static String text(JsonNode n, String field) {

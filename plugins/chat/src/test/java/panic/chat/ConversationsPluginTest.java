@@ -104,6 +104,18 @@ class ConversationsPluginTest {
   }
 
   @Test
+  void aToolsDiffIsKeptAcrossRestarts() throws Exception {
+    start();
+    Message edited = Message.tool("c1", "edited a.txt", "@@ -1,1 +1,1 @@\n-a\n+b\n");
+    get("a").append(Message.user("q"), Message.assistant("", List.of(new ToolCall("c1", "edit_file", "{}"))), edited,
+        Message.assistant("done"));
+    restart();
+    assertEquals(edited, get("a").recent(0).get(2));
+    String text = Files.readString(file("a"), StandardCharsets.UTF_8);
+    assertEquals(1, text.split("\"diff\"", -1).length - 1, "only where there is one: " + text);
+  }
+
+  @Test
   void compactionIsKeptAcrossRestarts() {
     start();
     Conversation c = get("a");

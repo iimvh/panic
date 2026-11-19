@@ -544,6 +544,7 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
             + cfg.maxWriteBytes());
       }
       Path file = resolveForWrite(Workspace.root(host, ctx.origin(), root), path);
+      String before = shownBefore(file);
       ctx.signal().throwIfCancelled();
       try {
         Files.write(file, bytes, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
@@ -551,13 +552,33 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
       } catch (IOException e) {
         return ToolResult.error("cannot write " + path + ": " + e.getMessage());
       }
-      ToolResult done = ToolResult.ok((append ? "appended " : "wrote ") + bytes.length + " bytes to " + path);
+      String text = new String(bytes, StandardCharsets.UTF_8);
+      ToolResult done = ToolResult.ok((append ? "appended " : "wrote ") + bytes.length + " bytes to " + path)
+          .withDiff(before == null ? null : Diff.unified(before, append ? before + text : text));
       try {
         Path workspace = Workspace.root(host, ctx.origin(), root);
         String version = append ? Content.of(file).version() : Content.version(bytes);
         return done.about(Resource.write(key(workspace, file.toRealPath()), version), null);
       } catch (IOException e) {
         return done; // written; only the context bookkeeping is lost
+      }
+    }
+
+    /**
+     * What {@code file} holds before the write, for the diff: "" when it does not exist yet, null when it cannot be
+     * shown as text (binary, larger than a write may be, unreadable).
+     */
+    private String shownBefore(Path file) {
+      if (!Files.exists(file, LinkOption.NOFOLLOW_LINKS)) return "";
+      try {
+        if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) || Files.size(file) > cfg.maxWriteBytes()) return null;
+        byte[] old = Files.readAllBytes(file);
+        for (byte b : old) {
+          if (b == 0) return null;
+        }
+        return new String(old, StandardCharsets.UTF_8);
+      } catch (IOException e) {
+        return null;
       }
     }
   }
@@ -657,7 +678,8 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
       int replaced = all ? count : 1;
       ToolResult done = ToolResult.ok("edited " + path + ": replaced " + replaced
           + (replaced == 1 ? " occurrence" : " occurrences") + " (first at line " + line + ")");
-      return done.about(Resource.write(key(workspace, existing), Content.version(out)), null);
+      return done.about(Resource.write(key(workspace, existing), Content.version(out)), null)
+          .withDiff(Diff.unified(text, edited));
     }
 
     private static int count(String text, String part) {

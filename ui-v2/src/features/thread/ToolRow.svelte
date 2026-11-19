@@ -1,7 +1,9 @@
 <script lang="ts">
+	import { describeChange, diffStats, stepDiff } from '$lib/core/diff';
 	import { shellCommand, type ToolStep } from '$lib/core/reply';
 	import { failure, stepLabel } from '$lib/core/summary';
 	import { inspector } from '$lib/state/inspector.svelte';
+	import DiffView from '$lib/ui/DiffView.svelte';
 	import Icon from '$lib/ui/Icon.svelte';
 	import Spinner from '$lib/ui/Spinner.svelte';
 	import ReasoningPart from './ReasoningPart.svelte';
@@ -10,7 +12,8 @@
 
 	/**
 	 * One tool call: status, name, what it worked on. Clicking shows the call and its result in the inspector. A
-	 * call that runs a sub-agent shows the sub-agent's work under it, open while it runs.
+	 * call that runs a sub-agent shows the sub-agent's work under it, open while it runs. A call that changed a file
+	 * shows the change under it (the first lines, more on demand), open until it is folded.
 	 */
 	let { step }: { step: ToolStep } = $props();
 
@@ -20,6 +23,8 @@
 	const agent = $derived(step.agent);
 	let agentOpen = $state<boolean | null>(null);
 	const showAgent = $derived(agentOpen ?? step.status === 'running');
+	const diff = $derived(stepDiff(step));
+	let diffOpen = $state(true);
 </script>
 
 <li>
@@ -35,6 +40,15 @@
 		{#if label}<span class="label">{label}</span>{/if}
 		{#if step.status === 'error'}<span class="fail">{failure(step)}</span>{/if}
 	</button>
+	{#if diff && diff.hunks.length}
+		<button type="button" class="diff-toggle" aria-expanded={diffOpen} onclick={() => (diffOpen = !diffOpen)}>
+			<Icon name={diffOpen ? 'chevron-down' : 'chevron-right'} size={12} />
+			{describeChange(diffStats(diff))}
+		</button>
+		{#if diffOpen}
+			<div class="diff"><DiffView {diff} limit={20} label="Changes to {stepLabel(step) || 'the file'}" /></div>
+		{/if}
+	{/if}
 	{#if agent}
 		<button type="button" class="agent-toggle" aria-expanded={showAgent} onclick={() => (agentOpen = !showAgent)}>
 			{agent.name || 'sub-agent'} · {agent.parts.filter((p) => p.kind === 'tool').length} calls
@@ -105,6 +119,23 @@
 		flex: none;
 		color: var(--danger);
 		font-size: var(--fs-1);
+	}
+	.diff-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--sp-1);
+		margin-left: 26px;
+		padding: 0;
+		border: 0;
+		background: none;
+		color: var(--muted);
+		font-size: var(--fs-1);
+	}
+	.diff-toggle:hover {
+		color: var(--text-2);
+	}
+	.diff {
+		margin: var(--sp-1) 0 var(--sp-2) 26px;
 	}
 	.agent-toggle {
 		margin-left: 30px;

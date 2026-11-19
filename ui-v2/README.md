@@ -8,7 +8,12 @@ It replaces `ui-v1/` (deprecated) and is what the web jar packs.
 The interface steps back so the agent's work is what you see.
 
 - **Neutral greys carry the interface; one accent marks what you can act on.** Green, amber and red only
-  ever mean status.
+  ever mean status, with one exception: a file change (`lib/ui/DiffView.svelte`) shows added lines on green and
+  removed lines on red, as every diff does, through its own `--diff-*` tokens.
+- **Changes are shown, not described.** A call that wrote or edited a file shows the change under it: line
+  numbers, `+`/`-`, the first 20 lines and the rest on demand. The Step inspector shows all of it. The server sends
+  the diff (`diff` on `tool` events and history); a conversation stored without one is rebuilt from the call's
+  arguments (`lib/core/diff.ts`).
 - **Transparent but quiet.** The model, tokens, tools and time of every answer are shown in one muted line.
   Steps, the trace and a run's totals are one click away in the inspector, never in the way.
 - **Quiet chrome.** Scrollbars are thin, without track or arrows. A text field shows its focus by its caret
@@ -30,7 +35,7 @@ The interface steps back so the agent's work is what you see.
 ```
 src/lib/core      pure logic (api types and calls, SSE, answer timeline, markdown, summary): no Svelte
 src/lib/state     stores (chat, layout, inspector, theme); the only layer that calls the server
-src/lib/ui        primitives on Bits UI: Button, IconButton, Dialog, Menu, Select, Tabs, Tooltip, Card, Icon
+src/lib/ui        primitives on Bits UI: Button, IconButton, Dialog, Menu, Select, Tabs, Tooltip, Card, Icon, DiffView
 src/features/*    sidebar, thread, composer, inspector, settings, search, shell; each exports from index.ts
 src/routes        +layout (frame, shortcuts), / and c/[id]
 ```

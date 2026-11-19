@@ -29,6 +29,26 @@ test('asks, shows tool calls folded and a quiet meta line, and gets its own rout
 	await expect(page.getByRole('link', { name: 'Summarise this project', exact: true })).toHaveAttribute('aria-current', 'page');
 });
 
+test('shows what an edit changed, inline and in the inspector, and keeps it across a reload', async ({ page }) => {
+	await page.goto('/');
+	await ask(page, 'Fix the typo');
+	await expect(page.getByText('Fixed.')).toBeVisible();
+	const inline = page.getByRole('table', { name: 'Changes to app.ts' });
+	await expect(page.getByRole('button', { name: 'Added 1 line, removed 1 line' })).toHaveAttribute('aria-expanded', 'true');
+	await expect(inline.getByRole('row').filter({ hasText: 'cosnt x = 1;' })).toContainText('3');
+	await expect(inline.getByRole('row').filter({ hasText: 'const x = 1;' })).toContainText('+');
+
+	await page.getByRole('button', { name: /edit_file app\.ts/ }).click();
+	await expect(page).toHaveURL(/\?panel=step&step=e1$/);
+	const panel = page.getByRole('region', { name: /Tool call 1 of 1/ });
+	await expect(panel.getByText('+1 −1')).toBeVisible();
+	await expect(panel.getByRole('table', { name: 'Changes to app.ts' }).getByRole('row')).toHaveCount(6);
+
+	await page.reload();
+	await expect(page.getByRole('table', { name: 'Changes to app.ts' }).first().getByRole('row')).toHaveCount(6);
+	await expect(page.getByRole('button', { name: 'Added 1 line, removed 1 line' })).toBeVisible();
+});
+
 test('opens a step and the trace in the inspector, and keeps them across a reload', async ({ page }) => {
 	await page.goto('/');
 	await ask(page, 'Summarise this project');
@@ -224,6 +244,16 @@ for (const scheme of ['light', 'dark'] as const) {
 		await expect(page.getByText('The project is Panic.')).toBeVisible();
 		await page.keyboard.press('Control+i');
 		await expect(page.getByRole('tab', { name: 'Overview' })).toBeVisible();
+		const result = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+		expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+	});
+
+	test(`shows a file change accessibly (${scheme})`, async ({ page }) => {
+		await page.emulateMedia({ colorScheme: scheme });
+		await page.goto('/');
+		await ask(page, 'Fix the typo');
+		await page.getByRole('button', { name: /edit_file app\.ts/ }).click();
+		await expect(page.getByRole('table', { name: 'Changes to app.ts' })).toHaveCount(2);
 		const result = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
 		expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
 	});

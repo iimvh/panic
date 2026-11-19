@@ -48,6 +48,57 @@ describe('ToolGroup', () => {
 	});
 });
 
+describe('file changes', () => {
+	const edit = (diff?: string): ToolStep => ({
+		...step('e1', 'ok', 'edit_file', { path: 'src/app.ts', old_str: 'two', new_str: '2' }),
+		content: 'edited src/app.ts: replaced 1 occurrence (first at line 2)',
+		diff
+	});
+
+	it('shows what an edit changed, with line numbers, under the call', () => {
+		render(ToolGroup, { steps: [edit('@@ -1,3 +1,3 @@\n one\n-two\n+2\n three\n')] });
+		expect(screen.getByRole('button', { name: /Added 1 line, removed 1 line/ }).getAttribute('aria-expanded')).toBe('true');
+		const table = screen.getByRole('table', { name: 'Changes to app.ts' });
+		const rows = [...table.querySelectorAll('.row')].map((r) => [...r.querySelectorAll('[role=cell]')].map((c) => c.textContent));
+		expect(rows).toEqual([
+			['1', '1', ' ', 'one'],
+			['2', '', '-', 'two'],
+			['', '2', '+', '2'],
+			['3', '3', ' ', 'three']
+		]);
+	});
+
+	it('folds the change on demand', async () => {
+		render(ToolGroup, { steps: [edit('@@ -1,1 +1,1 @@\n-two\n+2\n')] });
+		await fireEvent.click(screen.getByRole('button', { name: /Added 1 line/ }));
+		expect(screen.queryByRole('table')).toBeNull();
+	});
+
+	it('rebuilds the change from the arguments when the server sent none', () => {
+		render(ToolGroup, { steps: [edit()] });
+		expect(screen.getByRole('table').textContent).toContain('two');
+		expect(screen.getByRole('button', { name: /Added 1 line, removed 1 line/ })).toBeTruthy();
+	});
+
+	it('shows the first lines of a long change, the rest on demand', async () => {
+		const content = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join('\n');
+		render(ToolGroup, { steps: [{ ...step('w1', 'ok', 'write_file', { path: 'big.txt', content }), content: 'wrote' }] });
+		expect(screen.getAllByRole('row')).toHaveLength(20);
+		await fireEvent.click(screen.getByRole('button', { name: 'Show 20 more lines' }));
+		expect(screen.getAllByRole('row')).toHaveLength(40);
+	});
+
+	it('shows no change for a failed call', () => {
+		render(ToolGroup, { steps: [{ ...edit('@@ -1,1 +1,1 @@\n-a\n+b\n'), status: 'error' }] });
+		expect(screen.queryByRole('table')).toBeNull();
+	});
+
+	it('says what a folded group changed', () => {
+		render(ToolGroup, { steps: [step('a'), edit('@@ -1,1 +1,2 @@\n-a\n+b\n+c\n')] });
+		expect(screen.getByRole('button', { name: /2 tool calls/ }).textContent).toContain('+2 −1');
+	});
+});
+
 describe('ReasoningPart', () => {
 	it('shimmers "Thinking" while the thought runs, not after', async () => {
 		const part: Reasoning = { kind: 'reasoning', text: 'hmm', startedAt: 0 };

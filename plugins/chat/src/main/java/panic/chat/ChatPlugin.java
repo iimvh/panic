@@ -892,7 +892,8 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       }
       for (int i = 0; i < planned.size(); i++) {
         ToolResult r = results[i];
-        add(Message.tool(planned.get(i).call().id(), r.isError() ? Chat.TOOL_ERROR_PREFIX + r.content() : r.content()));
+        add(Message.tool(planned.get(i).call().id(), r.isError() ? Chat.TOOL_ERROR_PREFIX + r.content() : r.content(),
+            r.diff()));
       }
       for (ToolCall call : notRun) {
         add(Message.tool(call.id(), Chat.TOOL_ERROR_PREFIX + "not run, the turn was stopped (" + next + ")"));

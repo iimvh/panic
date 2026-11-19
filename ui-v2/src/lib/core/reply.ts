@@ -11,6 +11,8 @@ export type ToolStep = {
 	/** drafting: the model is still writing the call (`tool_delta` events), it has not run yet. */
 	status: 'drafting' | 'running' | 'ok' | 'error';
 	content?: string;
+	/** What the call changed in a file, as unified-diff hunks (`write_file`, `edit_file`); unset when nothing. */
+	diff?: string;
 	/** While drafting: the call's position in the model's reply, which pieces are matched by. */
 	draft?: number;
 	/** When this call runs a sub-agent: what it writes and the tools it calls, as they happen. */
@@ -238,6 +240,7 @@ export function toolStep(m: Message, d: Record<string, unknown>, now?: number) {
 		status: d.status === 'ok' || d.status === 'error' ? d.status : 'running',
 		content: d.content === undefined ? undefined : String(d.content)
 	};
+	if (typeof d.diff === 'string' && d.diff) step.diff = d.diff;
 	const into = d.parent ? subAgent(m, String(d.parent), d.agent) : m;
 	if (into) upsertStep(into, step, now);
 	if (step.status !== 'running') clearApproval(m, (a) => a.callId === step.id);
@@ -372,7 +375,7 @@ export function fromHistory(history: HistoryMessage[], id: () => number): Messag
 			const call = (a.parts ?? []).find((p) => p.kind === 'tool' && p.step.id === m.toolCallId && p.step.status === 'running');
 			const name = call?.kind === 'tool' ? call.step.name : '';
 			const args = call?.kind === 'tool' ? call.step.arguments : '';
-			toolStep(a, { id: m.toolCallId, name, arguments: args, status: m.status, content: m.content });
+			toolStep(a, { id: m.toolCallId, name, arguments: args, status: m.status, content: m.content, diff: m.diff });
 		} else if (m.role === 'review') {
 			review(reply(), { attempt: ++attempt, pass: false, reason: m.reason });
 		}

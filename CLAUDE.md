@@ -14,7 +14,8 @@ git submodule update --init          # z/ is a git submodule (github.com/iimvh/z
 ./gradlew :app:test --tests 'panic.app.ConventionsTest'             # architecture rules checker
 ./gradlew :app:run -q --console=plain                               # run Panic (REPL); needs panic.json (copy panic.example.json)
 ./gradlew :app:installDist && app/build/install/app/bin/app models free   # run one command and exit
-cd ui-v1 && npm run check && npm test   # UI type-check and vitest (needed when touching ui-v1/); `npm run dev` for the dev server
+cd ui-v2 && npm run check && npm test   # UI type-check, vitest (logic, layers, tokens, components); `npm run test:e2e` Playwright; `npm run dev` for the dev server
+cd ui-v1 && npm run check && npm test   # the archived UI
 node eval/run.mjs --app eval/.builds/new --variant full   # real-model runs on fixed tasks (API keys, not CI); see eval/README.md
 ```
 
@@ -27,7 +28,7 @@ Panic is a tree of plugins on the **z** lifecycle kernel (`z/java`: `core` = fib
 - `sdk/`: API for plugin authors only (`panic.command`, `panic.plugin`, `panic.trace`, and `panic.util` with `Json` and `CancelToken`). Depends on z and Jackson only. No features.
 - `app/`: discovers `PluginSet`s via `META-INF/services/panic.plugin.PluginSet`, loads `panic.json` (`ConfigLoader`), hot-reloads (`ConfigWatch`) and starts the tree. No features either, and no plugin names: without a `panic.json`, each `PluginSet.environment(env)` says which environment variables fill its sections (e.g. `LlmPlugins` maps `*_API_KEY` and `PANIC_MODEL`).
 - `plugins/<module>/`: one Gradle module per plugin family (llm, chat, tools, todo, memory, skills, planner, interact, mcp, workspace, verify, trace, agents, cli, web). Any folder with a `build.gradle.kts` is included automatically in `settings.gradle.kts`; nothing to register.
-- `ui-v1/`: SvelteKit SPA (Svelte 5 runes). Built and packed into the web plugin's jar; talks only to the `web` plugin's JSON + SSE API.
+- `ui-v2/`: SvelteKit SPA (Svelte 5 runes, Bits UI primitives), layered core / state / ui / features (see its README). Built and packed into the web plugin's jar (`-Pui=<folder>` picks the UI); talks only to the `web` plugin's JSON + SSE API. `ui-v1/` is the archived first UI.
 
 Plugins never call each other. They meet through z mechanisms: services (`ctx.provide`/`requires()`), hooks (`Hooks.bail`), events, commands (`Commands.command`), config (a record with `DEFAULT`, section named after the plugin), tasks (`ctx.spawn`) and trace spans. Because dependents start when a required service appears and stop when it goes, the tree reconfigures itself (e.g. changing the LLM restarts only the dependent branch). Request flow: front-ends (`cli`, `web`) only run commands or ask the `chat.ask` hook; `chat` runs the agent loop over the tools offered by `tool.list`/`tool.run` hooks, with `planner` answering `tool.gate` (plan mode), `permissions` answering `tool.policy`, `stop-hooks` answering `chat.stop`, `review` answering `chat.review`, and `tracing` collecting `trace.span` events. `instructions`, `memory` and `skills` add sections to the system prompt through `chat.context` (`Chat.contribute`), never through a service, so changing them restarts nothing else. A `/name` line that is no command but that `Prompts.EXPAND` (in `sdk`) answers, as `skills` does for a skill, is sent by the front-ends as a plain ask, and `chat` expands it when the turn starts.
 

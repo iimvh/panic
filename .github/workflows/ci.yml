@@ -36,7 +36,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: ui-v1/package-lock.json
+          cache-dependency-path: |
+            ui-v1/package-lock.json
+            ui-v2/package-lock.json
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
@@ -54,6 +56,24 @@ jobs:
         working-directory: ui-v1
         run: npm test
 
+      # ui-v2, beside ui-v1 until it becomes the default: types, unit and component tests, the size budget, and
+      # end-to-end tests on the built app with a scripted fake API (no server, no keys).
+      - name: UI v2 install
+        working-directory: ui-v2
+        run: npm ci --no-audit --no-fund
+
+      - name: UI v2 type check and tests
+        working-directory: ui-v2
+        run: npm run check && npm test
+
+      - name: UI v2 build and size budget
+        working-directory: ui-v2
+        run: npm run build && npm run budget
+
+      - name: UI v2 end-to-end tests
+        working-directory: ui-v2
+        run: npx playwright install --with-deps chromium && npm run test:e2e
+
       - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@v7
@@ -62,4 +82,6 @@ jobs:
           path: |
             **/build/reports/tests/
             **/build/test-results/
+            ui-v2/playwright-report/
+            ui-v2/test-results/
           retention-days: 7

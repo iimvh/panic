@@ -96,7 +96,8 @@ to make a change pass.
 ```bash
 ./gradlew check                     # Java tests (+ UI build); compiler warnings are errors
 ./gradlew check -PskipUi            # without Node
-cd ui-v1 && npm run check && npm test  # when you touch ui-v1/
+cd ui-v1 && npm run check && npm test  # when you touch ui-v1/ (archived: only to keep it building)
+cd ui-v2 && npm run check && npm test && npm run build && npm run budget && npm run test:e2e  # when you touch ui-v2/
 ```
 
 CI (`.github/workflows/ci.yml`, job **Build and test**) runs the same checks on every push to `master` and
@@ -111,8 +112,10 @@ every pull request. A change is not done until it passes.
 - Commits use Conventional Commits (`feat(web): ...`, `fix(llm): ...`, `docs: ...`), one logical change
   per commit. Do not add AI co-author trailers.
 - Work and commit directly on `master`. Do not create feature or phase branches.
-- The UI is in `ui-v1/` (SvelteKit SPA, Svelte 5 runes, plain scoped CSS). It talks only to the `web` plugin's
-  JSON + SSE API, never to anything else.
+- The UI is in `ui-v2/` (SvelteKit SPA, Svelte 5 runes, scoped CSS on the tokens of `src/app.css`; see its README
+  for the layers and design rules); `ui-v1/` is the archived first UI. Both talk only to the `web` plugin's
+  JSON + SSE API, never to anything else. When that API changes (an event, a field, an endpoint), change
+  `ui-v2/e2e/fake-api.ts` in the same commit, or the end-to-end tests test a server that no longer exists.
 
 ## Map
 

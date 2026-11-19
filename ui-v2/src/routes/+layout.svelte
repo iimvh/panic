@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { Tooltip } from 'bits-ui';
+	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { Inspector } from '$features/inspector';
 	import { Search } from '$features/search';
@@ -30,7 +31,8 @@
 	chat.onStarted = (id) => void goto(`/c/${id}`, { replaceState: true, keepFocus: true, noScroll: true });
 
 	$effect(() => {
-		void chat.init();
+		// once per page: nothing chat.init reads may make this run again
+		untrack(() => void chat.init());
 		// what runs on the server can change from elsewhere (panic.json, the CLI): look again now and then
 		const timer = setInterval(() => void chat.refresh(), 15_000);
 		const visible = () => document.visibilityState === 'visible' && void chat.refresh();

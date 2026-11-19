@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import type { Model, SettingsChange } from '$lib/core/api';
 	import { chat } from '$lib/state/chat.svelte';
 	import { layout } from '$lib/state/layout.svelte';
@@ -18,15 +19,18 @@
 	let error = $state<string | null>(null);
 	let saving = $state(false);
 
-	// each opening starts from what runs now; the model's details are looked up after it starts, so ask again
+	// each opening starts from what runs now; the model's details are looked up after it starts, so ask again.
+	// Only the opening runs this: a state refresh (the poll, or the one asked here) must not reset what is typed.
 	$effect(() => {
 		if (!layout.settings) return;
-		provider = chat.state?.provider ?? '';
-		model = chat.state?.model ?? '';
-		effort = chat.state?.reasoningEffort ?? 'off';
-		models = null;
-		error = null;
-		void chat.refresh();
+		untrack(() => {
+			provider = chat.state?.provider ?? '';
+			model = chat.state?.model ?? '';
+			effort = chat.state?.reasoningEffort ?? 'off';
+			models = null;
+			error = null;
+			void chat.refresh();
+		});
 	});
 
 	const providers = $derived(chat.state?.providers ?? []);

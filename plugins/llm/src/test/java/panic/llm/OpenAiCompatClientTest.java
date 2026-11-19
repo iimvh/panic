@@ -417,6 +417,22 @@ class OpenAiCompatClientTest {
   }
 
   @Test
+  void usageReadsCachedPromptTokens() throws Exception {
+    // OpenAI-style prompt_tokens_details first, DeepSeek's prompt_cache_hit_tokens when that is absent
+    for (String usage : List.of("{\"prompt_tokens\":100,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":64}}",
+        "{\"prompt_tokens\":100,\"completion_tokens\":2,\"prompt_cache_hit_tokens\":64,\"prompt_cache_miss_tokens\":36}")) {
+      try (FakeServer server = new FakeServer(ex -> FakeServer.sse(ex,
+          "{\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":" + usage + "}",
+          "[DONE]"))) {
+        Completion c = new OpenAiCompatClient("fake", server.url(), "k")
+            .stream(HELLO, new CancelToken(), d -> { }, d -> { }, d -> { });
+        assertEquals(64, c.usage().cachedTokens(), usage);
+        assertEquals(100, c.usage().promptTokens());
+      }
+    }
+  }
+
+  @Test
   void completeReadsReasoning() throws Exception {
     try (FakeServer server = new FakeServer(ex -> FakeServer.json(ex, 200, """
         {"model":"m-1","choices":[{"message":{"role":"assistant","content":"391","reasoning":"17*23"},

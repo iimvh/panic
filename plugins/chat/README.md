@@ -7,7 +7,7 @@ Conversation history and the chat bot, an agent loop that calls tools.
 | Name | Config | Requires | Provides / registers |
 | --- | --- | --- | --- |
 | `conversations` | `ConversationsConfig { dir = ".panic/conversations", persist = true }` | none | service `Conversations.KEY` (on disk, or in memory with `persist: false`); event `Conversations.DELETED`; hooks `Conversations.LIST`, `HISTORY`, `REMOVE`; commands `reset`, `chats`, `forget` |
-| `chat` | `ChatConfig { systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats, contextTokens, compact, maxReviews, parallelTools, clearToolResultsAt, keepToolResults }` | `Llm.KEY`, `Conversations.KEY` | hook `Chat.ASK`; events `Chat.TURN`, `Chat.STEP`, `Chat.REVIEWED`, `Trace.SPAN`; command `ask`. Collects hooks `Chat.CONTEXT` and `Chat.STOP`, asks hook `Chat.REVIEW` |
+| `chat` | `ChatConfig { systemPrompt, maxHistory, tools, maxSteps, maxTokens, toolTimeoutSeconds, maxToolOutput, maxRepeats, contextTokens, compact, maxReviews, parallelTools, clearToolResultsAt, keepToolResults, editing { resources, compact } }` | `Llm.KEY`, `Conversations.KEY` | hook `Chat.ASK`; events `Chat.TURN`, `Chat.STEP`, `Chat.REVIEWED`, `Trace.SPAN`; command `ask`. Collects hooks `Chat.CONTEXT` and `Chat.STOP`, asks hook `Chat.REVIEW` |
 
 `conversations` does not depend on the LLM, so history survives a provider or model switch (which restarts
 `chat`).
@@ -55,6 +55,7 @@ until the model answers or a limit stops it:
 | `budget` | The tokens of the turn reached `maxTokens` (default 400000; `0` = no budget) |
 | `rejected` | The reviewer still rejected the answer after `maxReviews` retries (or no step was left for one). `Reply.review` holds its reason |
 | `truncated` | The model's reply was cut at the output limit (`llm.maxTokens`) `Chat.TRUNCATIONS_IN_A_ROW` (3) times in a row |
+| `stalled` | `Chat.STALL_STOP_CALLS` (30) tool calls in a row brought nothing new to the turn (see below) |
 
 **Only hard limits stop a turn.** This follows proven harnesses:
 
@@ -67,7 +68,16 @@ A repeated call is feedback, not a stop. The same call (name and arguments, key 
 `maxRepeats` times in a row (default 2) is refused with `error: the same call was made N times in a row; change the
 arguments or answer with what you have`, and the turn goes on, so a model that changes course recovers.
 
-**A turn stopped by a limit closes with a note for the user.** When `max_steps` or `budget` stops a turn before
+**Going round in circles stops the turn.** A model can also repeat itself without two identical calls in a row:
+read seven files in turn, again and again (the trace of 2026-11-18: 795 reads of the same 7 files, no code). So the
+turn counts the tool results that bring nothing it has not seen: lines of a file version all shown before (by the
+result's `Resource`; reading a file again in other slices is nothing new, as on 2026-11-19 when slices 1-40, 40-80,
+... of a file kept resetting the count), or the same output of the same tool. After `Chat.STALL_FEEDBACK_CALLS` (15) of them in a row
+the model is told (a user message starting `Chat.STALL_FEEDBACK_PREFIX`, the harness speaking, see
+`Chat.fromHarness`); after `Chat.STALL_STOP_CALLS` (30) the turn stops with `stalled`. Any new result resets the
+count.
+
+**A turn stopped by a limit closes with a note for the user.** When `max_steps`, `budget` or `stalled` stops a turn before
 the model answered, or `truncated` stops it, `Reply.text` is a note written by the harness, not the model:
 `Stopped after 25 steps (max_steps) before finishing. Tools run this turn: read_file ×7, write_file ×2. Say
 "continue" to go on from here.` It is also streamed through `onDelta`. It is never saved in the conversation, so
@@ -152,8 +162,14 @@ reach the reviewer as `Review.evidence`. A check that failed is reported as a fa
 
 ## The context window
 
-Every request stays under `contextTokens` estimated tokens (default 32000; `0` turns the limit off and only
-`maxHistory` applies). Set it below the model's context length, leaving room for the answer (`llm.maxTokens`).
+Every request stays under the turn's budget of estimated tokens: `contextTokens` when it is a positive number, no
+limit when `0` (only `maxHistory` applies), and when left out the model's own window, `Llm.inputWindow()` (its context
+length less `llm.maxTokens`, see the llm README), at most 200000 (`AUTO_MAX_CONTEXT_TOKENS`: each step sends the
+whole request again, and models recall less from very long contexts), or 32000 while the window is unknown. The
+`turn` span records it as `contextTokens`. Prefer leaving it out: a budget below the files a task needs at once makes
+the model re-read them in a cycle whatever is cleared (on 2026-11-19 a 32K budget left DeepSeek V4.1, a 128K model,
+reading the same 7 files for 150 steps). Where the provider's model list gives no context length, set
+`llm.contextWindow`.
 
 - **Estimate.** About four characters per token plus 4 per message, tool definitions included. The estimate is
   scaled by a ratio learned from the prompt tokens the provider reports (kept between 0.5 and 3, learned again
@@ -179,12 +195,49 @@ Every request stays under `contextTokens` estimated tokens (default 32000; `0` t
   - **Never from nothing.** When not even the last earlier turn fits half the budget (one turn with many tool
     calls), its question and final answer are kept as a short turn after the summary (`kept` 0 is no longer
     possible while that turn has an answer); its tool calls are covered by the summary.
-- **Tool result clearing** (after Anthropic's context editing, `clear_tool_uses`). Once a request is estimated
-  over `clearToolResultsAt` tokens (default half of `contextTokens`; `0` = never), every tool result but the
-  newest `keepToolResults` (default 3) is sent as `[tool result cleared to save context (N chars); call the tool
-  again if you need it]`. This covers the current turn too, where a long task piles up file contents and command
-  output that every model call would otherwise send again. Only the request changes: the conversation keeps the
-  results, and a result shorter than the placeholder is left as is. The `llm` span records `clearedToolResults`.
+- **Tool result clearing** (`ContextEditor`). File contents and command output are what fill a long turn, and
+  every model call sends them again, so some must give way; which ones decides whether the model can still act. An
+  agent whose working set (the files it needs at once) no longer fits re-reads them in a cycle: on 2026-11-18 the
+  old rule (once the turn passed half the budget, every result but the newest 3 cleared, on every call) made each
+  read evict the next file needed, 795 reads of 7 files and no code. Now:
+  - **Hysteresis.** Results are cleared only when the request *as it will be sent* is estimated over
+    `clearToolResultsAt` (default three quarters of the budget; `0` = never), and then only until it is under
+    two thirds of that, never the newest `keepToolResults` (default 3). A result once cleared stays cleared for the
+    turn, so requests keep a stable prefix (the provider's prompt cache, see `cachedTokens`) and clearing happens in
+    rare batches.
+  - **Oldest first, never by rank.** Which result gives way barely matters: when the working set fits, nothing has
+    to go, and when it does not, any order makes the model re-read in a cycle. Ranking by value (stale views first)
+    and pinning files read again were measured (E1 and real runs, `eval/`) and removed: they never changed an
+    outcome. What helps is what makes the context smaller, the next points.
+  - **Resources** (`editing.resources`). Tools that say what a result shows (`Resource` in `plugins/tools`:
+    `read_file` gives the file, the lines and a hash of the content; `write_file`/`edit_file` the new hash) get two
+    things. Reading again lines that a visible view already shows, unchanged, gets `[unchanged: PATH lines A-B are
+    exactly as in your read_file result of step N...]` instead of the text, and a cleared view of a file that changed
+    since says `[read_file result cleared: PATH changed after this read (step N)...]`.
+  - **Outlines, not blanks** (`editing.compact`). A cleared result whose tool gave a compact form (`read_file`: the
+    file's outline, its declarations with line numbers) shows that form instead of a placeholder, so the model keeps
+    a map of the file and reads back only the part it needs. When clearing results is not enough, outlines shrink to
+    placeholders too, a file's older outlines first.
+  - Other results say `[TOOL result cleared to save context (N chars); it was shown before: call it again only if
+    you need the exact text]`. Only the request changes: the conversation keeps the results. `editing` exists to
+    measure each mechanism (`eval/`); `{"resources": false, "compact": false}` is clearing by age with
+    hysteresis only. The `llm` span records `clearedToolResults`, `compactedToolResults` and `summarisedMessages`; the
+    `tool` span `resource`, `version`, `lines`, `unchanged` and `refetch` (reading again a file whose view was cleared
+    or summarised: thrashing shows here); the `turn` span `refetches`, `unchanged` and `turnCompactions`.
+- **Summaries within a turn** (`compact`, `TurnCompaction`). Clearing cannot bound a long turn: every step still
+  leaves its assistant message, its call's arguments and a placeholder, so the request grows with the steps and the
+  room left for the files the model needs shrinks until it re-reads them. When a request is still over
+  `clearToolResultsAt` after clearing, the turn's oldest steps not yet summarised are, keeping the newest ones up to a
+  third of `clearToolResultsAt` (always at least the last step, and cut only before an assistant message, so no call
+  loses its results). The model writes the summary (`TurnCompaction.PROMPT`: goal, done, findings with paths, next;
+  built on the previous one, no thinking, at most 2048 tokens, counted in `usage`), and the editor adds what is exact
+  where a summary may not be: the files changed with their last version, the files read, the calls per tool, and the
+  outlines of files whose every view was summarised (newest first, up to a sixth of `clearToolResultsAt`: the map is
+  kept, the trail dropped). If the model fails, that list alone stands for the steps. Requests then carry the
+  turn's first messages (the question word for word, a slash prompt), the progress (`[Progress so far: ...]`, joined
+  to the question since some providers refuse two user messages in a row), then the newest steps. The conversation
+  keeps every step; only requests change. Sub-agents' turns are summarised too. The span is `compaction` with `scope`
+  `turn`, `messages`, `kept`, `before`, `after` and `summary` false when only the list stands.
 
 ## Slash prompts
 
@@ -218,12 +271,12 @@ The trace id is `Ask.traceId` when the asker gives one (web does, to tell the UI
 
 | Span | Parent | Attributes |
 | --- | --- | --- |
-| `turn` | none (root); a sub-agent's under the `tool` span that runs it | `conversationId`, `question` (first 200 chars), `prompt` (a [slash prompt](#slash-prompts)'s name), `questionHash` (`Trace.QUESTION_HASH`, from `Trace.questionHash`), `model`, `stop`, `steps`, `toolCalls`, `promptTokens`, `completionTokens` (whole turn), `saved`; `agent`, `origin` for a sub-agent |
-| `llm` | `turn` | `step`, `messages`, `clearedToolResults` (when any), `model`, `finishReason`, `promptTokens`, `completionTokens`, `toolCalls`, `firstTokenMicros` (first text, reasoning or tool-call piece), and when the model thought: `firstReasoningMicros`, `reasoningChars`, `reasoningTokens` (sizes only, never the text) |
-| `tool` | `turn` | `tool`, `callId`, `approvalMicros` (until the tool started), `outputChars`, `truncated`, `refused` (a repeated call, or a tool a sub-agent may not use), `timedOut`, `promptTokens` / `completionTokens` (a tool's own spending). An error result is an `ERROR` span |
+| `turn` | none (root); a sub-agent's under the `tool` span that runs it | `conversationId`, `question` (first 200 chars), `prompt` (a [slash prompt](#slash-prompts)'s name), `questionHash` (`Trace.QUESTION_HASH`, from `Trace.questionHash`), `model`, `stop`, `steps`, `toolCalls`, `promptTokens`, `completionTokens`, `cachedTokens` (whole turn), `contextTokens` (the turn's budget, 0 = none), `refetches`, `unchanged`, `turnCompactions` (when any), `saved`; `agent`, `origin` for a sub-agent |
+| `llm` | `turn` | `step`, `messages`, `clearedToolResults`, `compactedToolResults`, `summarisedMessages` (when any), `model`, `finishReason`, `promptTokens`, `completionTokens`, `toolCalls`, `firstTokenMicros` (first text, reasoning or tool-call piece), and when the model thought: `firstReasoningMicros`, `reasoningChars`, `reasoningTokens` (sizes only, never the text), `cachedTokens` (when the provider served part of the prompt from its cache) |
+| `tool` | `turn` | `tool`, `callId`, `approvalMicros` (until the tool started), `outputChars`, `truncated`, `refused` (a repeated call, or a tool a sub-agent may not use), `timedOut`, `promptTokens` / `completionTokens` (a tool's own spending), and when the result names a `Resource`: `resource`, `version`, `lines`, `unchanged` (answered with a pointer), `refetch` (read again after its view was cleared or summarised). An error result is an `ERROR` span |
 | `stop` | `turn` | `attempt`, `checks`, `blocked`, `names`, `reason` (the first block's). `ERROR` when a check failed. Only when a check answered |
 | `review` | `turn` | `attempt`, `verdict` (`pass` / `fail`), `pass`, `reason`, `promptTokens`, `completionTokens`. Only when a reviewer judged (or failed) |
-| `compaction` | `turn` | `messages` (summarised), `kept`, `condensed` (the last turn kept as question and answer), `applied`, `model`, tokens. `ERROR` when the model gave no summary |
+| `compaction` | `turn` | `messages` (summarised), `kept`, `condensed` (the last turn kept as question and answer), `applied`, `model`, tokens. `ERROR` when the model gave no summary. Within a turn: `scope` `turn`, `messages`, `kept`, `before`, `after` (estimated tokens), `summary` false when only the tools' list stands |
 
 A span ends `CANCELLED` when the turn was cancelled, `ERROR` when its work threw.
 

@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
 
 /**
  * The sub-agents the model may start, by name: {@code profiles = {"explore": {"description": "...", "tools":
- * ["read_file", "list_dir"]}}}. With {@code general} (default true) there is also {@code general}, which gets
+ * ["read_file", "list_dir", "grep", "glob"]}}}. With {@code general} (default true) there is also {@code general}, which gets
  * every tool and the instructions the model writes for it.
  *
  * {@code maxDepth}: how deep sub-agents nest (default 1: a sub-agent cannot start another one).

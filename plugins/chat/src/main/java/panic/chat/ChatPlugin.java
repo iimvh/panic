@@ -33,6 +33,7 @@ import panic.llm.Role;
 import panic.llm.ToolCall;
 import panic.llm.ToolSpec;
 import panic.llm.Usage;
+import panic.tools.Resource;
 import panic.tools.ToolContext;
 import panic.tools.ToolResult;
 import panic.tools.Tools;
@@ -45,11 +46,12 @@ import panic.trace.Trace;
  * included, so the model can recover) and calls the model again, until it answers or a limit of
  * {@link ChatConfig} stops it. History is kept in {@link Conversations}, the whole turn appended at once.
  *
- * Each request is kept under {@link ChatConfig#contextTokens}: the system prompt (with the sections other
- * plugins add through {@link Chat#CONTEXT}) and the current turn are always sent, the newest earlier turns that
- * fit come after the prompt. When turns no longer fit, they are summarised by the model once into the
- * conversation's summary (see {@link Conversation#compact}), down to half the budget so that this does not
- * happen on every ask.
+ * Each request is kept under the turn's {@link ChatConfig.Budget} (the config's, or the model's window): the system
+ * prompt (with the sections other plugins add through {@link Chat#CONTEXT}) and the current turn are always sent,
+ * the newest earlier turns that fit come after the prompt. When turns no longer fit, they are summarised by the
+ * model once into the conversation's summary (see {@link Conversation#compact}), down to half the budget so that
+ * this does not happen on every ask. A turn that alone outgrows the budget has its older steps summarised while it
+ * runs ({@link TurnCompaction}).
  *
  * A final answer is put to {@link Chat#REVIEW} when someone answers it (the reviewer of {@code plugins/verify}
  * does when the conversation has acceptance criteria). A rejection is streamed to the asker and sent back to the
@@ -122,9 +124,6 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
   /** Heading of the user messages that {@link #verbatim} adds when the summary left them out. */
   static final String VERBATIM_HEADING = "User messages (word for word)";
 
-  /** What a cleared tool result says instead (Anthropic's context editing replaces them with a placeholder too). */
-  static final String CLEARED = "[tool result cleared to save context (%d chars); call the tool again if you need it]";
-
   /** Heading of the summary in the system prompt. */
   static final String SUMMARY_HEADING = "Summary of the earlier conversation";
 
@@ -175,27 +174,6 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     return answer == null ? List.of() : List.of(turns.get(start), Message.assistant(answer.content()));
   }
 
-  /**
-   * Replaces, in {@code messages}, every tool result but the newest {@code keep} by a {@link #CLEARED}
-   * placeholder, as Anthropic's {@code clear_tool_uses} context edit does: old file contents and command outputs
-   * are what fills a long turn, and the model can call the tool again. Results already short are left as they
-   * are. Returns how many were cleared.
-   */
-  static int clearToolResults(List<Message> messages, int keep) {
-    int seen = 0;
-    int count = 0;
-    for (int i = messages.size() - 1; i >= 0; i--) {
-      Message m = messages.get(i);
-      if (m.role() != Role.TOOL) continue;
-      if (++seen <= keep) continue;
-      String placeholder = String.format(java.util.Locale.ROOT, CLEARED, m.content().length());
-      if (m.content().length() <= placeholder.length()) continue;
-      messages.set(i, Message.tool(m.toolCallId(), placeholder));
-      count++;
-    }
-    return count;
-  }
-
   static String clip(String text) {
     if (text.length() <= SUMMARY_MESSAGE_CHARS) return text;
     return text.substring(0, SUMMARY_MESSAGE_CHARS) + " … [" + (text.length() - SUMMARY_MESSAGE_CHARS)
@@ -216,6 +194,16 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
 
     /** System prompt and contributed sections, without the summary. Fixed for the whole turn. */
     private String prompt;
+    /** This turn's context limits, from the config and the model's window. Fixed for the whole turn. */
+    private ChatConfig.Budget budget;
+    /** Messages of {@link #added} before the first model call (the question, a slash prompt): never summarised. */
+    private int head;
+    /** {@link #added}{@code [head, turnCut)} were summarised into {@link #progress}; 0 = none. */
+    private int turnCut;
+    /** The model's summary of the summarised steps (null when it failed), and what the requests show for them. */
+    private String turnSummary;
+    private String progress;
+    private int turnCompactions;
     private String summary;
     private List<Message> history = List.of();
     private final List<Message> added = new ArrayList<>();
@@ -228,6 +216,14 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private int reviews;
     /** Replies cut at the output limit in a row; any reply that finishes resets it. */
     private int truncations;
+    /** Chooses the tool results the requests show in full; guarded by itself (calls may run in parallel). */
+    private final ContextEditor editor;
+    /** What the turn's tool results have shown: the lines of each file version, and other output by content. */
+    private final java.util.Map<String, java.util.BitSet> seenLines = new java.util.HashMap<>();
+    private final java.util.Set<String> seen = new java.util.HashSet<>();
+    /** Tool results in a row that brought nothing {@link #seen} lacked; whether the model was told. */
+    private int noNews;
+    private boolean toldStalled;
     private String review;
     private int steps;
     private String stop = Chat.DONE;
@@ -246,6 +242,8 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       this.tokens = tokens;
       this.ask = ask;
       this.signal = new CancelToken();
+      ChatConfig.Editing e = cfg.editing();
+      this.editor = new ContextEditor(new ContextEditor.Options(e.resources(), e.compact()));
     }
 
     /** Cancelled by the asker or by the plugin's disposal; the links are removed when the turn ends. */
@@ -277,13 +275,16 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       Conversation conversation = conversations.get(ask.conversationId());
       if (ask.delegate() != null) conversation.parent(ask.delegate().origin()); // kept out of listings
       prompt = prompt();
+      budget = cfg.budget(llm.inputWindow());
+      span.attr("contextTokens", budget.contextTokens());
       Conversation.Snapshot snapshot = conversation.snapshot();
       summary = snapshot.summary();
       history = snapshot.messages();
       add(Message.user(ask.text()));
       if (ask.delegate() == null) expand(); // a sub-agent's task is the model's text: it never triggers a prompt
+      head = added.size();
       // a sub-agent's conversation lives for one task: nothing to gain from summarising it
-      if (cfg.limitsContext() && cfg.compact() && ask.delegate() == null) compact(conversation);
+      if (budget.limited() && cfg.compact() && ask.delegate() == null) compact(conversation);
 
       Completion last;
       while (true) {
@@ -358,12 +359,13 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private String closing(String answer) {
       if (ask.delegate() != null) return null;
       boolean cut = Chat.TRUNCATED.equals(stop);
-      if (!cut && !(Chat.MAX_STEPS.equals(stop) || Chat.BUDGET.equals(stop))) return null;
+      if (!cut && !(Chat.MAX_STEPS.equals(stop) || Chat.BUDGET.equals(stop) || Chat.STALLED.equals(stop))) return null;
       // a cut answer is no answer: the note says why it stops mid-way
       if (!cut && answer != null && !answer.isBlank()) return null;
       String why = cut ? "because the model's reply was cut at the output token limit " + truncations
           + " times in a row (raise llm.maxTokens, the most it may write in one reply)"
           : Chat.MAX_STEPS.equals(stop) ? "after " + steps + " steps (max_steps)"
+          : Chat.STALLED.equals(stop) ? "after " + noNews + " tool calls in a row that brought nothing new (stalled)"
           : "after using " + usage.totalTokens() + " tokens (budget)";
       StringBuilder out = new StringBuilder("Stopped ").append(why).append(" before finishing.");
       if (!ran.isEmpty()) {
@@ -427,6 +429,8 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private Completion callModel(ChatRequest request) {
       OpenSpan call = span.child("llm").attr("step", steps).attr("messages", request.messages().size());
       if (cleared > 0) call.attr("clearedToolResults", cleared);
+      if (compacted > 0) call.attr("compactedToolResults", compacted);
+      if (turnCut > 0) call.attr("summarisedMessages", turnCut - head);
       long[] first = {-1};
       long[] firstReasoning = {-1};
       Runnable mark = () -> {
@@ -453,6 +457,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       if (firstReasoning[0] >= 0) call.attr("firstReasoningMicros", firstReasoning[0]);
       if (!c.reasoning().isEmpty()) call.attr("reasoningChars", c.reasoning().length());
       if (c.usage().reasoningTokens() > 0) call.attr("reasoningTokens", c.usage().reasoningTokens());
+      if (c.usage().cachedTokens() > 0) call.attr("cachedTokens", c.usage().cachedTokens());
       call.attr("model", c.model()).attr("finishReason", c.finishReason())
           .attr("promptTokens", c.usage().promptTokens()).attr("completionTokens", c.usage().completionTokens())
           .attr("toolCalls", c.toolCalls().size())
@@ -464,7 +469,13 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     private void summarise() {
       span.attr("model", model).attr("stop", stop).attr("steps", steps).attr("toolCalls", toolCalls)
           .attr("promptTokens", usage.promptTokens()).attr("completionTokens", usage.completionTokens())
+          .attr("cachedTokens", usage.cachedTokens())
           .attr(Trace.SAVED, saved);
+      synchronized (editor) {
+        if (editor.refetches() > 0) span.attr("refetches", editor.refetches());
+        if (editor.unchangedHits() > 0) span.attr("unchanged", editor.unchangedHits());
+      }
+      if (turnCompactions > 0) span.attr("turnCompactions", turnCompactions);
     }
 
     /** Ends {@code s} as failed; anything thrown once the turn was cancelled counts as the cancellation. */
@@ -580,41 +591,118 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     }
 
     /**
-     * The request for the next model call: system message, the earlier turns that fit, then the whole current
-     * turn. Built again for every call, as the turn grows and tools come and go.
+     * The request for the next model call: system message, the earlier turns that fit, then the current turn (its
+     * older steps summarised once it no longer fits). Built again for every call, as the turn grows and tools come
+     * and go. When clearing tool results cannot bring it under the budget, the turn's older steps are summarised
+     * first and the request is built again.
      */
     private ChatRequest request() {
+      ChatRequest request = build();
+      if (budget.limited() && cfg.compact() && estimate > turnTrigger()) {
+        OpenSpan s = compactTurn();
+        if (s != null) {
+          request = build();
+          s.attr("after", estimate).end();
+        }
+      }
+      return request;
+    }
+
+    private ChatRequest build() {
       List<ToolSpec> specs = specs();
       Message system = system();
       List<Message> messages = new ArrayList<>();
       if (system != null) messages.add(system);
       messages.addAll(fit(system, specs, 1, cfg.maxHistory()).kept());
-      messages.addAll(added);
+      messages.addAll(view());
       cleared = 0;
-      if (cfg.clearToolResultsAt() > 0) {
-        long estimate = tokens.estimate(messages) + (long) tokens.estimateTools(specs);
-        if (estimate > cfg.clearToolResultsAt()) cleared = clearToolResults(messages, cfg.keepToolResults());
+      compacted = 0;
+      estimate = 0;
+      if (budget.limited()) {
+        ContextEditor.Applied applied;
+        synchronized (editor) {
+          applied = editor.apply(messages, tokens::estimate, tokens.estimateTools(specs), budget.clearAt(),
+              budget.target(), cfg.keepToolResults());
+        }
+        cleared = applied.cleared();
+        compacted = applied.compacted();
+        estimate = applied.estimate();
       }
       ChatRequest request = ChatRequest.of(messages);
       return specs.isEmpty() ? request : request.withTools(specs, null);
     }
 
-    /** Tool results the last request sent as placeholders (for the {@code llm} span). */
+    /** Tool results the last request sent cleared, of them with their compact form, and its estimated tokens. */
     private int cleared;
+    private int compacted;
+    private int estimate;
 
+    /** The current turn as requests show it: {@link #added}, its older steps summarised when they had to be. */
+    private List<Message> view() {
+      return TurnCompaction.view(added, head, turnCut, progress);
+    }
+
+    /** Past this, clearing could not make room: the turn's older steps must be summarised. */
+    private int turnTrigger() {
+      return budget.clearAt() > 0 ? budget.clearAt() : budget.contextTokens();
+    }
+
+    /**
+     * Summarises the oldest steps of this turn not yet summarised, keeping the newest ones up to a quarter of the
+     * budget's clearing target (so that the next summary is far off), into {@link #progress}: the model's summary,
+     * with the previous one, and the editor's manifest. If the model fails, the manifest alone stands for those
+     * steps, so the request still fits. Returns the open {@code compaction} span, or null when nothing could be cut
+     * (only the newest step left); a cancelled ask is thrown.
+     */
+    private OpenSpan compactTurn() {
+      int from = Math.max(head, turnCut);
+      int keep = (budget.clearAt() > 0 ? budget.target() : budget.contextTokens() / 2) / 2;
+      int cut = TurnCompaction.cut(added.subList(from, added.size()), tokens::estimate, keep);
+      if (cut <= 0) return null;
+      List<Message> steps = List.copyOf(added.subList(from, from + cut));
+      OpenSpan s = span.child("compaction").attr("scope", "turn").attr("messages", steps.size())
+          .attr("kept", added.size() - from - cut).attr("before", estimate);
+      StringBuilder preface = new StringBuilder("The user's request:\n");
+      for (Message m : added.subList(0, head)) {
+        if (m.role() == Role.USER) preface.append(clip(m.content())).append('\n');
+      }
+      if (turnSummary != null) preface.append("\nProgress summary so far:\n").append(turnSummary).append('\n');
+      String next;
+      try {
+        next = summarize(TurnCompaction.PROMPT, preface.toString(), steps, s);
+      } catch (RuntimeException e) {
+        fail(s, e);
+        throw e;
+      }
+      List<String> callIds = new ArrayList<>();
+      for (Message m : steps) {
+        if (m.role() == Role.TOOL) callIds.add(m.toolCallId());
+      }
+      String manifest;
+      synchronized (editor) {
+        editor.forget(callIds);
+        manifest = editor.manifest() + "\n\n" + editor.outlines(tokens::estimate, keep / 2);
+      }
+      if (next != null) turnSummary = next;
+      else s.attr("summary", false); // the manifest alone stands for these steps
+      progress = TurnCompaction.progress(turnSummary, manifest);
+      turnCut = from + cut;
+      turnCompactions++;
+      return s;
+    }
 
     /**
      * The earlier turns that fit {@code share} of what the budget leaves after the system message, the tools
      * and the current turn (which are always sent, even over budget), and at most {@code maxMessages} (0 = any).
      */
     private ContextWindow.Fit fit(Message system, List<ToolSpec> specs, double share, int maxMessages) {
-      int budget = Integer.MAX_VALUE;
-      if (cfg.limitsContext()) {
+      int room = Integer.MAX_VALUE;
+      if (budget.limited()) {
         long fixed = (system == null ? 0 : tokens.estimate(system)) + (long) tokens.estimateTools(specs)
-            + tokens.estimate(added);
-        budget = (int) Math.max(0, (cfg.contextTokens() - fixed) * share);
+            + tokens.estimate(view());
+        room = (int) Math.max(0, (budget.contextTokens() - fixed) * share);
       }
-      return ContextWindow.fit(history, maxMessages, budget, tokens::estimate);
+      return ContextWindow.fit(history, maxMessages, room, tokens::estimate);
     }
 
     /**
@@ -631,7 +719,8 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
           .attr("kept", target.kept().size());
       String next;
       try {
-        next = summarize(target.dropped(), s);
+        next = summarize(SUMMARY_PROMPT, summary == null ? null : "Summary so far:\n" + summary + "\n",
+            target.dropped(), s);
       } catch (RuntimeException e) {
         fail(s, e);
         throw e;
@@ -650,11 +739,14 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       else s.end();
     }
 
-    /** The new summary, or null when the model failed (noted on {@code s}); a cancelled ask is thrown. */
-    private String summarize(List<Message> turns, OpenSpan s) {
-      int maxTokens = Math.max(256, Math.min(2_048, cfg.contextTokens() / 8));
+    /**
+     * The model's summary, as {@code instructions} ask, of {@code turns} after {@code preface} (what it builds on);
+     * null when the model failed (noted on {@code s}). A cancelled ask is thrown.
+     */
+    private String summarize(String instructions, String preface, List<Message> turns, OpenSpan s) {
+      int maxTokens = Math.max(256, Math.min(2_048, budget.contextTokens() / 8));
       ChatRequest request = new ChatRequest(
-          List.of(Message.system(SUMMARY_PROMPT), Message.user(transcript(turns))), null, null, maxTokens)
+          List.of(Message.system(instructions), Message.user(transcript(preface, turns))), null, null, maxTokens)
           // a summary needs no thinking, and thinking would spend the small limit before the summary is written
           .withReasoningEffort(ChatRequest.NO_REASONING_EFFORT);
       try {
@@ -672,12 +764,12 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
     }
 
     /**
-     * The turns to summarise as plain text, after the previous summary. Kept under about half the context
-     * budget: long messages are cut, and when that is not enough the oldest part goes.
+     * The turns to summarise as plain text, after {@code preface} (the previous summary). Kept under about half the
+     * context budget: long messages are cut, and when that is not enough the oldest part goes.
      */
-    private String transcript(List<Message> turns) {
+    private String transcript(String preface, List<Message> turns) {
       StringBuilder out = new StringBuilder();
-      if (summary != null) out.append("Summary so far:\n").append(summary).append("\n\n");
+      if (preface != null) out.append(preface).append('\n');
       out.append("Conversation to add:\n");
       for (Message m : turns) {
         String content = clip(m.content());
@@ -694,7 +786,7 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
           default -> out.append(m.role().wire()).append(": ").append(content).append('\n');
         }
       }
-      long max = Math.max(8_000L, cfg.contextTokens() * 2L);
+      long max = Math.max(8_000L, budget.contextTokens() * 2L);
       if (out.length() > max) {
         int cut = (int) (out.length() - max);
         return "[" + cut + " older chars left out]\n" + out.substring(cut);
@@ -793,7 +885,49 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       for (ToolCall call : notRun) {
         add(Message.tool(call.id(), Chat.TOOL_ERROR_PREFIX + "not run, the turn was stopped (" + next + ")"));
       }
+      if (Chat.DONE.equals(next)) next = stalled();
       return next;
+    }
+
+    /**
+     * {@link Chat#STALLED} once the tool results have brought nothing new for {@link Chat#STALL_STOP_CALLS} calls in
+     * a row; at {@link Chat#STALL_FEEDBACK_CALLS} the model is told, once per stall. {@link Chat#DONE} otherwise.
+     */
+    private String stalled() {
+      if (noNews >= Chat.STALL_STOP_CALLS) return Chat.STALLED;
+      if (noNews >= Chat.STALL_FEEDBACK_CALLS && !toldStalled) {
+        toldStalled = true;
+        add(Message.user(Chat.STALL_FEEDBACK_PREFIX + ": the last " + noNews + " tool results only repeat what you "
+            + "have already seen this turn (the same file parts, the same outputs). Stop exploring: make the change "
+            + "with what you know, or answer. After " + (Chat.STALL_STOP_CALLS - noNews) + " more calls without "
+            + "anything new, the turn stops."));
+      }
+      return Chat.DONE;
+    }
+
+    /**
+     * Notes whether {@code result} (as the model will read it) shows anything the turn had not seen: for a file view,
+     * lines of that version not shown before (reading a file again in other slices brings nothing); for any other
+     * result, other content.
+     */
+    private void news(ToolCall call, ToolResult result, String content, boolean pointer) {
+      Resource r = result.resource();
+      boolean fresh;
+      if (pointer) {
+        fresh = false;
+      } else if (r != null && r.isView()) {
+        fresh = seenLines.computeIfAbsent(r.key() + "@" + r.version(), k -> new java.util.BitSet())
+            .nextClearBit(r.from()) <= r.to();
+        seenLines.get(r.key() + "@" + r.version()).set(r.from(), r.to() + 1);
+      } else {
+        fresh = seen.add(call.name() + "#" + content.hashCode() + ":" + content.length());
+      }
+      if (fresh) {
+        noNews = 0;
+        toldStalled = false;
+      } else {
+        noNews++;
+      }
     }
 
     /**
@@ -848,6 +982,22 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
           }
           result = truncate(raw);
           s.attr("outputChars", raw.content().length()).attr("truncated", result != raw);
+          Resource about = result.resource();
+          if (about != null) {
+            s.attr("resource", about.key());
+            s.attr("version", about.version());
+            if (about.isView()) s.attr("lines", about.from() + "-" + about.to());
+          }
+          synchronized (editor) {
+            String pointer = editor.unchanged(call.name(), result);
+            if (pointer != null) {
+              s.attr("unchanged", true);
+              result = new ToolResult(pointer, false, result.usage());
+            }
+            String content = result.isError() ? Chat.TOOL_ERROR_PREFIX + result.content() : result.content();
+            if (editor.record(call.id(), call.name(), result, content, steps)) s.attr("refetch", true);
+            news(call, result, content, pointer != null);
+          }
         }
       } catch (RuntimeException e) {
         fail(s, e);
@@ -907,11 +1057,16 @@ public final class ChatPlugin implements ConfigPlugin<ChatConfig> {
       }
     }
 
+    /**
+     * {@code result} cut at {@code maxToolOutput} characters, with a note on how to get the rest. A cut result no
+     * longer shows what its resource says it shows, so it loses it (and its compact form).
+     */
     private ToolResult truncate(ToolResult result) {
       String content = result.content();
       if (content.length() <= cfg.maxToolOutput()) return result;
       int cut = content.length() - cfg.maxToolOutput();
-      return result.withContent(content.substring(0, cfg.maxToolOutput()) + "\n… [truncated " + cut + " chars]");
+      return result.withContent(content.substring(0, cfg.maxToolOutput()) + "\n… [truncated " + cut + " chars; "
+          + "ask for a smaller part (read_file offset/limit, a narrower grep or command)]").about(null, null);
     }
 
     /**

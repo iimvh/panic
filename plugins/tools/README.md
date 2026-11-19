@@ -9,9 +9,9 @@ tool calls. The loop that asks the model and feeds results back belongs to the a
 | --- | --- | --- | --- |
 | `tools` | none | none | commands `tools`, `tool` |
 | `permissions` | `PermissionsConfig { risks = {read: allow, write: ask, exec: ask, network: ask}, tools = {}, askTimeoutSeconds = 120, bypassPermissions = false, rules = {allow: [], ask: [], deny: []} }` | none | hooks `Tools.POLICY`, `Tools.BYPASS`; command `bypass` |
-| `files` | `FilesConfig { root = ".", maxBytes = 65536, maxEntries = 200, maxWriteBytes = 1048576 }` | none | tools `read_file`, `list_dir` (read), `write_file`, `edit_file` (write) |
+| `files` | `FilesConfig { root = ".", maxBytes = 65536, maxEntries = 200, maxWriteBytes = 1048576, maxLines = 2000 }` | none | tools `read_file`, `list_dir`, `glob`, `grep` (read), `write_file`, `edit_file` (write) |
 | `clock` | none | none | tool `time` |
-| `shell` | `ShellConfig { dir = ".", timeoutSeconds = 120, maxTimeoutSeconds = 600, maxOutput = 8000, maxBackground = 4, deny = (defaults) }` | none | tools `exec` (exec), `exec_output` (read), `exec_stop` (exec); answers `Tools.GATE` for `exec`; command `jobs` |
+| `shell` | `ShellConfig { dir = ".", timeoutSeconds = 120, maxTimeoutSeconds = 600, maxOutput = 8000, maxBackground = 4, deny = (defaults), shell = "auto" }` | none | tools `exec` (exec), `exec_output` (read), `exec_stop` (exec); answers `Tools.GATE` for `exec`; command `jobs` |
 
 `files` sees only one root: the folder of the conversation's project (key `Workspace.ROOT`, answered by plugin
 `workspace`, asked with the conversation the user talks to, so a sub-agent works where its parent does), or
@@ -19,8 +19,28 @@ tool calls. The loop that asks the model and feeds results back belongs to the a
 root after normalization and after following symlinks, so `../`, absolute paths and links that point out are
 refused. `read_file` returns each line as `cat -n` does (the line number right-aligned in 6 columns, a tab, the
 line), like the `view` command of Anthropic's text editor tool and Claude Code's Read, so the model can cite lines
-and copy `old_str` exactly. It returns at most `maxBytes` characters (numbers included) and tells the model which
-`offset` to continue from. Files with a NUL byte in their first 8 KiB are treated as binary and refused.
+and copy `old_str` exactly. It returns at most `maxLines` lines when the model gives no `limit`, and at most
+`maxBytes` characters (numbers included), and tells the model how many lines are left and which `offset` to
+continue from. Files with a NUL byte in their first 8 KiB are treated as binary and refused. Its description sends
+the model to `grep`/`glob` to find what to read first.
+
+Each `read_file` result says what it shows, for the chat's context management (see `Resource` below): the
+resource `file:<path in the workspace>`, the lines shown and a version (the first 16 hex digits of the SHA-256 of
+the whole file). Results over 1500 characters also carry their outline (`ToolResult.compact`, from `Outline`): the
+file's imports (collapsed to one line), declarations (types, functions, methods, top-level constants), headings,
+top-level CSS rules and JSON keys, each with its line number, at most about a fifth of the content. Pattern-based,
+so it needs no parser per language; a file the patterns do not fit gets its first lines. The chat shows it in place
+of the content once that no longer fits, so the model can read back only the part it needs. `write_file` and
+`edit_file` report the file's new version, which marks earlier views of it stale.
+
+`glob {pattern, path?}` lists the files whose path matches (a pattern without `/` matches file names at any depth,
+`*.jsx`; with `/`, the path from the search directory, `src/**/*.ts`), most recently changed first, at most
+`maxEntries`. `grep {pattern, path?, glob?, ignore_case?, context?, files_only?}` finds the lines matching a Java
+regular expression, grouped by file with their line numbers (`context` lines around, `--` between groups), at most
+`maxEntries` matches, then a count of the rest. Both walk the workspace in pure Java (`Search`, no ripgrep needed,
+Windows included), never follow symlinks, and skip version control, dependency and tool folders (`.git`,
+`node_modules`, `.gradle`, `.panic`, `.venv`, ...), what the root's `.gitignore` names (simple rules; negations are
+ignored), binary files, files over 2 MiB and files that are not UTF-8.
 
 `write_file {path, content, append?}` creates or replaces a file, or appends to it, and creates missing
 directories. The deepest existing directory on the way must be inside the root once symlinks are followed. The
@@ -50,7 +70,18 @@ rewrite of the file (and a long `write_file` is where broken JSON arguments come
 The agent runs shell commands in the folder of the conversation's project (`Workspace.ROOT`), or in `dir` when it
 has none:
 
-- **`exec {command, cwd?, timeoutSeconds?, background?}`** runs `command` through `sh -c` (`cmd /c` on Windows).
+- **`exec {command, cwd?, timeoutSeconds?, background?}`** runs `command` through the shell `shell` names:
+  - `auto` (the default) is `sh -c` on Unix and **Git Bash** on Windows (`bin\bash.exe` of Git for Windows, found
+    where installers put it or next to the `git` on the PATH; never `System32\bash.exe`, which is WSL). Windows
+    without Git Bash gets Windows PowerShell. Models write POSIX shell, and the deny rules and the permission rules
+    read POSIX shell, so a POSIX shell everywhere is what keeps them all right; on `cmd` they made the model fail
+    and let `del /s` through.
+  - Also `sh`, `bash`, `cmd`, `powershell`, `pwsh`, or the path of a shell; a shell that is not found is a config
+    error.
+  - The tool's description and its `command` parameter name the shell in use, with a line on how to write for it
+    (Git Bash: Windows paths as `C:/x` or `/c/x`), so the model is never told `sh` while `cmd` runs.
+  - On Windows the command line is quoted by the C runtime's rules (Java does not escape quotes inside an
+    argument), and PowerShell gets it as `-EncodedCommand`, with UTF-8 output and the last command's exit status.
   - It runs with no input, and stdout and stderr go together to a temporary log.
   - `cwd` is a folder inside the project. One that leads out, even through a link, is refused.
   - The result is `exit N (1.2s)` and the last `maxOutput` characters of the output.
@@ -75,6 +106,8 @@ has none:
   (`ShellConfig.DEFAULT_DENY`) covers `sudo`/`su`/`doas`, `rm` of `/`, `~` or system folders, `mkfs`, `dd` to a
   device, `shutdown`/`reboot`, fork bombs and `curl`/`wget` piped into a shell. A `deny` list in the config
   replaces it, and a pattern that does not compile is a config error.
+- With `shell: "powershell"` or `"cmd"` the default deny patterns, written for POSIX commands, miss commands such
+  as `Remove-Item -Recurse C:\` or `rd /s`: add patterns for them if those shells are used.
 - **These are guardrails, not a sandbox.** A command runs with the app's user and environment, so keep approvals on
   where a mistake would hurt.
 - **Sub-agents** may use it too, approved in the user's conversation.
@@ -83,8 +116,10 @@ has none:
 stopped when their conversation is deleted: stop them with `jobs stop` (this module cannot hear about conversations,
 which live in `plugins/chat`).
 
-`Processes` (public) holds what tools that run processes share: `shell(command)`, `kill(process)` (with its
-descendants), `nullDevice()` and `tail(log, max)`. `check` of `plugins/verify` uses it too.
+`Processes` (public) holds what tools that run processes share: `Shell` (the agent's shell: `resolve(configured)`,
+`command(line)`), `shell(command)` (the system shell, `sh -c` or `cmd /c`, for command lines people write for their
+own system, such as stop hooks), `kill(process)` (with its descendants), `nullDevice()` and `tail(log, max)`.
+`check` and the stop hooks of `plugins/verify` use it too.
 
 ## Public keys: workspaces
 
@@ -191,8 +226,12 @@ to its section restarts only it and applies from the next call.
 - `progress` hears `ToolProgress` (a piece of `text`, marked `reasoning` when it is what a sub-agent thinks, or one of the tool's own calls starting or ending) while a
   long tool runs. The agent loop passes it on to the asker; nobody has to listen.
 
-`ToolResult(content, isError, usage?)`: `usage` is what the tool spent on a model of its own (a sub-agent). The
-agent loop adds it to the turn's usage and budget. `Tool.timeoutSeconds()` (default 0 = the caller's limit,
+`ToolResult(content, isError, usage?, resource?, compact?)`: `usage` is what the tool spent on a model of its own
+(a sub-agent). The agent loop adds it to the turn's usage and budget. `resource` says what the result shows or
+changes: `Resource.view(key, version, from, to)` (lines of a thing at a version) or `Resource.write(key, version)`;
+`compact` is a short form of the content that can stand in for it (`result.about(resource, compact)`). The chat
+uses them to clear stale results first, answer an unchanged re-read with a pointer, and leave the short form when
+it clears a result (see the chat README); a tool that gives neither is managed by age. `Tool.timeoutSeconds()` (default 0 = the caller's limit,
 `chat.toolTimeoutSeconds`) lets a slow tool ask for more time.
 
 `Tools.call` never throws for a bad call. An unknown tool, invalid JSON, arguments that fail the schema, denied

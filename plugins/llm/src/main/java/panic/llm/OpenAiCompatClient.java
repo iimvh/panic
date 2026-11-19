@@ -427,8 +427,10 @@ public final class OpenAiCompatClient implements ChatModel {
 
   private static Usage usage(JsonNode u) {
     if (u == null || !u.isObject()) return Usage.NONE;
+    int cached = u.path("prompt_tokens_details").path("cached_tokens").asInt(0);
+    if (cached == 0) cached = u.path("prompt_cache_hit_tokens").asInt(0); // DeepSeek's own field
     return new Usage(u.path("prompt_tokens").asInt(0), u.path("completion_tokens").asInt(0),
-        u.path("completion_tokens_details").path("reasoning_tokens").asInt(0));
+        u.path("completion_tokens_details").path("reasoning_tokens").asInt(0), cached);
   }
 
   private static String textOrNull(JsonNode n) {

@@ -23,7 +23,8 @@ import panic.util.Json;
 import panic.llm.ToolSpec;
 
 /**
- * File tools confined to a workspace root: {@code read_file} and {@code list_dir} (risk read), {@code write_file}
+ * File tools confined to a workspace root: {@code read_file}, {@code list_dir}, {@code glob} and {@code grep} (risk
+ * read; the searches are pure Java, see {@link Search}), {@code write_file}
  * and {@code edit_file} (risk write, so the permission policy asks the user by default). {@code edit_file} replaces
  * an exact string, like the {@code str_replace} command of Anthropic's text editor tool and Claude Code's Edit tool,
  * so a small change does not cost the model a rewrite of the whole file. A path is resolved
@@ -42,6 +43,8 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
     Path root = Path.of(cfg.root()).toAbsolutePath().normalize();
     Tools.register(ctx, new ReadFile(ctx, root, cfg));
     Tools.register(ctx, new ListDir(ctx, root, cfg));
+    Tools.register(ctx, new Glob(ctx, root, cfg));
+    Tools.register(ctx, new Grep(ctx, root, cfg));
     Tools.register(ctx, new WriteFile(ctx, root, cfg));
     Tools.register(ctx, new EditFile(ctx, root, cfg));
     return null;
@@ -140,8 +143,9 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
     public ToolSpec spec() {
       return new ToolSpec("read_file",
           "Read a text file of the workspace. Each line comes as its line number, a tab, then the line as it is in "
-              + "the file (like cat -n); the number and tab are not part of the file. Long files are cut; continue "
-              + "with offset (1-based line number).",
+              + "the file (like cat -n); the number and tab are not part of the file. At most " + cfg.maxLines()
+              + " lines unless you give limit; continue with offset (1-based line number). To find which file or "
+              + "lines to read, search first with grep or glob.",
           Json.parseOrNull("""
               {"type":"object","properties":{
                 "path":{"type":"string","description":"path relative to the workspace root"},
@@ -160,7 +164,7 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
       Path file = resolve(Workspace.root(host, ctx.origin(), root), path);
       if (Files.isDirectory(file)) return ToolResult.error(path + " is a directory; use list_dir");
       int offset = args.path("offset").asInt(1);
-      int limit = args.path("limit").asInt(Integer.MAX_VALUE);
+      int limit = args.path("limit").asInt(cfg.maxLines());
       try (InputStream in = Files.newInputStream(file)) {
         byte[] head = in.readNBytes(8192);
         for (byte b : head) {
@@ -169,9 +173,16 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
       } catch (IOException e) {
         return ToolResult.error("cannot read " + path + ": " + e.getMessage());
       }
+      Content whole;
+      try {
+        whole = Content.of(file);
+      } catch (IOException e) {
+        return ToolResult.error("cannot read " + path + ": " + e.getMessage());
+      }
       StringBuilder out = new StringBuilder();
+      List<String> shownLines = new ArrayList<>();
       int line = 0;
-      int taken = 0;
+      String more = null;
       try (BufferedReader reader = new BufferedReader(
           new InputStreamReader(Files.newInputStream(file), StandardCharsets.UTF_8))) {
         String text;
@@ -179,24 +190,85 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
           line++;
           if (line % 1000 == 0) ctx.signal().throwIfCancelled();
           if (line < offset) continue;
-          if (taken == limit) {
-            return ToolResult.ok(out + "… [more lines; continue with offset=" + line + "]");
+          if (shownLines.size() == limit) {
+            int remaining = whole.lines() - line + 1;
+            more = "… [" + remaining + (remaining == 1 ? " more line" : " more lines") + "; continue with offset="
+                + line + "]";
+            break;
           }
           String shown = numbered(line, text);
           if (out.length() + shown.length() + 1 > cfg.maxBytes()) {
-            return ToolResult.ok(out + "… [truncated at " + cfg.maxBytes() + " chars; continue with offset="
-                + line + "]");
+            more = "… [truncated at " + cfg.maxBytes() + " chars; continue with offset=" + line + "]";
+            break;
           }
           out.append(shown).append('\n');
-          taken++;
+          shownLines.add(text);
         }
       } catch (IOException e) {
         return ToolResult.error("cannot read " + path + ": " + e.getMessage());
       }
-      if (taken == 0 && line > 0 && offset > line) {
+      if (shownLines.isEmpty() && line > 0 && offset > line) {
         return ToolResult.error(path + " has only " + line + " lines");
       }
-      return ToolResult.ok(out.toString());
+      ToolResult result = ToolResult.ok(more == null ? out.toString() : out + more);
+      if (shownLines.isEmpty()) return result;
+      int last = offset + shownLines.size() - 1;
+      Path workspace = Workspace.root(host, ctx.origin(), root);
+      return result.about(Resource.view(key(workspace, file), whole.version(), offset, last),
+          Outline.of(path, shownLines, offset, whole.lines(), result.content().length()));
+    }
+  }
+
+  /**
+   * A file's version (the first 16 hex digits of the SHA-256 of its bytes) and its line count, read as a stream:
+   * what {@link Resource} needs to tell that two reads saw the same content.
+   */
+  record Content(String version, int lines) {
+
+    static Content of(Path file) throws IOException {
+      java.security.MessageDigest sha = sha256();
+      long newlines = 0;
+      long size = 0;
+      int lastByte = '\n';
+      byte[] buf = new byte[64 * 1024];
+      try (InputStream in = Files.newInputStream(file)) {
+        int n;
+        while ((n = in.read(buf)) > 0) {
+          sha.update(buf, 0, n);
+          for (int i = 0; i < n; i++) {
+            if (buf[i] == '\n') newlines++;
+          }
+          lastByte = buf[n - 1];
+          size += n;
+        }
+      }
+      long lines = size == 0 ? 0 : newlines + (lastByte == '\n' ? 0 : 1);
+      return new Content(hex(sha.digest()), (int) Math.min(Integer.MAX_VALUE, lines));
+    }
+
+    static String version(byte[] bytes) {
+      return hex(sha256().digest(bytes));
+    }
+
+    private static java.security.MessageDigest sha256() {
+      try {
+        return java.security.MessageDigest.getInstance("SHA-256");
+      } catch (java.security.NoSuchAlgorithmException e) {
+        throw new IllegalStateException("every JDK has SHA-256", e);
+      }
+    }
+
+    private static String hex(byte[] digest) {
+      return java.util.HexFormat.of().formatHex(digest, 0, 8);
+    }
+  }
+
+  /** The {@link Resource} key of {@code file}: {@code file:} and its path inside the workspace, forward slashes. */
+  static String key(Path root, Path file) {
+    try {
+      return "file:" + root.toRealPath().relativize(file).toString().replace('\\', '/');
+    } catch (IOException | IllegalArgumentException e) {
+      return "file:" + file.toString().replace('\\', '/');
     }
   }
 
@@ -262,6 +334,182 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
     }
   }
 
+  /** Files whose path matches a glob, most recently changed first: where to look, before reading anything. */
+  private record Glob(Context host, Path root, FilesConfig cfg) implements Tool {
+
+    @Override
+    public Risk risk() {
+      return Risk.READ;
+    }
+
+    @Override
+    public ToolSpec spec() {
+      return new ToolSpec("glob",
+          "Find files of the workspace by path pattern, most recently changed first (dependencies, build output "
+              + "and .gitignore'd files are skipped). A pattern without / matches file names at any depth "
+              + "(\"*.jsx\"); with /, the path from the search directory (\"src/**/*.ts\").",
+          Json.parseOrNull("""
+              {"type":"object","properties":{
+                "pattern":{"type":"string","description":"glob, e.g. *.java or src/**/Header*"},
+                "path":{"type":"string","description":"directory to search, relative to the workspace root (default: the root)"}},
+               "required":["pattern"],"additionalProperties":false}"""));
+    }
+
+    @Override
+    public ToolResult call(JsonNode args, ToolContext ctx) {
+      return guarded(() -> glob(args, ctx));
+    }
+
+    private ToolResult glob(JsonNode args, ToolContext ctx) {
+      String pattern = args.path("pattern").asText();
+      if (pattern.isBlank()) return ToolResult.error("pattern is empty");
+      Path workspace = Workspace.root(host, ctx.origin(), root);
+      String path = args.path("path").asText(".");
+      Path base = resolve(workspace, path.isBlank() ? "." : path);
+      java.nio.file.PathMatcher matcher;
+      try {
+        matcher = Search.glob(pattern);
+      } catch (IllegalArgumentException e) {
+        return ToolResult.error("bad pattern: " + e.getMessage());
+      }
+      List<Search.Found> found = new ArrayList<>();
+      try {
+        Path realBase = base;
+        for (Search.Found f : Search.files(workspace, base, ctx.signal())) {
+          Path fromBase = realBase.equals(f.file()) ? f.file().getFileName() : realBase.relativize(f.file());
+          if (matcher.matches(fromBase)) found.add(f);
+        }
+      } catch (IOException e) {
+        return ToolResult.error("cannot search " + path + ": " + e.getMessage());
+      }
+      if (found.isEmpty()) return ToolResult.ok("no files match " + pattern);
+      found.sort((a, b) -> Long.compare(b.modified(), a.modified()));
+      StringBuilder out = new StringBuilder();
+      found.stream().limit(cfg.maxEntries()).forEach(f -> out.append(f.relative()).append('\n'));
+      if (found.size() > cfg.maxEntries()) {
+        out.append("… ").append(found.size() - cfg.maxEntries()).append(" more; narrow the pattern or the path\n");
+      }
+      return ToolResult.ok(out.toString());
+    }
+  }
+
+  /**
+   * Lines that match a regular expression, grouped by file with their line numbers: the model finds where
+   * something is and reads only that part (read_file offset/limit), instead of reading whole files to look.
+   */
+  private record Grep(Context host, Path root, FilesConfig cfg) implements Tool {
+
+    /** Characters of a matching line shown; minified files would otherwise flood the result. */
+    static final int LINE_CHARS = 200;
+
+    @Override
+    public Risk risk() {
+      return Risk.READ;
+    }
+
+    @Override
+    public ToolSpec spec() {
+      return new ToolSpec("grep",
+          "Search the contents of the workspace's text files for a regular expression (Java syntax). Answers "
+              + "each matching line as its line number and text, grouped by file (dependencies, build output, "
+              + "binary and .gitignore'd files are skipped). Use it to find where something is, then read_file "
+              + "with offset/limit to see that part.",
+          Json.parseOrNull("""
+              {"type":"object","properties":{
+                "pattern":{"type":"string","description":"regular expression, e.g. formatPrice|toLocaleString"},
+                "path":{"type":"string","description":"file or directory to search, relative to the workspace root (default: the root)"},
+                "glob":{"type":"string","description":"only files matching this glob, e.g. *.jsx"},
+                "ignore_case":{"type":"boolean","description":"case-insensitive (default false)"},
+                "context":{"type":"integer","minimum":0,"maximum":10,"description":"lines shown before and after each match (default 0)"},
+                "files_only":{"type":"boolean","description":"list the matching files only (default false)"}},
+               "required":["pattern"],"additionalProperties":false}"""));
+    }
+
+    @Override
+    public ToolResult call(JsonNode args, ToolContext ctx) {
+      return guarded(() -> grep(args, ctx));
+    }
+
+    private ToolResult grep(JsonNode args, ToolContext ctx) {
+      String pattern = args.path("pattern").asText();
+      if (pattern.isEmpty()) return ToolResult.error("pattern is empty");
+      java.util.regex.Pattern regex;
+      try {
+        regex = java.util.regex.Pattern.compile(pattern,
+            args.path("ignore_case").asBoolean(false) ? java.util.regex.Pattern.CASE_INSENSITIVE
+                | java.util.regex.Pattern.UNICODE_CASE : 0);
+      } catch (java.util.regex.PatternSyntaxException e) {
+        return ToolResult.error("bad regular expression: " + e.getDescription());
+      }
+      java.nio.file.PathMatcher only = null;
+      if (!args.path("glob").asText("").isBlank()) {
+        try {
+          only = Search.glob(args.path("glob").asText());
+        } catch (IllegalArgumentException e) {
+          return ToolResult.error("bad glob: " + e.getMessage());
+        }
+      }
+      int context = Math.max(0, Math.min(10, args.path("context").asInt(0)));
+      boolean filesOnly = args.path("files_only").asBoolean(false);
+      Path workspace = Workspace.root(host, ctx.origin(), root);
+      String path = args.path("path").asText(".");
+      Path base = resolve(workspace, path.isBlank() ? "." : path);
+      List<Search.Found> files;
+      try {
+        files = Search.files(workspace, base, ctx.signal());
+      } catch (IOException e) {
+        return ToolResult.error("cannot search " + path + ": " + e.getMessage());
+      }
+      StringBuilder out = new StringBuilder();
+      int matches = 0;
+      int shown = 0;
+      int matchedFiles = 0;
+      int scanned = 0;
+      for (Search.Found f : files) {
+        if (only != null && !only.matches(Path.of(f.relative()))) continue;
+        if (++scanned % 200 == 0) ctx.signal().throwIfCancelled();
+        List<String> lines = Search.lines(f.file());
+        if (lines == null) continue;
+        List<Integer> hits = new ArrayList<>();
+        for (int i = 0; i < lines.size(); i++) {
+          if (regex.matcher(lines.get(i)).find()) hits.add(i);
+        }
+        if (hits.isEmpty()) continue;
+        matchedFiles++;
+        matches += hits.size();
+        if (shown >= cfg.maxEntries()) continue;
+        if (filesOnly) {
+          out.append(f.relative()).append(" (").append(hits.size()).append(hits.size() == 1 ? " match" : " matches")
+              .append(")\n");
+          shown++;
+          continue;
+        }
+        out.append(f.relative()).append('\n');
+        int printedTo = -1;
+        for (int hit : hits) {
+          if (shown >= cfg.maxEntries()) break;
+          int from = Math.max(printedTo + 1, hit - context);
+          int to = Math.min(lines.size() - 1, hit + context);
+          if (printedTo >= 0 && from > printedTo + 1) out.append("  --\n");
+          for (int i = from; i <= to; i++) {
+            String text = lines.get(i);
+            if (text.length() > LINE_CHARS) text = text.substring(0, LINE_CHARS) + " …";
+            out.append(String.format(java.util.Locale.ROOT, "%6d%s %s%n", i + 1, i == hit ? ":" : "-", text)
+                .replace("\r\n", "\n"));
+          }
+          printedTo = to;
+          shown++;
+        }
+      }
+      if (matches == 0) return ToolResult.ok("no matches for " + pattern);
+      if (shown < (filesOnly ? matchedFiles : matches)) {
+        out.append("… ").append(matches).append(" matches in ").append(matchedFiles)
+            .append(" files in all; narrow the pattern, path or glob\n");
+      }
+      return ToolResult.ok(out.toString());
+    }
+  }
+
   private record WriteFile(Context host, Path root, FilesConfig cfg) implements Tool {
 
     @Override
@@ -303,7 +551,14 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
       } catch (IOException e) {
         return ToolResult.error("cannot write " + path + ": " + e.getMessage());
       }
-      return ToolResult.ok((append ? "appended " : "wrote ") + bytes.length + " bytes to " + path);
+      ToolResult done = ToolResult.ok((append ? "appended " : "wrote ") + bytes.length + " bytes to " + path);
+      try {
+        Path workspace = Workspace.root(host, ctx.origin(), root);
+        String version = append ? Content.of(file).version() : Content.version(bytes);
+        return done.about(Resource.write(key(workspace, file.toRealPath()), version), null);
+      } catch (IOException e) {
+        return done; // written; only the context bookkeeping is lost
+      }
     }
   }
 
@@ -400,8 +655,9 @@ public final class FilesPlugin implements ConfigPlugin<FilesConfig> {
         return ToolResult.error("cannot write " + path + ": " + e.getMessage());
       }
       int replaced = all ? count : 1;
-      return ToolResult.ok("edited " + path + ": replaced " + replaced + (replaced == 1 ? " occurrence" : " occurrences")
-          + " (first at line " + line + ")");
+      ToolResult done = ToolResult.ok("edited " + path + ": replaced " + replaced
+          + (replaced == 1 ? " occurrence" : " occurrences") + " (first at line " + line + ")");
+      return done.about(Resource.write(key(workspace, existing), Content.version(out)), null);
     }
 
     private static int count(String text, String part) {

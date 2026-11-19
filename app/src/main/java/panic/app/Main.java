@@ -28,6 +28,7 @@ public final class Main {
   }
 
   public static void main(String[] args) throws Exception {
+    args = WindowsArgs.recover(args);
     Path file = Path.of("panic.json");
     boolean web = false;
     boolean serve = false;

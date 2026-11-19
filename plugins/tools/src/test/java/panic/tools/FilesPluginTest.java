@@ -43,7 +43,13 @@ class FilesPluginTest {
     root.dispose();
   }
 
+  /** The result as the model reads it: what it is about and its outline are checked by their own tests. */
   private ToolResult call(String name, String args) {
+    ToolResult r = raw(name, args);
+    return new ToolResult(r.content(), r.isError(), r.usage());
+  }
+
+  private ToolResult raw(String name, String args) {
     return Tools.call(root, new ToolCall("id", name, args), new ToolContext("c", new CancelToken()));
   }
 
@@ -56,7 +62,7 @@ class FilesPluginTest {
   void readsFilesWithOffsetAndLimit() {
     assertEquals(ToolResult.ok("     1\tone\n     2\ttwo\n     3\tthree\n"), call("read_file", "{\"path\":\"a.txt\"}"));
     assertEquals(ToolResult.ok("     1\tinside\n"), call("read_file", "{\"path\":\"sub/../sub/b.txt\"}"));
-    assertEquals(ToolResult.ok("     2\ttwo\n… [more lines; continue with offset=3]"),
+    assertEquals(ToolResult.ok("     2\ttwo\n… [1 more line; continue with offset=3]"),
         call("read_file", "{\"path\":\"a.txt\",\"offset\":2,\"limit\":1}"));
     assertRefused(call("read_file", "{\"path\":\"a.txt\",\"offset\":9}"), "has only 3 lines");
     assertRefused(call("read_file", "{\"path\":\"nope.txt\"}"), "not found: nope.txt");
@@ -259,5 +265,96 @@ class FilesPluginTest {
     } finally {
       asking.dispose();
     }
+  }
+
+  @Test
+  void readsSayWhatTheyShowAndWritesChangeTheVersion() throws IOException {
+    ToolResult first = raw("read_file", "{\"path\":\"a.txt\",\"offset\":2,\"limit\":1}");
+    assertEquals("file:a.txt", first.resource().key());
+    assertEquals(2, first.resource().from());
+    assertEquals(2, first.resource().to());
+    ToolResult whole = raw("read_file", "{\"path\":\"sub/../a.txt\"}");
+    assertTrue(whole.resource().covers(first.resource()), "same file, same version, all its lines");
+    assertEquals(null, whole.compact(), "too small to be worth an outline");
+
+    ToolResult edited = raw("edit_file", "{\"path\":\"a.txt\",\"old_str\":\"two\",\"new_str\":\"2\"}");
+    assertEquals("file:a.txt", edited.resource().key());
+    assertTrue(!edited.resource().isView());
+    ToolResult after = raw("read_file", "{\"path\":\"a.txt\"}");
+    assertEquals(edited.resource().version(), after.resource().version(), "the edit reports what a read then sees");
+    assertTrue(!after.resource().version().equals(whole.resource().version()));
+    ToolResult written = raw("write_file", "{\"path\":\"a.txt\",\"content\":\"x\\n\"}");
+    assertEquals(raw("read_file", "{\"path\":\"a.txt\"}").resource().version(), written.resource().version());
+  }
+
+  @Test
+  void longReadsCarryAnOutline() throws IOException {
+    StringBuilder js = new StringBuilder("import React from 'react'\nimport { a } from './a'\n\n");
+    js.append("export function Header({ title }) {\n");
+    for (int i = 0; i < 60; i++) js.append("  const line").append(i).append(" = 'some text to make it long';\n");
+    js.append("  return title\n}\n\nexport default Header\n");
+    Files.writeString(workspace.resolve("Header.jsx"), js.toString());
+    ToolResult r = raw("read_file", "{\"path\":\"Header.jsx\"}");
+    String outline = r.compact();
+    assertTrue(outline.startsWith("outline of Header.jsx, lines 1-68 of 68"), outline);
+    assertTrue(outline.contains("     1\t[2 imports, lines 1-2]"), outline);
+    assertTrue(outline.contains("     4\texport function Header({ title }) {"), outline);
+    assertTrue(outline.contains("export default Header"), outline);
+    assertTrue(!outline.contains("const line5 "), "indented bindings are not declarations: " + outline);
+    assertTrue(outline.length() < r.content().length() / 4, outline.length() + " of " + r.content().length());
+  }
+
+  @Test
+  void readsStopAtMaxLinesWithoutALimit() throws IOException {
+    files.update(new FilesConfig(workspace.toString(), 0, 0, 0, 2));
+    assertEquals(ToolResult.ok("     1\tone\n     2\ttwo\n… [1 more line; continue with offset=3]"),
+        call("read_file", "{\"path\":\"a.txt\"}"));
+  }
+
+  @Test
+  void globFindsFilesByNameOrPathAndSkipsWhatIsNotSource() throws IOException {
+    Files.createDirectories(workspace.resolve("src/components"));
+    Files.writeString(workspace.resolve("src/components/Header.jsx"), "x");
+    Files.writeString(workspace.resolve("src/App.jsx"), "x");
+    Files.createDirectories(workspace.resolve("node_modules/react"));
+    Files.writeString(workspace.resolve("node_modules/react/index.jsx"), "x");
+    Files.createDirectories(workspace.resolve("dist"));
+    Files.writeString(workspace.resolve("dist/App.jsx"), "x");
+    Files.writeString(workspace.resolve(".gitignore"), "dist\n");
+    String names = call("glob", "{\"pattern\":\"*.jsx\"}").content();
+    assertTrue(names.contains("src/components/Header.jsx\n") && names.contains("src/App.jsx\n"), names);
+    assertTrue(!names.contains("node_modules") && !names.contains("dist/"), names);
+    assertEquals("src/components/Header.jsx\n",
+        call("glob", "{\"pattern\":\"components/*.jsx\",\"path\":\"src\"}").content());
+    assertEquals("no files match *.py", call("glob", "{\"pattern\":\"*.py\"}").content());
+    assertRefused(call("glob", "{\"pattern\":\"*\",\"path\":\"..\"}"), "outside the workspace");
+  }
+
+  @Test
+  void grepFindsLinesGroupedByFile() throws IOException {
+    Files.createDirectories(workspace.resolve("src"));
+    Files.writeString(workspace.resolve("src/Section.jsx"), "a\nexport function formatPrice(value) {\n  return value\n}\n");
+    Files.writeString(workspace.resolve("src/Products.jsx"), "import { formatPrice } from './Section'\n");
+    Files.write(workspace.resolve("src/logo.bin"), new byte[] {'f', 'o', 'r', 'm', 'a', 't', 'P', 0});
+    String out = call("grep", "{\"pattern\":\"formatPrice\"}").content();
+    assertEquals("src/Products.jsx\n     1: import { formatPrice } from './Section'\n"
+        + "src/Section.jsx\n     2: export function formatPrice(value) {\n", out);
+    String context = call("grep",
+        "{\"pattern\":\"FORMATPRICE\",\"ignore_case\":true,\"glob\":\"Section*\",\"context\":1}").content();
+    assertEquals("src/Section.jsx\n     1- a\n     2: export function formatPrice(value) {\n     3-   return value\n",
+        context);
+    assertEquals("src/Products.jsx (1 match)\nsrc/Section.jsx (1 match)\n",
+        call("grep", "{\"pattern\":\"formatPrice\",\"files_only\":true}").content());
+    assertEquals("no matches for nothing-here", call("grep", "{\"pattern\":\"nothing-here\"}").content());
+    assertRefused(call("grep", "{\"pattern\":\"(\"}"), "bad regular expression");
+  }
+
+  @Test
+  void grepSaysHowManyMatchesItLeftOut() throws IOException {
+    files.update(new FilesConfig(workspace.toString(), 0, 2, 0));
+    Files.writeString(workspace.resolve("many.txt"), "hit\nhit\nhit\nhit\n");
+    String out = call("grep", "{\"pattern\":\"hit\",\"path\":\"many.txt\"}").content();
+    assertTrue(out.startsWith("many.txt\n     1: hit\n     2: hit\n"), out);
+    assertTrue(out.endsWith("… 4 matches in 1 files in all; narrow the pattern, path or glob\n"), out);
   }
 }

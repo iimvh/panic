@@ -1,6 +1,7 @@
 package panic.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import context.ConfigPlugin;
 import context.Context;
 import context.Task;
@@ -57,6 +58,7 @@ public final class ShellPlugin implements ConfigPlugin<ShellConfig> {
   @Override
   public Disposable apply(Context ctx, ShellConfig cfg) {
     Path fallback = Path.of(cfg.dir()).toAbsolutePath().normalize();
+    Processes.Shell sh = Processes.Shell.resolve(cfg.shell());
     Map<String, Job> jobs = new ConcurrentHashMap<>();
     AtomicInteger ids = new AtomicInteger();
     ctx.hook(Tools.GATE, g -> {
@@ -68,7 +70,7 @@ public final class ShellPlugin implements ConfigPlugin<ShellConfig> {
           : new Tools.Refusal("this command is not allowed here (matches deny rule " + pattern + "); do not run it "
               + "another way, tell the user to run it themselves if it is really needed", false);
     });
-    Tools.register(ctx, new Exec(ctx, cfg, fallback, jobs, ids));
+    Tools.register(ctx, new Exec(ctx, cfg, sh, fallback, jobs, ids));
     Tools.register(ctx, new Output(cfg, jobs));
     Tools.register(ctx, new Stop(jobs));
     Commands.command(ctx, "jobs [action] [id]", "background commands the agent started: list | stop <id>", call -> {
@@ -124,25 +126,28 @@ public final class ShellPlugin implements ConfigPlugin<ShellConfig> {
   }
 
   /** {@code exec {command, cwd?, timeoutSeconds?, background?}}. */
-  private record Exec(Context ctx, ShellConfig cfg, Path fallback, Map<String, Job> jobs, AtomicInteger ids)
-      implements Tool {
+  private record Exec(Context ctx, ShellConfig cfg, Processes.Shell sh, Path fallback, Map<String, Job> jobs,
+      AtomicInteger ids) implements Tool {
 
     @Override
     public ToolSpec spec() {
-      return new ToolSpec(EXEC, "Run a shell command (sh -c) in the project folder of this chat and get its exit "
-          + "status and the end of its output (stdout and stderr). The user approves commands their rules do not "
-          + "allow; to stop a background job use exec_stop, not kill. Use it to install "
-          + "dependencies, build, test or run the project, not to read or write files (use the file tools). A "
-          + "command that does not end by itself (a dev server such as `npm run dev`, a watcher) must run with "
-          + "background: true; then read its output with " + OUTPUT + " and stop it with " + STOP + ". Commands get "
-          + "no input, so pass flags that avoid prompts (e.g. `npm init -y`, `npx --yes`).",
-          Json.parseOrNull("""
+      String note = sh.note().isEmpty() ? "" : " " + sh.note();
+      ObjectNode schema = (ObjectNode) Json.parseOrNull("""
               {"type":"object","properties":{
-                "command":{"type":"string","description":"the command line, run by sh -c"},
+                "command":{"type":"string"},
                 "cwd":{"type":"string","description":"a folder inside the project to run in (default: its root)"},
                 "timeoutSeconds":{"type":"integer","minimum":1,"description":"time limit of a foreground command"},
                 "background":{"type":"boolean","description":"start it as a background job and return at once"}},
-               "required":["command"],"additionalProperties":false}"""));
+               "required":["command"],"additionalProperties":false}""");
+      ((ObjectNode) schema.path("properties").path("command"))
+          .put("description", "the command line, run by " + sh.name());
+      return new ToolSpec(EXEC, "Run a shell command with " + sh.name() + " in the project folder of this chat and "
+          + "get its exit status and the end of its output (stdout and stderr)." + note + " The user approves "
+          + "commands their rules do not allow; to stop a background job use exec_stop, not kill. Use it to install "
+          + "dependencies, build, test or run the project, not to read or write files (use the file tools). A "
+          + "command that does not end by itself (a dev server such as `npm run dev`, a watcher) must run with "
+          + "background: true; then read its output with " + OUTPUT + " and stop it with " + STOP + ". Commands get "
+          + "no input, so pass flags that avoid prompts (e.g. `npm init -y`, `npx --yes`).", schema);
     }
 
     @Override
@@ -193,7 +198,7 @@ public final class ShellPlugin implements ConfigPlugin<ShellConfig> {
     }
 
     private Process start(String command, Path dir, Path log) throws IOException {
-      return new ProcessBuilder(Processes.shell(command)).directory(dir.toFile()).redirectErrorStream(true)
+      return new ProcessBuilder(sh.command(command)).directory(dir.toFile()).redirectErrorStream(true)
           .redirectOutput(log.toFile()).redirectInput(ProcessBuilder.Redirect.from(Processes.nullDevice())).start();
     }
 

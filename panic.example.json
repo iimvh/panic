@@ -19,10 +19,9 @@
     "maxSteps": 25,
     "maxTokens": 400000,
     "toolTimeoutSeconds": 60,
-    "contextTokens": 32000,
     "compact": true,
-    "clearToolResultsAt": 16000,
     "keepToolResults": 3,
+    "editing": { "resources": true, "compact": true },
     "maxReviews": 1,
     "parallelTools": 1
   },
@@ -32,7 +31,7 @@
   "memory": { "dir": ".panic/memory", "root": ".", "maxIndexChars": 6000, "maxFileChars": 20000 },
   "skills": { "global": ".panic/skills", "dirs": [".panic/skills", ".agents/skills", ".claude/skills"], "root": ".", "maxListChars": 6000, "maxSkillChars": 40000 },
   "planner": { "byDefault": false, "allow": [], "approveTimeoutSeconds": 900, "dir": ".panic/plans", "root": "." },
-  "shell": { "dir": ".", "timeoutSeconds": 120, "maxTimeoutSeconds": 600, "maxOutput": 8000, "maxBackground": 4 },
+  "shell": { "dir": ".", "timeoutSeconds": 120, "maxTimeoutSeconds": 600, "maxOutput": 8000, "maxBackground": 4, "shell": "auto" },
   "ask-user": { "timeoutSeconds": 900, "maxQuestions": 4, "maxOptions": 6 },
   "mcp": {
     "servers": {
@@ -68,7 +67,7 @@
     "profiles": {
       "explore": {
         "description": "Searches the codebase broadly (many files or folders) and reports each finding with its path, line numbers and the relevant code quoted, so you need not read those files again. Read-only. Not for reading one file you know.",
-        "tools": ["read_file", "list_dir"],
+        "tools": ["read_file", "list_dir", "grep", "glob"],
         "maxSteps": 12
       }
     },
@@ -77,7 +76,7 @@
     "maxParallel": 4,
     "timeoutSeconds": 600
   },
-  "files": { "root": ".", "maxBytes": 65536, "maxWriteBytes": 1048576 },
+  "files": { "root": ".", "maxBytes": 65536, "maxWriteBytes": 1048576, "maxLines": 2000 },
   "permissions": {
     "risks": { "read": "allow", "write": "ask", "exec": "ask", "network": "ask" },
     "tools": { "todo_write": "allow" },

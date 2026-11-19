@@ -528,11 +528,12 @@ export function createBatcher(apply: (text: string) => void, schedule: (run: () 
 export const CONTINUE_TEXT = 'Continue where you stopped.';
 
 /**
- * Whether an answer ended on a hard limit (steps, tokens, or replies cut at the output limit) and can be continued,
+ * Whether an answer ended on a hard limit (steps, tokens, replies cut at the output limit, or tool calls that kept
+ * bringing nothing new) and can be continued,
  * as Cursor offers "Continue" after its tool call limit and the Claude Agent SDK resumes a session after max_turns.
  */
 export function canContinue(m: Message): boolean {
-	return m.role === 'assistant' && !m.streaming && (m.stop === 'max_steps' || m.stop === 'budget' || m.stop === 'truncated');
+	return m.role === 'assistant' && !m.streaming && (m.stop === 'max_steps' || m.stop === 'budget' || m.stop === 'truncated' || m.stop === 'stalled');
 }
 
 /** The `usage` of a `done` event; undefined when it has none. */

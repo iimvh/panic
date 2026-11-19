@@ -7,6 +7,7 @@ import core.Disposable;
 import core.Signal;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import panic.command.Commands;
 import panic.command.Out;
@@ -35,7 +36,14 @@ public final class LlmPlugin implements ConfigPlugin<LlmConfig> {
     String providerId = cfg.provider().strip();
     ctx.plugin("active:" + providerId, Plugin.require(Providers.key(providerId)).then(active -> {
       Provider provider = active.get(Providers.key(providerId));
-      Llm llm = new Active(provider, cfg);
+      AtomicLong window = new AtomicLong(cfg.contextWindow() == null ? 0 : cfg.contextWindow());
+      if (cfg.contextWindow() == null && cfg.model() != null) {
+        active.spawn("context-window", signal -> {
+          window.set(contextLength(provider, cfg.model(), signal));
+          return null;
+        });
+      }
+      Llm llm = new Active(provider, cfg, window);
       active.provide(Llm.KEY, llm);
       active.hook(Llm.CURRENT, q -> llm);
       Commands.command(active, "models [filter]",
@@ -66,15 +74,36 @@ public final class LlmPlugin implements ConfigPlugin<LlmConfig> {
     if (models.isEmpty()) out.println("  (none)");
   }
 
+  /** The context length the provider lists for {@code model}; 0 when it does not say or the list fails. */
+  static long contextLength(Provider provider, String model, Signal signal) {
+    try {
+      for (ModelInfo m : provider.models(signal)) {
+        if (m.id().equals(model)) return Math.max(0, m.contextLength());
+      }
+    } catch (RuntimeException e) {
+      // unknown: callers fall back to their own default
+    }
+    return 0;
+  }
+
   private static String orNone(String s) {
     return s == null || s.isBlank() ? "<none>" : s;
   }
 
-  private record Active(Provider provider, LlmConfig cfg) implements Llm {
+  /** {@code window}: the model's context length, 0 while unknown. */
+  private record Active(Provider provider, LlmConfig cfg, AtomicLong window) implements Llm {
 
     @Override
     public String model() {
       return cfg.model();
+    }
+
+    @Override
+    public int inputWindow() {
+      long length = window.get();
+      if (length <= 0) return 0;
+      long reply = cfg.maxTokens() == null ? 0 : Math.max(0, cfg.maxTokens());
+      return (int) Math.min(Integer.MAX_VALUE, Math.max(0, length - reply));
     }
 
     @Override

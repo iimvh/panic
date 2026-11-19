@@ -15,6 +15,7 @@ git submodule update --init          # z/ is a git submodule (github.com/iimvh/z
 ./gradlew :app:run -q --console=plain                               # run Panic (REPL); needs panic.json (copy panic.example.json)
 ./gradlew :app:installDist && app/build/install/app/bin/app models free   # run one command and exit
 cd ui && npm run check && npm test   # UI type-check and vitest (needed when touching ui/); `npm run dev` for the dev server
+node eval/run.mjs --app eval/.builds/new --variant full   # real-model runs on fixed tasks (API keys, not CI); see eval/README.md
 ```
 
 Needs JDK 21 (Gradle can provision it) and Node 20+ for the UI. `panic.json` is git-ignored; strings in it can use `${ENV}`.

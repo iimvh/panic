@@ -168,6 +168,7 @@ describe('canContinue', () => {
 		expect(canContinue(reply)).toBe(true);
 		expect(canContinue({ ...reply, stop: 'budget' })).toBe(true);
 		expect(canContinue({ ...reply, stop: 'truncated' })).toBe(true);
+		expect(canContinue({ ...reply, stop: 'stalled' })).toBe(true);
 		expect(canContinue({ ...reply, stop: 'done' })).toBe(false);
 		expect(canContinue({ ...reply, stop: 'rejected' })).toBe(false);
 	});

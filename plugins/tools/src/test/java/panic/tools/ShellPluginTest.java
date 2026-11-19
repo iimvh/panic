@@ -67,7 +67,7 @@ class ShellPluginTest {
   }
 
   private ShellConfig cfg(int maxBackground, List<String> deny) {
-    return new ShellConfig(dir.resolve("fallback").toString(), 0, 5, 0, maxBackground, deny);
+    return new ShellConfig(dir.resolve("fallback").toString(), 0, 5, 0, maxBackground, deny, null);
   }
 
   private ToolResult exec(String conversation, String args) {

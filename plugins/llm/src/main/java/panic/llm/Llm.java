@@ -30,4 +30,13 @@ public interface Llm extends ChatModel {
   Provider provider();
 
   String model();
+
+  /**
+   * Tokens one request may hold: the model's context length less the reply's {@code maxTokens}; 0 when unknown.
+   * The context length is {@link LlmConfig#contextWindow} when given, otherwise the provider's model list (looked up
+   * once in the background, so it can be 0 for the first requests or when the list does not say it).
+   */
+  default int inputWindow() {
+    return 0;
+  }
 }

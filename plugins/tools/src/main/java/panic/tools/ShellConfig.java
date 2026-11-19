@@ -17,12 +17,15 @@ import java.util.regex.PatternSyntaxException;
  *   <li>{@code deny}: regular expressions (case-insensitive, found anywhere in the command); a command that matches
  *       one is refused before anyone is asked, even in bypass mode. Leaving it out keeps {@link #DEFAULT_DENY};
  *       a list replaces it.</li>
+ *   <li>{@code shell}: what runs the commands (default {@code auto}: {@code sh} on Unix, Git Bash on Windows, else
+ *       PowerShell); also {@code sh}, {@code bash}, {@code cmd}, {@code powershell}, {@code pwsh}, or the path of
+ *       a shell. The tool's description names it, so the model writes for the shell it gets.</li>
  * </ul>
  *
  * A pattern that does not compile is a config error: a typo must not open the gate.
  */
 public record ShellConfig(String dir, int timeoutSeconds, int maxTimeoutSeconds, int maxOutput, int maxBackground,
-    List<String> deny) {
+    List<String> deny, String shell) {
 
   /** Commands that are never worth the risk: privilege, wiping, disks, power, fork bombs, piping downloads to a shell. */
   public static final List<String> DEFAULT_DENY = List.of(
@@ -35,7 +38,7 @@ public record ShellConfig(String dir, int timeoutSeconds, int maxTimeoutSeconds,
       "(curl|wget)\\b[^|]*\\|\\s*(sudo\\s+)?(ba|z|da)?sh\\b",
       ">\\s*/dev/sd[a-z]");
 
-  public static final ShellConfig DEFAULT = new ShellConfig(null, 0, 0, 0, 0, null);
+  public static final ShellConfig DEFAULT = new ShellConfig(null, 0, 0, 0, 0, null, null);
 
   public ShellConfig {
     dir = dir == null || dir.isBlank() ? "." : dir.strip();
@@ -45,6 +48,7 @@ public record ShellConfig(String dir, int timeoutSeconds, int maxTimeoutSeconds,
     if (maxOutput <= 0) maxOutput = 8000;
     if (maxBackground <= 0) maxBackground = 4;
     deny = deny == null ? DEFAULT_DENY : List.copyOf(deny);
+    shell = shell == null || shell.isBlank() ? "auto" : shell.strip();
     for (String d : deny) {
       try {
         Pattern.compile(d);

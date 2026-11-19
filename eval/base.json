@@ -1,0 +1,12 @@
+{
+  "chat": { "maxSteps": 150, "maxTokens": 0 },
+  "agents": { "profiles": { "explore": { "maxSteps": 150, "tools": ["read_file", "list_dir", "grep", "glob"] } } },
+  "permissions": { "bypassPermissions": true },
+  "ask-user": { "timeoutSeconds": 1 },
+  "web": { "enabled": false },
+  "folder-picker": { "enabled": false },
+  "checks": { "checks": {} },
+  "mcp": { "servers": {} },
+  "files": { "root": "." },
+  "shell": { "dir": "." }
+}

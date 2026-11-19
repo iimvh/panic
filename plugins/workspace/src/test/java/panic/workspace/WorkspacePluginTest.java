@@ -180,9 +180,9 @@ class WorkspacePluginTest {
     root.plugin("files", new FilesPlugin(), new FilesConfig(other.toString(), 0, 0, 0));
     root.plugin("permissions", new PermissionsPlugin(), new PermissionsConfig(Map.of("write", "allow"), null, 0));
     run("c1", "use", project.toString());
-    assertEquals(ToolResult.ok("     1\tin project\n"), read("c1", "c1", "a.txt"));
-    assertEquals(ToolResult.ok("     1\tin other\n"), read("c2", "c2", "a.txt"), "no project: the configured root");
-    assertEquals(ToolResult.ok("     1\tin project\n"), read("sub-agent", "c1", "a.txt"),
+    assertEquals("     1\tin project\n", read("c1", "c1", "a.txt").content());
+    assertEquals("     1\tin other\n", read("c2", "c2", "a.txt").content(), "no project: the configured root");
+    assertEquals("     1\tin project\n", read("sub-agent", "c1", "a.txt").content(),
         "a sub-agent works where its origin does");
     ToolResult outside = read("c1", "c1", "../other/a.txt");
     assertTrue(outside.isError() && outside.content().contains("outside the workspace"), outside.content());

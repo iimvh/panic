@@ -160,9 +160,9 @@ public final class Chat {
 
   /**
    * Why a turn ended. Anything but {@link #DONE} means the bot was stopped before it finished. Only hard limits stop
-   * a turn ({@link #MAX_STEPS}, {@link #BUDGET}), as in the Claude Agent SDK ({@code max_turns}), Cursor (tool call
-   * limit, then "Continue") and the OpenAI Agents SDK ({@code max_turns}): a repeated call is refused as feedback,
-   * it does not end the turn.
+   * a turn ({@link #MAX_STEPS}, {@link #BUDGET}, {@link #STALLED}), as in the Claude Agent SDK ({@code max_turns}),
+   * Cursor (tool call limit, then "Continue") and the OpenAI Agents SDK ({@code max_turns}): a repeated call is
+   * refused as feedback, it does not end the turn.
    */
   public static final String DONE = "done";
   public static final String MAX_STEPS = "max_steps";
@@ -174,6 +174,18 @@ public final class Chat {
    * row: the limit is too low for what it tries to write, and asking again would only cut it again.
    */
   public static final String TRUNCATED = "truncated";
+  /**
+   * {@link #STALL_STOP_CALLS} tool calls in a row brought nothing the turn had not seen (the same file part, the same
+   * output), {@link #STALL_FEEDBACK_CALLS} of them after the model was told so: it is going round in circles, and
+   * every further call costs the whole context again.
+   */
+  public static final String STALLED = "stalled";
+
+  /** Tool calls in a row without new information after which the model is told ({@link #STALL_FEEDBACK_PREFIX}). */
+  public static final int STALL_FEEDBACK_CALLS = 15;
+
+  /** Tool calls in a row without new information after which the turn stops with {@link #STALLED}. */
+  public static final int STALL_STOP_CALLS = 30;
 
   /**
    * Starts the content of a {@code TOOL} message whose call failed (unknown tool, bad arguments, denied, not
@@ -190,6 +202,12 @@ public final class Chat {
    */
   public static final String TRUNCATED_FEEDBACK_PREFIX = "Your last reply was cut off at the output token limit";
 
+  /**
+   * Starts the user message that tells the model its last tool calls brought nothing new (stored with the turn). The
+   * harness speaking, like {@link #REVIEW_FEEDBACK_PREFIX}.
+   */
+  public static final String STALL_FEEDBACK_PREFIX = "Your last tool calls brought no new information";
+
   /** Cut replies in a row after which a turn stops with {@link #TRUNCATED}. */
   public static final int TRUNCATIONS_IN_A_ROW = 3;
 
@@ -198,7 +216,8 @@ public final class Chat {
    * do not show it as the user's words and summaries do not keep it as such.
    */
   public static boolean fromHarness(String userMessage) {
-    return userMessage.startsWith(REVIEW_FEEDBACK_PREFIX) || userMessage.startsWith(TRUNCATED_FEEDBACK_PREFIX);
+    return userMessage.startsWith(REVIEW_FEEDBACK_PREFIX) || userMessage.startsWith(TRUNCATED_FEEDBACK_PREFIX)
+        || userMessage.startsWith(STALL_FEEDBACK_PREFIX);
   }
 
   /**
@@ -206,7 +225,7 @@ public final class Chat {
    * turn before it answered or {@link #TRUNCATED} stopped it, a closing note of the harness (why it stopped, the
    * tools run, how to continue) that is not saved in the conversation; {@code usage} adds up every model call of the
    * turn (reviews included); {@code stop} says why it ended ({@link #DONE}, {@link #MAX_STEPS}, {@link #BUDGET},
-   * {@link #REJECTED}, {@link #TRUNCATED}). {@code review} is the reason of the last verdict, null when nobody
+   * {@link #REJECTED}, {@link #TRUNCATED}, {@link #STALLED}). {@code review} is the reason of the last verdict, null when nobody
    * reviewed the answer. {@code traceId} is the turn's trace, whose spans are emitted on
    * {@link panic.trace.Trace#SPAN}.
    */

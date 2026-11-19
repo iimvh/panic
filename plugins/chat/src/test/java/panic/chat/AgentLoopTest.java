@@ -342,7 +342,8 @@ class AgentLoopTest {
     chat(cfg(0, 0, 0, 5, 0));
     llm.then(r -> calls(call("a", "echo", "{\"text\":\"abcdefgh\"}"))).then(r -> answer("ok"));
     ask("go");
-    assertEquals("ABCDE\n… [truncated 3 chars]", toolMessages(llm.requests.get(1)).get(0).content());
+    assertEquals("ABCDE\n… [truncated 3 chars; ask for a smaller part (read_file offset/limit, a narrower grep or "
+        + "command)]", toolMessages(llm.requests.get(1)).get(0).content());
   }
 
   /** {@code wait}: blocks until cancelled; counts down {@code started} first. */

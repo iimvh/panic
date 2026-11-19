@@ -15,7 +15,7 @@ of a change) then stays out of the main context, and several sub-agents can work
   "profiles": {
     "explore": {
       "description": "Searches the codebase broadly (many files or folders) and reports each finding with its path, line numbers and the relevant code quoted, so you need not read those files again. Read-only. Not for reading one file you know.",
-      "tools": ["read_file", "list_dir"],
+      "tools": ["read_file", "list_dir", "grep", "glob"],
       "maxSteps": 12
     }
   },

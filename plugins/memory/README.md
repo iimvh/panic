@@ -47,7 +47,7 @@ global file, and the project's own file last. A cut is marked in the text, and t
 
 **Cost and trust.** The system message is always sent whole (see the chat README's context window), so these files
 take room from the history on every request, every sub-agent's included. Keep `maxChars` well under
-`chat.contextTokens` × 4. A repository you did not write can put instructions in front of the model this way:
+the chat's context budget (`chat.contextTokens`, by default the model's window) × 4. A repository you did not write can put instructions in front of the model this way:
 the permission policy still asks before writes and commands, and `enabled: false` turns the section off.
 
 ## `memory`

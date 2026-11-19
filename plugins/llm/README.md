@@ -8,8 +8,17 @@ LLM providers and the model the app chats with.
 | --- | --- | --- | --- |
 | `openrouter` | `ProviderConfig { apiKey, baseUrl?, maxRetries? }` | none | service `Providers.key("openrouter")` while it has a key; hook `Providers.STATUS` |
 | `custom-providers` | `CustomProvidersConfig { providers: { <id>: { baseUrl, apiKey?, maxRetries?, enabled?, streamUsage? } } }` | none | per entry: service `Providers.key(<id>)` while connected; hook `Providers.STATUS` |
-| `llm` | `LlmConfig { provider, model, temperature?, maxTokens?, reasoningEffort? }` | none (its child `active:<provider>` requires that provider) | service `Llm.KEY`; hooks `Llm.CURRENT`, `Llm.CONFIG`; commands `status`, `models`, `check` |
+| `llm` | `LlmConfig { provider, model, temperature?, maxTokens?, reasoningEffort?, contextWindow? }` | none (its child `active:<provider>` requires that provider) | service `Llm.KEY`; hooks `Llm.CURRENT`, `Llm.CONFIG`; commands `status`, `models`, `check` |
 | `settings` | none | `Configs.KEY` | commands `provider`, `model` (they update the `llm` config) |
+
+## Context window
+
+`Llm.inputWindow()` is how many tokens one request may hold: the model's context length less `maxTokens` (the
+reply), or 0 when unknown. `chat` sizes its context budget from it (see the chat README). The context length is
+`contextWindow` when given; otherwise the `active:<provider>` branch looks it up once, in the background, in the
+provider's model list (`context_length`, as `models` shows it), so it is 0 until that answers and stays 0 when the
+list does not say it (many OpenAI-compatible hosts list ids only: give `contextWindow` there). `/model` and
+`/provider` drop `contextWindow`, since it describes the old model.
 
 ## Environment without `panic.json`
 
@@ -85,6 +94,7 @@ What a reasoning model thinks before it answers is kept apart from its answer, s
 | `ChatModel.stream(request, signal, onDelta, onToolDelta, onReasoning)` | Also hands each piece of the reasoning to `onReasoning` as it streams; the default reports nothing. A wrapper must forward it (`Llm`'s does) |
 | `Completion.reasoning()` | The whole reasoning, empty when the provider shows none. Not part of `message()`: it is never sent back to the model nor saved |
 | `Usage.reasoningTokens()` | The part of `completionTokens` spent thinking (`completion_tokens_details.reasoning_tokens`), also when the text is hidden |
+| `Usage.cachedTokens()` | The part of `promptTokens` served from the provider's prompt cache (`prompt_tokens_details.cached_tokens`, or DeepSeek's `prompt_cache_hit_tokens`); 0 when the provider reports none |
 | `Content.reasoning(message)` | Reads `reasoning` (OpenRouter, Ollama), else `reasoning_content` (DeepSeek, vLLM, LM Studio), plus `thinking` content parts (Mistral) |
 
 **Turning it on.** `llm.reasoningEffort` (`low`, `medium`, `high`, or any level the provider knows; left out = none)

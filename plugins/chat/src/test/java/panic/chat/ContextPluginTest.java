@@ -244,21 +244,6 @@ class ContextPluginTest {
   }
 
   @Test
-  void oldToolResultsAreClearedNewestKept() {
-    String big = "y".repeat(500);
-    List<Message> messages = new java.util.ArrayList<>(List.of(Message.user("q"),
-        Message.tool("1", big), Message.tool("2", "short"), Message.tool("3", big), Message.tool("4", big),
-        Message.tool("5", big)));
-    assertEquals(2, ChatPlugin.clearToolResults(messages, 2));
-    assertEquals(String.format(java.util.Locale.ROOT, ChatPlugin.CLEARED, 500), messages.get(1).content());
-    assertEquals("1", messages.get(1).toolCallId(), "the placeholder still answers its call");
-    assertEquals("short", messages.get(2).content(), "a short result costs less than its placeholder");
-    assertEquals(String.format(java.util.Locale.ROOT, ChatPlugin.CLEARED, 500), messages.get(3).content());
-    assertEquals(big, messages.get(4).content());
-    assertEquals(big, messages.get(5).content());
-  }
-
-  @Test
   void requestsOverTheTriggerSendOldToolResultsAsPlaceholders() {
     llm.toolTurns = 4;
     chat(new ChatConfig(null, 0, true, 0, 0, 0, 0, 0, 100_000, false, null, 0, 300, 1));
@@ -266,7 +251,7 @@ class ContextPluginTest {
     ChatRequest last = llm.last();
     List<String> results = last.messages().stream().filter(m -> m.role() == Role.TOOL).map(Message::content).toList();
     assertEquals(4, results.size());
-    assertTrue(results.subList(0, 3).stream().allMatch(c -> c.startsWith("[tool result cleared")), results.toString());
+    assertTrue(results.subList(0, 3).stream().allMatch(c -> c.startsWith("[big result cleared")), results.toString());
     assertEquals("z".repeat(1000), results.get(3));
     List<Message> stored = conversation().recent(0);
     assertTrue(stored.stream().filter(m -> m.role() == Role.TOOL).allMatch(m -> m.content().equals("z".repeat(1000))),

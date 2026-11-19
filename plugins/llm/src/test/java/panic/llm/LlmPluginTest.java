@@ -160,4 +160,55 @@ class LlmPluginTest {
     llm.stream(ChatRequest.of(List.of(Message.user("q"))), new CancelToken(), d -> { }, d -> { }, thoughts::add);
     assertEquals(List.of("hmm"), thoughts, "the current llm passes the reasoning on, not only text and tool calls");
   }
+
+  /** Lists one model with a context length, as OpenRouter does. */
+  record Listed(String id, long contextLength) implements Provider {
+    @Override
+    public ChatModel chat() {
+      return new Echo(id);
+    }
+
+    @Override
+    public List<ModelInfo> models(Signal signal) {
+      return List.of(new ModelInfo("other", "Other", 8_000, null), new ModelInfo("m1", "M1", contextLength, null));
+    }
+
+    @Override
+    public KeyCheck checkKey(Signal signal) {
+      return new KeyCheck(true, "ok");
+    }
+  }
+
+  private int window() throws InterruptedException {
+    for (int i = 0; i < 400; i++) {
+      Llm llm = root.bail(Llm.CURRENT, Llm.Query.CURRENT).orElse(null);
+      if (llm != null && llm.inputWindow() > 0) return llm.inputWindow();
+      Thread.sleep(5);
+    }
+    return 0;
+  }
+
+  @Test
+  void theInputWindowIsTheListedContextLengthLessTheReply() throws InterruptedException {
+    root.plugin("p", ctx -> {
+      ctx.provide(Providers.key("p"), new Listed("p", 131_072));
+      return null;
+    });
+    root.plugin("llm", new LlmPlugin(), new LlmConfig("p", "m1", null, 16_384));
+    assertEquals(131_072 - 16_384, window());
+  }
+
+  @Test
+  void aConfiguredContextWindowWinsAndAModelSwitchDropsIt() throws InterruptedException {
+    root.plugin("p", ctx -> {
+      ctx.provide(Providers.key("p"), new Listed("p", 0)); // a host that lists ids only
+      return null;
+    });
+    ConfigHandle<LlmConfig> llm = root.plugin("llm", new LlmPlugin(),
+        new LlmConfig("p", "m1", null, 1_000, null, 64_000));
+    assertEquals(63_000, window());
+    llm.update(llm.config().withModel("m1"));
+    assertEquals(null, llm.config().contextWindow());
+    assertEquals(0, root.bail(Llm.CURRENT, Llm.Query.CURRENT).orElseThrow().inputWindow(), "unknown again");
+  }
 }

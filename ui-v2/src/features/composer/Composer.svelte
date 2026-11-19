@@ -123,9 +123,6 @@
 		border-radius: var(--radius-lg);
 		background: var(--bg);
 	}
-	form:focus-within {
-		border-color: var(--text-2);
-	}
 	textarea {
 		display: block;
 		width: 100%;

@@ -11,6 +11,8 @@ The interface steps back so the agent's work is what you see.
   ever mean status.
 - **Transparent but quiet.** The model, tokens, tools and time of every answer are shown in one muted line.
   Steps, the trace and a run's totals are one click away in the inspector, never in the way.
+- **Quiet chrome.** Scrollbars are thin, without track or arrows. A text field shows its focus by its caret
+  alone, with no ring or lit frame; buttons, links, selects and tabs keep their focus ring for the keyboard.
 - **One place per control.** There is one New chat, one Settings, and the run mode is shown once. What is
   used less often waits in a menu, and anything destructive is confirmed.
 - **No decoration.** No gradients, offset shadows or uppercase labels. Motion only says the system works:

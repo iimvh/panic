@@ -61,6 +61,48 @@ test('keeps what is on screen when a new chat gets its route', async ({ page }) 
 	await expect(page.getByLabel('Message')).toHaveValue('a draft');
 });
 
+test('shows the message box focused by its caret only, with no ring or lit frame', async ({ page }) => {
+	await page.goto('/');
+	const box = page.getByLabel('Message');
+	const look = () =>
+		box.evaluate((el) => ({ outline: getComputedStyle(el).outlineStyle, frame: getComputedStyle(el.closest('form')!).borderTopColor }));
+	await page.locator('body').click({ position: { x: 5, y: 5 } });
+	const before = await look();
+	await box.click();
+	await expect(box).toBeFocused();
+	expect(await look()).toEqual(before);
+	expect(before.outline).toBe('none');
+});
+
+test('keeps the chat when the inspector opens before its route has loaded', async ({ page }) => {
+	await page.goto('/');
+	// the /c/<id> route's code arrives late: a click in the meantime must not leave the chat on `/`
+	let release!: () => void;
+	const late = new Promise<void>((r) => (release = r));
+	await page.route('**/_app/immutable/nodes/*.js', async (route) => {
+		await late;
+		await route.continue();
+	});
+	await ask(page, 'Summarise this project');
+	await page.getByRole('button', { name: '2 tool calls' }).click();
+	await page.getByRole('button', { name: /read_file README\.md/ }).click();
+	release();
+	await expect(page).toHaveURL(/\/c\/[0-9a-f]{24}\?panel=step&step=t2$/);
+	await page.reload();
+	await expect(page.getByText('The project is Panic.')).toBeVisible();
+});
+
+test('has thin scrollbars on every scrolling area', async ({ page }) => {
+	await page.goto('/');
+	await ask(page, 'Summarise this project');
+	await page.keyboard.press('Control+i');
+	await expect(page.getByRole('tab', { name: 'Overview' })).toBeVisible();
+	const widths = await page.evaluate(() =>
+		['.scroller', '.lists', '.ui-tab-panel[data-state="active"]'].map((s) => getComputedStyle(document.querySelector(s)!).scrollbarWidth)
+	);
+	expect(widths).toEqual(['thin', 'thin', 'thin']);
+});
+
 test('allows a tool call', async ({ page }) => {
 	await page.goto('/');
 	await ask(page, 'Run the tests');

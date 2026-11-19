@@ -66,6 +66,19 @@ describe('tokens', () => {
 		expect(styles(sources[SHIMMER])).toMatch(/prefers-reduced-motion: reduce/);
 	});
 
+	it('lets text fields show focus by their caret alone', () => {
+		// no component lights up a field or its frame on focus (the caret already says where typing goes)
+		const lit = Object.entries(sources).filter(([, text]) => /(?:input|textarea|form|label)[^{,]*:focus(?:-within|-visible)?\b/.test(styles(text)));
+		expect(lit.map(([p]) => p)).toEqual([]);
+		expect(css).toMatch(/textarea:focus-visible,\s*input:not\([^)]*\):focus-visible\s*\{\s*outline:\s*none;/);
+	});
+
+	it('has thin, quiet scrollbars in both themes', () => {
+		expect(css).toMatch(/scrollbar-width:\s*thin/);
+		expect(css).toMatch(/scrollbar-color:\s*var\(--scrollbar\) transparent/);
+		for (const sel of [':root {', ":root[data-theme='dark']"]) expect(token(sel, 'scrollbar')).toMatch(/^#/);
+	});
+
 	it('catches what it should, and only that', () => {
 		const bad: [string, string][] = [
 			['colour literal', 'color: #fff;'],

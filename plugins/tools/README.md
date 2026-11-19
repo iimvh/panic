@@ -131,6 +131,7 @@ the plugin that answers (`workspace`, `folder-picker` in `plugins/workspace`); w
 | `Workspace.ROOT` | hook `Query(conversationId) → Path` | The project folder of a conversation; no answer when it has none. Used by `files` and `checks` (`Workspace.root(ctx, id, fallback)`) |
 | `Workspace.LIST` | hook `Listing.ALL → Projects(projects[Project(path, name, conversations)], hidden[id])` | The active projects and the chats of removed ones (not to be listed) |
 | `Workspace.PICK` | hook `PickQuery(signal) → Picked(path)` | A folder chosen in a native dialog; no answer when cancelled or unavailable |
+| `Workspace.REVEAL` | hook `RevealQuery(path) → Boolean` | Opens a folder in the system's file manager (answered by `folder-picker`); no answer when unavailable. Callers pass only projects |
 
 ## Permissions
 

@@ -4,7 +4,9 @@ package panic.llm;
  * Which provider and model to chat with, plus default options (null = provider default). {@code reasoningEffort}
  * ({@code low}, {@code medium}, {@code high}, ...) is sent as {@code reasoning_effort} with every request that does
  * not choose its own (see {@link ChatRequest}): hybrid models (DeepSeek V4 on some hosts, for one) think only when
- * it is set. Null or blank sends none. Thinking tokens count against {@code maxTokens}.
+ * it is set. Null or blank sends none, and so does a model whose provider lists it without a reasoning parameter
+ * (see {@link ModelInfo#reasoning}). Thinking tokens count against {@code maxTokens}. Null {@code maxTokens} sends
+ * no limit (the provider's default).
  *
  * {@code contextWindow}: the model's context length in tokens, for providers whose model list does not say it
  * (null or 0 = take it from the list, see {@link Llm#inputWindow}).

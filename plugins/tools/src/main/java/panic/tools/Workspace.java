@@ -57,6 +57,13 @@ public final class Workspace {
     }
   }
 
+  /** A folder to show in the file manager of the machine Panic runs on. */
+  public record RevealQuery(Path path) {
+    public RevealQuery {
+      Objects.requireNonNull(path, "path");
+    }
+  }
+
   /** The root of a conversation's workspace; answered by plugin {@code workspace}, null when it has no project. */
   public static final HookKey<Query, Path> ROOT = HookKey.of("workspace.root", Query.class, Path.class);
 
@@ -65,6 +72,14 @@ public final class Workspace {
 
   /** A folder chosen in a native dialog; answered by plugin {@code folder-picker}, null when cancelled or unavailable. */
   public static final HookKey<PickQuery, Picked> PICK = HookKey.of("workspace.pick", PickQuery.class, Picked.class);
+
+  /**
+   * Opens a folder in the system's file manager (a browser cannot); answered by plugin {@code folder-picker}, TRUE
+   * once started, null when unavailable (turned off, or no file manager). Callers check that the folder is one the
+   * user chose (a project): handlers open whatever they are given.
+   */
+  public static final HookKey<RevealQuery, Boolean> REVEAL = HookKey.of("workspace.reveal", RevealQuery.class,
+      Boolean.class);
 
   /**
    * The root {@code conversationId} works in: its project's folder, or {@code fallback} when it has none. Blocks

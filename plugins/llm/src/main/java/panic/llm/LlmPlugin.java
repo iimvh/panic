@@ -7,7 +7,7 @@ import core.Disposable;
 import core.Signal;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import panic.command.Commands;
 import panic.command.Out;
@@ -31,19 +31,20 @@ public final class LlmPlugin implements ConfigPlugin<LlmConfig> {
       String state = ctx.isProvided(Llm.KEY) ? "connected" : "not connected";
       call.out().println("provider: " + orNone(cfg.provider()) + "   model: " + orNone(cfg.model())
           + "   (" + state + ")");
+      ctx.bail(Llm.CURRENT, Llm.Query.CURRENT).ifPresent(llm -> call.out().println(limits(cfg, llm)));
     });
     if (cfg.provider() == null || cfg.provider().isBlank()) return null;
     String providerId = cfg.provider().strip();
     ctx.plugin("active:" + providerId, Plugin.require(Providers.key(providerId)).then(active -> {
       Provider provider = active.get(Providers.key(providerId));
-      AtomicLong window = new AtomicLong(cfg.contextWindow() == null ? 0 : cfg.contextWindow());
-      if (cfg.contextWindow() == null && cfg.model() != null) {
-        active.spawn("context-window", signal -> {
-          window.set(contextLength(provider, cfg.model(), signal));
+      AtomicReference<ModelInfo> info = new AtomicReference<>();
+      if (cfg.model() != null) {
+        active.spawn("model-info", signal -> {
+          info.set(lookup(provider, cfg.model(), signal));
           return null;
         });
       }
-      Llm llm = new Active(provider, cfg, window);
+      Llm llm = new Active(provider, cfg, info);
       active.provide(Llm.KEY, llm);
       active.hook(Llm.CURRENT, q -> llm);
       Commands.command(active, "models [filter]",
@@ -74,24 +75,41 @@ public final class LlmPlugin implements ConfigPlugin<LlmConfig> {
     if (models.isEmpty()) out.println("  (none)");
   }
 
-  /** The context length the provider lists for {@code model}; 0 when it does not say or the list fails. */
-  static long contextLength(Provider provider, String model, Signal signal) {
+  /** What the provider lists for {@code model}; null when the list fails or does not have it. */
+  static ModelInfo lookup(Provider provider, String model, Signal signal) {
     try {
       for (ModelInfo m : provider.models(signal)) {
-        if (m.id().equals(model)) return Math.max(0, m.contextLength());
+        if (m.id().equals(model)) return m;
       }
     } catch (RuntimeException e) {
-      // unknown: callers fall back to their own default
+      // unknown: callers fall back to their own defaults
     }
-    return 0;
+    return null;
+  }
+
+  /** The limits in use and where they come from, for {@code status}. */
+  static String limits(LlmConfig cfg, Llm llm) {
+    ModelInfo info = llm.info();
+    long context = cfg.contextWindow() != null ? cfg.contextWindow() : info == null ? 0 : info.contextLength();
+    String source = cfg.contextWindow() != null ? "config" : "provider";
+    StringBuilder out = new StringBuilder("context: ")
+        .append(context > 0 ? (context / 1000) + "k (" + source + ")" : "unknown");
+    if (cfg.maxTokens() != null) out.append("   reply: ").append(cfg.maxTokens()).append(" (config)");
+    else if (info != null && info.maxOutput() > 0) out.append("   reply: up to ").append(info.maxOutput() / 1000)
+        .append("k (provider)");
+    out.append("   effort: ").append(cfg.reasoningEffort() == null ? "off" : cfg.reasoningEffort());
+    if (cfg.reasoningEffort() != null && info != null && Boolean.FALSE.equals(info.reasoning())) {
+      out.append(" (the model takes none: not sent)");
+    }
+    return out.toString();
   }
 
   private static String orNone(String s) {
     return s == null || s.isBlank() ? "<none>" : s;
   }
 
-  /** {@code window}: the model's context length, 0 while unknown. */
-  private record Active(Provider provider, LlmConfig cfg, AtomicLong window) implements Llm {
+  /** {@code looked}: what the provider lists for the model, null while unknown. */
+  private record Active(Provider provider, LlmConfig cfg, AtomicReference<ModelInfo> looked) implements Llm {
 
     @Override
     public String model() {
@@ -99,11 +117,20 @@ public final class LlmPlugin implements ConfigPlugin<LlmConfig> {
     }
 
     @Override
+    public ModelInfo info() {
+      return looked.get();
+    }
+
+    @Override
     public int inputWindow() {
-      long length = window.get();
+      ModelInfo m = looked.get();
+      long length = cfg.contextWindow() != null ? cfg.contextWindow() : m == null ? 0 : m.contextLength();
       if (length <= 0) return 0;
-      long reply = cfg.maxTokens() == null ? 0 : Math.max(0, cfg.maxTokens());
-      return (int) Math.min(Integer.MAX_VALUE, Math.max(0, length - reply));
+      long reply = cfg.maxTokens() != null ? Math.max(0, cfg.maxTokens())
+          : m != null && m.maxOutput() > 0 ? Math.min(m.maxOutput(), REPLY_ROOM) : DEFAULT_REPLY_ROOM;
+      // a reply room as large as the window (a tiny or misdescribed model) leaves half for the request
+      if (reply >= length) reply = length / 2;
+      return (int) Math.min(Integer.MAX_VALUE, length - reply);
     }
 
     @Override
@@ -128,8 +155,15 @@ public final class LlmPlugin implements ConfigPlugin<LlmConfig> {
       return provider.chat().stream(defaults(request), signal, onDelta, onToolDelta, onReasoning);
     }
 
+    /**
+     * The config's options for what the request leaves out. The configured effort is not sent to a model the
+     * provider lists without a reasoning parameter (it would refuse the request or ignore it); a request that asks
+     * for an effort itself still sends it, and so does every request while nobody knows.
+     */
     private ChatRequest defaults(ChatRequest request) {
-      return request.withDefaults(cfg.model(), cfg.temperature(), cfg.maxTokens(), cfg.reasoningEffort());
+      ModelInfo m = looked.get();
+      String effort = m != null && Boolean.FALSE.equals(m.reasoning()) ? null : cfg.reasoningEffort();
+      return request.withDefaults(cfg.model(), cfg.temperature(), cfg.maxTokens(), effort);
     }
 
     @Override

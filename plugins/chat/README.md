@@ -164,7 +164,7 @@ reach the reviewer as `Review.evidence`. A check that failed is reported as a fa
 
 Every request stays under the turn's budget of estimated tokens: `contextTokens` when it is a positive number, no
 limit when `0` (only `maxHistory` applies), and when left out the model's own window, `Llm.inputWindow()` (its context
-length less `llm.maxTokens`, see the llm README), at most 200000 (`AUTO_MAX_CONTEXT_TOKENS`: each step sends the
+length less room for the reply, see the llm README), at most 200000 (`AUTO_MAX_CONTEXT_TOKENS`: each step sends the
 whole request again, and models recall less from very long contexts), or 32000 while the window is unknown. The
 `turn` span records it as `contextTokens`. Prefer leaving it out: a budget below the files a task needs at once makes
 the model re-read them in a cycle whatever is cleared (on 2026-11-19 a 32K budget left DeepSeek V4.1, a 128K model,

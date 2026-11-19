@@ -23,7 +23,8 @@ class ProvidersTest {
       if (path.endsWith("/models")) {
         FakeServer.json(ex, 200, """
             {"data":[
-              {"id":"b/paid","name":"Paid","context_length":8000,"pricing":{"prompt":"0.000001","completion":"0.000002"}},
+              {"id":"b/paid","name":"Paid","context_length":8000,"pricing":{"prompt":"0.000001","completion":"0.000002"},
+               "top_provider":{"max_completion_tokens":4096},"supported_parameters":["tools","reasoning"]},
               {"id":"a/zero","name":"Zero","pricing":{"prompt":"0","completion":"0"}},
               {"id":"c/x:free","name":"Free"}]}""");
       } else if (path.endsWith("/key")) {
@@ -49,6 +50,10 @@ class ProvidersTest {
         assertEquals(List.of("a/zero", "b/paid", "c/x:free"), models.stream().map(ModelInfo::id).toList());
         assertEquals(List.of(true, false, true), models.stream().map(ModelInfo::free).toList());
         assertEquals(8000, models.get(1).contextLength());
+        assertEquals(4096, models.get(1).maxOutput());
+        assertEquals(Boolean.TRUE, models.get(1).reasoning());
+        assertEquals(0, models.get(0).maxOutput(), "no limit listed");
+        assertEquals(null, models.get(0).reasoning(), "no parameters listed: unknown");
 
         KeyCheck ok = p[0].checkKey(new CancelToken());
         assertTrue(ok.ok());

@@ -1,5 +1,8 @@
-/** A stored conversation, as `GET /api/conversations` lists it. */
-export type ConversationInfo = { id: string; title: string; updatedAt: number };
+/**
+ * A conversation as `GET /api/conversations` lists it. `running`: its answer runs now (it may not be stored yet,
+ * when that is its first answer).
+ */
+export type ConversationInfo = { id: string; title: string; updatedAt: number; running?: boolean };
 
 /** "just now", "5m", "3h", "yesterday", "4d", then the date: how long ago `at` was, at `now` (both ms). */
 export function ago(at: number, now: number): string {

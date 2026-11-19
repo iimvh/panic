@@ -2,7 +2,12 @@
 	import { chat } from '$lib/chat.svelte';
 	import { theme } from '$lib/theme.svelte';
 
-	let { onsettings, onmenu }: { onsettings: () => void; onmenu: () => void } = $props();
+	/** `expanded`: the chat list shows (the sidebar, or the drawer on a narrow screen). */
+	let {
+		onsettings,
+		onmenu,
+		expanded = true
+	}: { onsettings: () => void; onmenu: () => void; expanded?: boolean } = $props();
 
 	const THEME = { auto: 'system', light: 'light', dark: 'dark' } as const;
 	const next = $derived(theme.pref === 'auto' ? 'light' : theme.pref === 'light' ? 'dark' : 'auto');
@@ -14,7 +19,13 @@
 </script>
 
 <header>
-	<button class="btn icon menu" onclick={onmenu} aria-label="Chats">
+	<button
+		class="btn icon menu"
+		onclick={onmenu}
+		aria-label="Chats"
+		aria-expanded={expanded}
+		title="{expanded ? 'Hide' : 'Show'} chats (Ctrl+B)"
+	>
 		<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
 			><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16" /></svg
 		>
@@ -119,14 +130,8 @@
 	.icon {
 		padding: 6px 8px;
 	}
-	/* the chat list is a sidebar on wide screens: its button only shows when it is a drawer */
 	.menu {
-		display: none;
-	}
-	@media (max-width: 860px) {
-		.menu {
-			display: inline-flex;
-		}
+		display: inline-flex;
 	}
 	@media (max-width: 520px) {
 		.actions .btn:not(.icon) {

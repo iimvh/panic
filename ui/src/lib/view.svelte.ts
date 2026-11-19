@@ -1,5 +1,6 @@
 import { chat, type Message } from './chat.svelte';
 import { flatten, type Mode } from './scene';
+import { load, save } from './storage';
 
 /**
  * How the agent map is shown beside the chat: its size (side by side, the map in focus, or a strip above the
@@ -115,23 +116,6 @@ class MapView {
 		if (!this.playing || this.replay === undefined) return;
 		if (this.replay >= this.stepCount - 1) this.playing = false;
 		else this.replay++;
-	}
-}
-
-function load(key: string, ok: (v: string) => boolean, fallback: string): string {
-	try {
-		const v = localStorage.getItem(key);
-		return v !== null && ok(v) ? v : fallback;
-	} catch {
-		return fallback;
-	}
-}
-
-function save(key: string, value: string) {
-	try {
-		localStorage.setItem(key, value);
-	} catch {
-		// private window or blocked storage: the choice lasts until the page closes
 	}
 }
 

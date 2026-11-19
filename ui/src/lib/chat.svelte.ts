@@ -1,4 +1,4 @@
-import { ApiError, deleteConversation, events, follow, getConversations, getHistory, getMode, getPermissions, getState, getWorkspaces, postAnswer, postApproval, postPlan, postStop, putSettings, quoteArg, runCommand, stream, type Mode, type Permissions, type State } from './api';
+import { ApiError, deleteConversation, events, follow, getConversations, getHistory, getMode, getPermissions, getState, getWorkspaces, postAnswer, postApproval, postPlan, postStop, putSettings, quoteArg, runCommand, stream, type Mode, type SettingsChange, type Permissions, type State } from './api';
 import { without, type ConversationInfo, type Workspaces } from './conversations';
 import { CONTINUE_TEXT, askApproval, askPlan, askUser, clearApproval, createAnswer, duration, failAnswer, fromHistory, type Approval, type Part, type PlanProposal, type Questions, type Usage } from './reply';
 import { newSessionId, sessionId, setSessionId } from './session';
@@ -71,6 +71,11 @@ class Chat {
 	#answering = false;
 	/** The request in flight, to wait for it to end. */
 	#current: Promise<void> = Promise.resolve();
+	/**
+	 * Answers still running in chats the page left, each watched (its events ignored) so the server does not take it
+	 * for abandoned and stop it after `detachSeconds`; by session, to stop watching when the chat is opened again.
+	 */
+	#watched = new Map<string, AbortController>();
 
 	/** The stored conversation, then the answer still running in this session, if any (after a reload). */
 	async load() {
@@ -177,11 +182,11 @@ class Chat {
 	}
 
 	/**
-	 * Starts a new conversation; the current one stays in the list. A running answer is stopped first. With
-	 * `project` (a folder path) the chat works in that project; null is the error text when that failed.
+	 * Starts a new conversation; the current one stays in the list. A running answer goes on there (see `#leave`).
+	 * With `project` (a folder path) the chat works in that project; null is the error text when that failed.
 	 */
 	async newChat(project?: string): Promise<string | null> {
-		await this.#settle();
+		await this.#leave();
 		this.session = newSessionId();
 		this.messages = [];
 		this.inspected = null;
@@ -224,6 +229,19 @@ class Chat {
 		this.#picking?.abort();
 	}
 
+	/**
+	 * Shows the project's folder in the file manager of the computer that runs Panic. Null when it opened; else what
+	 * to tell the user (opening is off there, with the path to open by hand, or the error).
+	 */
+	async openProject(path: string): Promise<string | null> {
+		try {
+			const text = (await runCommand(this.session, `workspace open ${quoteArg(path)}`)).trim();
+			return text.startsWith('opened ') ? null : text;
+		} catch (e) {
+			return errorText(e);
+		}
+	}
+
 	/** Removes a project from the list; its chats are hidden until the folder is added again. */
 	async removeProject(path: string): Promise<string | null> {
 		try {
@@ -235,10 +253,10 @@ class Chat {
 		return null;
 	}
 
-	/** Shows conversation `id`. A running answer is stopped first, so it cannot land in the other chat. */
+	/** Shows conversation `id`. A running answer goes on in the chat left (see `#leave`). */
 	async open(id: string) {
 		if (id === this.session) return;
-		await this.#settle();
+		await this.#leave();
 		this.session = setSessionId(id);
 		this.messages = [];
 		this.inspected = null;
@@ -259,11 +277,66 @@ class Chat {
 		return now.kind === 'trace' && now.traceId === what.traceId;
 	}
 
-	/** Stops what runs (an answer through the server) and waits for it to end. */
-	async #settle() {
+	/**
+	 * Lets go of what runs before another chat is shown. An answer is not stopped: the server would drop the whole
+	 * turn (a stopped turn is not saved), and a new chat whose first answer it was would vanish. It is watched in
+	 * the background until it ends, and shown again when its chat is opened (`#resume`). A command just ends.
+	 */
+	async #leave() {
 		if (!this.busy) return;
-		this.stop();
+		if (this.#answering) await this.#watch(this.session);
+		this.#abort?.abort();
 		await this.#current;
+	}
+
+	/**
+	 * Watches the answer running in `session` until it ends, ignoring its events; resolves once watching started
+	 * (before the page's own stream is closed, so the answer is never left unwatched). A lost connection is
+	 * tried again a few times; when the answer ends the chat list is loaded again (it is stored now).
+	 */
+	async #watch(session: string) {
+		this.#unwatch(session);
+		const ctl = new AbortController();
+		this.#watched.set(session, ctl);
+		// only events from now on: the page ignores them anyway
+		const open = () => follow(session, Number.MAX_SAFE_INTEGER, ctl.signal);
+		let first: Response | null;
+		try {
+			first = await open();
+		} catch {
+			this.#watched.delete(session);
+			return;
+		}
+		void (async () => {
+			let res = first;
+			try {
+				for (let tries = 0; res; ) {
+					try {
+						await events(res, () => {});
+						break;
+					} catch (e) {
+						if (!(e instanceof TypeError) || ++tries > 5) break;
+						await sleep(500 * 2 ** tries, ctl.signal);
+						res = await open();
+					}
+				}
+			} catch {
+				// stopped watching (the chat was opened again) or the server is gone
+			} finally {
+				if (this.#watched.get(session) === ctl) {
+					this.#watched.delete(session);
+					void this.loadConversations();
+				}
+			}
+		})();
+	}
+
+	/** Stops watching `session` in the background (it is shown again, so the page's own stream watches it). */
+	#unwatch(session: string) {
+		const ctl = this.#watched.get(session);
+		if (!ctl) return;
+		this.#watched.delete(session);
+		ctl.abort();
 	}
 
 	/** Deletes conversation `id` with its plan and traces; the current one makes way for a new chat. */
@@ -331,7 +404,7 @@ class Chat {
 		}
 	}
 
-	async settings(change: { provider?: string; model?: string }) {
+	async settings(change: SettingsChange) {
 		this.state = await putSettings(change);
 	}
 
@@ -339,12 +412,21 @@ class Chat {
 		this.messages.push({ id: nextId++, role: 'user', text });
 		const reply = this.#push({ id: nextId++, role: 'assistant', text: '', parts: [], streaming: true, startedAt: Date.now() });
 		const answer = createAnswer(reply, frame);
+		let listed = false;
+		const onEvent: typeof answer.onEvent = (e) => {
+			answer.onEvent(e);
+			// a new chat is listed (as running) as soon as its answer starts, not only once it is stored
+			if (!listed && e.event === 'start') {
+				listed = true;
+				void this.loadConversations();
+			}
+		};
 		await this.#run(
 			() => reply,
 			async (signal) => {
 				try {
 					try {
-						await stream('/api/chat', { session: this.session, text }, answer.onEvent, signal);
+						await stream('/api/chat', { session: this.session, text }, onEvent, signal);
 					} catch (e) {
 						// the answer started and the connection broke: it is still running, attach again
 						if (!(e instanceof TypeError) || answer.seq() === 0) throw e;
@@ -368,7 +450,10 @@ class Chat {
 		await this.#run(
 			() => reply,
 			async (signal) => {
-				const res = await follow(this.session, 0, signal);
+				const session = this.session;
+				const res = await follow(session, 0, signal);
+				// watched by this stream now: the background watcher of a chat left earlier can go
+				this.#unwatch(session);
 				if (!res) return;
 				const question = this.#push({ id: nextId++, role: 'user', text: '' });
 				reply = this.#push({ id: nextId++, role: 'assistant', text: '', parts: [], streaming: true, startedAt: Date.now() });

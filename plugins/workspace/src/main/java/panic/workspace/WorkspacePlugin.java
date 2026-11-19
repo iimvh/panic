@@ -70,7 +70,8 @@ public final class WorkspacePlugin implements ConfigPlugin<WorkspaceConfig> {
     });
     ctx.on(Conversations.DELETED, d -> store.forget(d.id()));
     Commands.command(ctx, "workspace [action] [target...]",
-        "projects: list | add <path> | use <path> | reset | remove [path] | pick", call -> run(ctx, store, call));
+        "projects: list | add <path> | use <path> | reset | remove [path] | pick | open [path]",
+        call -> run(ctx, store, call));
     return null;
   }
 
@@ -108,6 +109,19 @@ public final class WorkspacePlugin implements ConfigPlugin<WorkspaceConfig> {
           }
           Path path = store.add(picked.get().path().toString());
           call.out().println("added " + path);
+        }
+        case "open" -> {
+          Path path = target == null ? current(store, id) : store.resolveDir(target);
+          if (path == null) throw new UsageException("this chat has no project; give a path", "workspace open [path]");
+          // only a project: the page may name any path, and opening is the user's choice of folders, not the page's
+          if (!store.isProject(path)) {
+            call.out().println(path + " is not a project");
+            return;
+          }
+          boolean opened = Hooks.bail(ctx, Workspace.REVEAL, new Workspace.RevealQuery(path)).orElse(false);
+          call.out().println(opened ? "opened " + path
+              : "cannot open folders on this machine (folder-picker is off or has no file manager); the folder is "
+                  + path);
         }
         default -> throw new UsageException("unknown action '" + action + "'", "workspace [action] [target...]");
       }
@@ -232,6 +246,10 @@ public final class WorkspacePlugin implements ConfigPlugin<WorkspaceConfig> {
 
     synchronized void reset(String id) throws IOException {
       if (chats.remove(id) != null) save();
+    }
+
+    synchronized boolean isProject(Path path) {
+      return projects.containsKey(path.toString());
     }
 
     synchronized boolean remove(Path path) throws IOException {

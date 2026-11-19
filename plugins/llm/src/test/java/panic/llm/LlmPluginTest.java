@@ -12,6 +12,7 @@ import context.Root;
 import core.Signal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -161,8 +162,12 @@ class LlmPluginTest {
     assertEquals(List.of("hmm"), thoughts, "the current llm passes the reasoning on, not only text and tool calls");
   }
 
-  /** Lists one model with a context length, as OpenRouter does. */
-  record Listed(String id, long contextLength) implements Provider {
+  /** Lists one model with a context length (and a reply limit and parameters when given), as OpenRouter does. */
+  record Listed(String id, long contextLength, long maxOutput, Set<String> parameters) implements Provider {
+    Listed(String id, long contextLength) {
+      this(id, contextLength, 0, Set.of());
+    }
+
     @Override
     public ChatModel chat() {
       return new Echo(id);
@@ -170,7 +175,8 @@ class LlmPluginTest {
 
     @Override
     public List<ModelInfo> models(Signal signal) {
-      return List.of(new ModelInfo("other", "Other", 8_000, null), new ModelInfo("m1", "M1", contextLength, null));
+      return List.of(new ModelInfo("other", "Other", 8_000, null),
+          new ModelInfo("m1", "M1", contextLength, null, maxOutput, parameters));
     }
 
     @Override
@@ -210,5 +216,67 @@ class LlmPluginTest {
     llm.update(llm.config().withModel("m1"));
     assertEquals(null, llm.config().contextWindow());
     assertEquals(0, root.bail(Llm.CURRENT, Llm.Query.CURRENT).orElseThrow().inputWindow(), "unknown again");
+  }
+
+  private void listed(Listed provider) {
+    root.plugin("p", ctx -> {
+      ctx.provide(Providers.key("p"), provider);
+      return null;
+    });
+  }
+
+  /** The current Llm once its model info came (the lookup runs in the background). */
+  private Llm looked() throws InterruptedException {
+    for (int i = 0; i < 400; i++) {
+      Llm llm = root.bail(Llm.CURRENT, Llm.Query.CURRENT).orElse(null);
+      if (llm != null && llm.info() != null) return llm;
+      Thread.sleep(5);
+    }
+    throw new AssertionError("no model info");
+  }
+
+  @Test
+  void withoutMaxTokensTheReplyRoomComesFromTheModelsLimit() throws InterruptedException {
+    listed(new Listed("p", 131_072, 4_096, Set.of()));
+    root.plugin("llm", new LlmPlugin(), new LlmConfig("p", "m1", null, null));
+    assertEquals(131_072 - 4_096, looked().inputWindow(), "a small limit is all the reply can take");
+  }
+
+  @Test
+  void aLargeReplyLimitKeepsAtMostTheReplyRoom() throws InterruptedException {
+    listed(new Listed("p", 200_000, 128_000, Set.of()));
+    root.plugin("llm", new LlmPlugin(), new LlmConfig("p", "m1", null, null));
+    assertEquals(200_000 - Llm.REPLY_ROOM, looked().inputWindow());
+  }
+
+  @Test
+  void anUnknownReplyLimitKeepsTheDefaultRoom() throws InterruptedException {
+    listed(new Listed("p", 131_072));
+    root.plugin("llm", new LlmPlugin(), new LlmConfig("p", "m1", null, null));
+    assertEquals(131_072 - Llm.DEFAULT_REPLY_ROOM, looked().inputWindow());
+  }
+
+  @Test
+  void theEffortIsNotSentToAModelListedWithoutReasoning() throws InterruptedException {
+    listed(new Listed("p", 8_000, 0, Set.of("tools", "temperature")));
+    root.plugin("llm", new LlmPlugin(), new LlmConfig("p", "m1", null, null, "high"));
+    Llm llm = looked();
+    assertEquals(Boolean.FALSE, llm.info().reasoning());
+    ChatRequest q = ChatRequest.of(List.of(Message.user("q")));
+    assertEquals("effort=null", llm.complete(q, new CancelToken()).reasoning(), "the default is left out");
+    assertEquals("effort=low", llm.complete(q.withReasoningEffort("low"), new CancelToken()).reasoning(),
+        "a request's own effort is still sent");
+    List<String> out = new ArrayList<>();
+    Commands.run(root, Commands.STATUS, "", new Session("t", out::add, new CancelToken()));
+    assertTrue(String.join("", out).contains("effort: high (the model takes none: not sent)"), out.toString());
+  }
+
+  @Test
+  void theEffortIsSentToAReasoningModelAndWhenNobodyKnows() throws InterruptedException {
+    listed(new Listed("p", 8_000, 0, Set.of("reasoning", "tools")));
+    root.plugin("llm", new LlmPlugin(), new LlmConfig("p", "m1", null, null, "high"));
+    ChatRequest q = ChatRequest.of(List.of(Message.user("q")));
+    assertEquals("effort=high", looked().complete(q, new CancelToken()).reasoning());
+    assertEquals(null, new ModelInfo("x", "x", 0, null).reasoning(), "no parameters listed: unknown");
   }
 }

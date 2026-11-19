@@ -5,9 +5,13 @@
 	/**
 	 * The stored chats, newest first, grouped by project (workspace) when the server has projects: open a chat,
 	 * start a new one (in a project with its "+"), delete one (asked again before it goes), add or remove a
-	 * project. A sidebar on wide screens; on narrow ones a drawer, shown while `open`.
+	 * project. A sidebar on wide screens, hidden while `collapsed`; on narrow ones a drawer, shown while `open`.
 	 */
-	let { open = false, onclose }: { open?: boolean; onclose: () => void } = $props();
+	let {
+		open = false,
+		collapsed = false,
+		onclose
+	}: { open?: boolean; collapsed?: boolean; onclose: () => void } = $props();
 
 	let confirming = $state<string | null>(null);
 	let problem = $state<string | null>(null);
@@ -59,6 +63,26 @@
 		}
 	}
 
+	/** The project whose path was just copied, for a moment. */
+	let copied = $state<string | null>(null);
+
+	async function copyPath(path: string) {
+		try {
+			await navigator.clipboard.writeText(path);
+			copied = path;
+			setTimeout(() => {
+				if (copied === path) copied = null;
+			}, 1500);
+		} catch {
+			// no clipboard (an insecure origin): show the path, to select by hand
+			problem = path;
+		}
+	}
+
+	async function openProject(path: string) {
+		problem = await chat.openProject(path);
+	}
+
 	async function removeProject(path: string) {
 		problem = await chat.removeProject(path);
 		removing = null;
@@ -96,9 +120,19 @@
 				title={c.title}
 			>
 				<span class="title">{c.title || 'New chat'}</span>
-				<span class="time">{ago(c.updatedAt, now)}</span>
+				{#if c.running}
+					<span class="running" title="Answering" aria-label="answering"></span>
+				{:else}
+					<span class="time">{ago(c.updatedAt, now)}</span>
+				{/if}
 			</button>
-			<button class="delete" aria-label={`Delete "${c.title || 'New chat'}"`} onclick={() => (confirming = c.id)}>
+			<button
+				class="delete"
+				aria-label={`Delete "${c.title || 'New chat'}"`}
+				onclick={() => (confirming = c.id)}
+				disabled={c.running}
+				title={c.running ? 'Stop the answer before deleting this chat' : undefined}
+			>
 				<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
 					><path
 						fill="none"
@@ -116,7 +150,7 @@
 {#if open}
 	<button class="scrim" aria-label="Close the chat list" onclick={onclose}></button>
 {/if}
-<nav class:open aria-label="Chats">
+<nav class:open class:collapsed aria-label="Chats">
 	<button class="btn new" onclick={fresh} disabled={!!chat.offline}>
 		<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"
 			><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14" /></svg
@@ -157,7 +191,7 @@
 
 		{#each groups.groups as g (g.project.path)}
 			<section class="project" aria-label={g.project.name}>
-				<div class="project-title" title={g.project.path}>
+				<div class="project-title">
 					<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
 						><path
 							fill="none"
@@ -172,6 +206,24 @@
 						<button class="btn danger" onclick={() => removeProject(g.project.path)}>Remove</button>
 						<button class="btn" onclick={() => (removing = null)}>Cancel</button>
 					{:else}
+						<button
+							class="icon"
+							aria-label={`Open ${g.project.name} in the file manager`}
+							title="Open folder"
+							onclick={() => openProject(g.project.path)}
+							disabled={!!chat.offline}
+						>
+							<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
+								><path
+									fill="none"
+									stroke="currentColor"
+									stroke-width="1.8"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									d="M14 4h6v6M20 4l-9 9M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"
+								/></svg
+							>
+						</button>
 						<button
 							class="icon"
 							aria-label={`New chat in ${g.project.name}`}
@@ -195,6 +247,13 @@
 						</button>
 					{/if}
 				</div>
+				<button class="path" onclick={() => copyPath(g.project.path)} title="Copy the path: {g.project.path}">
+					{#if copied === g.project.path}
+						<span class="copied">Copied</span>
+					{:else}
+						<span class="dir"><bdi dir="ltr">{g.project.path}</bdi></span>
+					{/if}
+				</button>
 				{#if removing === g.project.path}
 					<p class="note">Its chats are hidden until you add the folder again.</p>
 				{/if}
@@ -275,6 +334,24 @@
 		flex: none;
 		font-size: 12px;
 		color: var(--muted);
+	}
+	.running {
+		flex: none;
+		align-self: center;
+		width: 8px;
+		height: 8px;
+		margin-right: 4px;
+		border-radius: 50%;
+		background: var(--accent);
+		animation: pulse 1.2s ease-in-out infinite;
+	}
+	@keyframes pulse {
+		50% {
+			opacity: 0.3;
+		}
+	}
+	.delete:disabled {
+		visibility: hidden;
 	}
 	.delete {
 		flex: none;
@@ -411,6 +488,34 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
+	.path {
+		display: flex;
+		min-width: 0;
+		margin: -4px 4px 2px 31px;
+		padding: 1px 4px;
+		border: 0;
+		border-radius: 4px;
+		background: none;
+		color: var(--muted);
+		font: 11px var(--mono);
+		text-align: left;
+		cursor: copy;
+	}
+	.path:hover {
+		background: var(--surface-2);
+		color: var(--text);
+	}
+	/* the end of a path names the folder: cut at the start instead (rtl box, the path itself kept ltr) */
+	.dir {
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+		direction: rtl;
+		text-align: left;
+	}
+	.copied {
+		color: var(--ok);
+	}
 	.icon {
 		flex: none;
 		display: grid;
@@ -432,6 +537,11 @@
 	}
 	.scrim {
 		display: none;
+	}
+	@media (min-width: 861px) {
+		nav.collapsed {
+			display: none;
+		}
 	}
 	@media (max-width: 860px) {
 		nav {
@@ -458,6 +568,9 @@
 	@media (prefers-reduced-motion: reduce) {
 		nav {
 			transition: none;
+		}
+		.running {
+			animation: none;
 		}
 	}
 </style>

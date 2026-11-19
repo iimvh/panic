@@ -25,7 +25,12 @@ import panic.tools.Workspace;
  * so nothing outlives the request. It answers null when the user cancels, the timeout passes or no dialog can be
  * opened, and says why to its {@code warn} callback.
  *
- * Requires nothing; with {@code enabled} false it answers nothing. A config change re-registers the hook.
+ * It also answers {@link Workspace#REVEAL}, for the same reason: it starts the system's file manager on a folder
+ * (Windows {@code explorer}, macOS {@code open}, other systems {@code xdg-open}) and does not wait for it. The path
+ * is one argument of the program, never shell text.
+ *
+ * Requires nothing; with {@code enabled} false it answers nothing (Panic runs on a machine the user does not sit
+ * at). A config change re-registers the hooks.
  */
 public final class FolderPickerPlugin implements ConfigPlugin<FolderPickerConfig> {
 
@@ -35,19 +40,35 @@ public final class FolderPickerPlugin implements ConfigPlugin<FolderPickerConfig
     String choose(Signal signal, int timeoutSeconds) throws IOException;
   }
 
+  /** Starts the file manager on a folder, without waiting for it. */
+  @FunctionalInterface
+  interface Opener {
+    void open(Path folder) throws IOException;
+  }
+
   private final Dialog dialog;
+  private final Opener opener;
   private final Consumer<String> warn;
 
   /** {@code warn} hears why no dialog could be shown or why it gave no folder (the server's log, in practice). */
   public FolderPickerPlugin(Consumer<String> warn) {
     this.warn = warn;
     this.dialog = (signal, timeoutSeconds) -> systemDialog(signal, timeoutSeconds, warn);
+    this.opener = FolderPickerPlugin::systemOpen;
   }
 
   /** For tests: a fake dialog. */
   FolderPickerPlugin(Dialog dialog) {
+    this(dialog, folder -> {
+      throw new IOException("no file manager in tests");
+    });
+  }
+
+  /** For tests: a fake dialog and file manager. */
+  FolderPickerPlugin(Dialog dialog, Opener opener) {
     this.warn = text -> { };
     this.dialog = dialog;
+    this.opener = opener;
   }
 
   @Override
@@ -68,7 +89,29 @@ public final class FolderPickerPlugin implements ConfigPlugin<FolderPickerConfig
         return null;
       }
     });
+    ctx.hook(Workspace.REVEAL, q -> {
+      try {
+        opener.open(q.path());
+        return Boolean.TRUE;
+      } catch (IOException e) {
+        warn.accept("[folder-picker] cannot open " + q.path() + ": " + e.getMessage());
+        return null;
+      }
+    });
     return null;
+  }
+
+  /**
+   * Starts the file manager on {@code folder} and returns at once: the program only hands the folder to the desktop
+   * (explorer even exits 1 when it worked), so there is nothing to wait for. A missing program is an IOException.
+   */
+  static void systemOpen(Path folder) throws IOException {
+    String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+    String program = os.contains("win") ? "explorer.exe" : os.contains("mac") ? "open" : "xdg-open";
+    new ProcessBuilder(program, folder.toString())
+        .redirectInput(ProcessBuilder.Redirect.from(new File(File.separatorChar == '\\' ? "NUL" : "/dev/null")))
+        .redirectOutput(ProcessBuilder.Redirect.DISCARD).redirectError(ProcessBuilder.Redirect.DISCARD)
+        .start();
   }
 
   static String systemDialog(Signal signal, int timeoutSeconds, Consumer<String> warn) throws IOException {

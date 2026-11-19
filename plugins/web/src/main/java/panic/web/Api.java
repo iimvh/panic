@@ -12,10 +12,13 @@ import core.Signal;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -138,7 +141,12 @@ final class Api {
     Optional<LlmConfig> cfg = ctx.bail(Llm.CONFIG, Llm.Query.CURRENT);
     out.put("provider", cfg.map(LlmConfig::provider).orElse(null));
     out.put("model", cfg.map(LlmConfig::model).orElse(null));
-    out.put("connected", ctx.bail(Llm.CURRENT, Llm.Query.CURRENT).isPresent());
+    out.put("reasoningEffort", cfg.map(LlmConfig::reasoningEffort).orElse(null));
+    Optional<Llm> llm = ctx.bail(Llm.CURRENT, Llm.Query.CURRENT);
+    out.put("connected", llm.isPresent());
+    // whether the model takes an effort, as its provider lists it: null until looked up or when the list does not say
+    Boolean reasoning = llm.map(Llm::info).map(ModelInfo::reasoning).orElse(null);
+    if (reasoning == null) out.putNull("effortSupported"); else out.put("effortSupported", reasoning);
     ArrayNode providers = out.putArray("providers");
     ctx.collect(Providers.STATUS, Providers.Query.ALL).stream()
         .sorted(Comparator.comparing(Providers.Status::id))
@@ -169,15 +177,20 @@ final class Api {
     for (ModelInfo m : models) {
       if (freeOnly && !Boolean.TRUE.equals(m.free())) continue;
       if (!freeOnly && !filter.isEmpty() && !m.id().toLowerCase(Locale.ROOT).contains(filter)) continue;
-      ObjectNode o = out.addObject().put("id", m.id()).put("name", m.name()).put("contextLength", m.contextLength());
+      ObjectNode o = out.addObject().put("id", m.id()).put("name", m.name()).put("contextLength", m.contextLength())
+          .put("maxOutput", m.maxOutput());
       if (m.free() == null) o.putNull("free"); else o.put("free", m.free());
+      if (m.reasoning() == null) o.putNull("reasoning"); else o.put("reasoning", m.reasoning());
     }
     Http.json(ex, 200, out);
   }
 
   /**
    * The conversations a page can open (their ids are session ids), newest first: {@code [{id, title,
-   * updatedAt}]}. Sub-agents' conversations are not listed (see {@link Conversations#list}).
+   * updatedAt, running?}]}. Sub-agents' conversations are not listed (see {@link Conversations#list}).
+   * {@code running: true} marks a session whose answer runs now; a session whose first answer still runs is not
+   * stored yet (a turn is saved when it ends), so it is listed first from the run itself, titled by its question.
+   * Without that, a chat left while it answers would vanish from the list until it is done.
    */
   private void conversations(HttpExchange ex) throws IOException {
     Optional<Conversations.Listing> listing = Hooks.bail(ctx, Conversations.LIST, new Conversations.ListQuery());
@@ -186,12 +199,29 @@ final class Api {
       return;
     }
     ArrayNode out = Json.MAPPER.createArrayNode();
+    Map<String, Run> running = new HashMap<>(runs);
+    Set<String> stored = new HashSet<>();
+    for (Conversations.Info i : listing.get().conversations()) stored.add(i.id());
+    running.entrySet().stream()
+        .filter(e -> !stored.contains(e.getKey()))
+        .sorted(Comparator.comparingLong((Map.Entry<String, Run> e) -> e.getValue().startedAt()).reversed())
+        .forEach(e -> out.addObject().put("id", e.getKey()).put("title", title(e.getValue().question()))
+            .put("updatedAt", e.getValue().startedAt()).put("running", true));
     for (Conversations.Info i : listing.get().conversations()) {
       if (!SESSION.matcher(i.id()).matches()) continue;
-      out.addObject().put("id", i.id()).put("title", i.title()).put("updatedAt", i.updatedAt());
+      ObjectNode o = out.addObject().put("id", i.id()).put("title", i.title()).put("updatedAt", i.updatedAt());
+      if (running.containsKey(i.id())) o.put("running", true);
     }
     Http.json(ex, 200, out);
   }
+
+  /** A run's title, as the conversation will get it: the question's first line, cut like stored titles. */
+  static String title(String question) {
+    String line = question == null ? "" : question.strip().lines().findFirst().orElse("").strip();
+    return line.length() <= TITLE_CHARS ? line : line.substring(0, TITLE_CHARS - 1).strip() + "…";
+  }
+
+  private static final int TITLE_CHARS = 80;
 
   /**
    * Whether the session runs in bypass mode (YOLO: tool calls that would ask the user just run):
@@ -379,7 +409,7 @@ final class Api {
     JsonNode body = Http.body(ex);
     String session = session(body.path("session").asText(null));
     String text = text(body.path("text").asText(""));
-    Run run = new Run(detach);
+    Run run = new Run(detach, text, System.currentTimeMillis());
     if (runs.putIfAbsent(session, run) != null) {
       Http.error(ex, 409, "an answer is already running in this session");
       return;
@@ -393,7 +423,7 @@ final class Api {
     });
     try {
       String traceId = Trace.newId();
-      run.publish("start", Json.object().put("question", text).put("startedAt", System.currentTimeMillis())
+      run.publish("start", Json.object().put("question", text).put("startedAt", run.startedAt())
           .put("traceId", traceId));
       run.attach(sse, 0);
       answer(run, session, text, traceId, CancelToken.any(signal, run.cancelled()));
@@ -713,6 +743,13 @@ final class Api {
       String model = body.get("model").asText().strip();
       if (model.isEmpty() || indexOfWhitespace(model) >= 0) throw new Http.BadRequest("bad model id");
       if (!Commands.run(ctx, Llm.MODEL_COMMAND, model, quiet)) throw new Http.BadRequest("switching model is not available");
+    }
+    // after the model: a switch keeps the effort, so the one asked for here is the one that stays
+    if (body.has("reasoningEffort")) {
+      JsonNode e = body.get("reasoningEffort");
+      String level = e.isNull() ? "off" : e.asText().strip();
+      if (level.isEmpty() || indexOfWhitespace(level) >= 0) throw new Http.BadRequest("bad reasoning effort");
+      if (!Commands.run(ctx, Llm.EFFORT_COMMAND, level, quiet)) throw new Http.BadRequest("setting the effort is not available");
     }
     Http.json(ex, 200, state());
   }

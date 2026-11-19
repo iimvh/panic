@@ -23,6 +23,8 @@ final class Run {
   }
 
   private final Duration detachAfter;
+  private final String question;
+  private final long startedAt;
   private final CancelToken cancel = new CancelToken();
   private final CancelToken ended = new CancelToken();
   private final List<Entry> log = new ArrayList<>();
@@ -30,9 +32,23 @@ final class Run {
   /** {@code System.nanoTime()} when the last watcher left; meaningless while someone watches. */
   private long idleSince = System.nanoTime();
 
-  /** {@code detachAfter}: how long the answer may run with nobody watching; zero stops it as soon as the last one leaves. */
-  Run(Duration detachAfter) {
+  /**
+   * {@code detachAfter}: how long the answer may run with nobody watching; zero stops it as soon as the last one
+   * leaves. {@code question} and {@code startedAt} (epoch millis) let the chat list show a run whose conversation
+   * is not stored yet (its first turn is saved only when it ends).
+   */
+  Run(Duration detachAfter, String question, long startedAt) {
     this.detachAfter = detachAfter;
+    this.question = question;
+    this.startedAt = startedAt;
+  }
+
+  String question() {
+    return question;
+  }
+
+  long startedAt() {
+    return startedAt;
   }
 
   /** Cancelled to stop the answer. */

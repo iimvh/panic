@@ -1,11 +1,13 @@
 <script lang="ts">
-	import { getModels, type Model } from '$lib/api';
+	import { getModels, type Model, type SettingsChange } from '$lib/api';
 	import { chat } from '$lib/chat.svelte';
 
 	let { onclose }: { onclose: () => void } = $props();
 
 	let provider = $state(chat.state?.provider ?? '');
 	let model = $state(chat.state?.model ?? '');
+	/** "off" or a level; the server says null for off. */
+	let effort = $state(chat.state?.reasoningEffort ?? 'off');
 	let search = $state('');
 	let freeOnly = $state(false);
 	let models = $state<Model[] | null>(null);
@@ -14,7 +16,23 @@
 	let saving = $state(false);
 
 	const providers = $derived(chat.state?.providers ?? []);
-	const changed = $derived(provider !== (chat.state?.provider ?? '') || model !== (chat.state?.model ?? ''));
+	const savedEffort = $derived(chat.state?.reasoningEffort ?? 'off');
+	// the usual levels, plus one panic.json names that is not among them (e.g. "xhigh"), so it is not lost
+	const LEVELS = ['off', 'minimal', 'low', 'medium', 'high'];
+	const levels = $derived(LEVELS.includes(savedEffort) ? LEVELS : [...LEVELS, savedEffort]);
+	const changed = $derived(
+		provider !== (chat.state?.provider ?? '') || model !== (chat.state?.model ?? '') || effort !== savedEffort
+	);
+	// what the provider lists for the model picked: from the browsed list, else what the server looked up
+	const picked = $derived(models?.find((m) => m.id === model.trim()));
+	const takesEffort = $derived(
+		picked ? picked.reasoning : model.trim() === (chat.state?.model ?? '') ? (chat.state?.effortSupported ?? null) : null
+	);
+
+	// the model's details are looked up after it starts: ask again so the effort note is current
+	$effect(() => {
+		void chat.refresh();
+	});
 	const shown = $derived(
 		(models ?? []).filter(
 			(m) => (!freeOnly || m.free === true) && (!search || m.id.toLowerCase().includes(search.toLowerCase()))
@@ -39,9 +57,10 @@
 		saving = true;
 		error = null;
 		try {
-			const change: { provider?: string; model?: string } = {};
+			const change: SettingsChange = {};
 			if (provider && provider !== chat.state?.provider) change.provider = provider;
 			if (model.trim() && model.trim() !== chat.state?.model) change.model = model.trim();
+			if (effort !== savedEffort) change.reasoningEffort = effort;
 			await chat.settings(change);
 			onclose();
 		} catch (e) {
@@ -102,7 +121,9 @@
 						<button class:sel={m.id === model} onclick={() => (model = m.id)}>
 							<span class="id">{m.id}</span>
 							<span class="tags">
-								{#if m.contextLength}<span>{Math.round(m.contextLength / 1000)}k</span>{/if}
+								{#if m.reasoning}<span title="Takes a reasoning effort">think</span>{/if}
+								{#if m.maxOutput}<span title="Longest reply">out {Math.round(m.maxOutput / 1000)}k</span>{/if}
+								{#if m.contextLength}<span title="Context window">{Math.round(m.contextLength / 1000)}k</span>{/if}
 								{#if m.free}<span class="free">free</span>{/if}
 							</span>
 						</button>
@@ -111,6 +132,23 @@
 					<li class="empty">No models match.</li>
 				{/each}
 			</ul>
+		{/if}
+	</section>
+
+	<section>
+		<label for="effort">Reasoning effort</label>
+		<select id="effort" bind:value={effort}>
+			{#each levels as level (level)}
+				<option value={level}>{level}</option>
+			{/each}
+		</select>
+		{#if effort !== 'off' && takesEffort === false}
+			<p class="note">This model takes no reasoning effort, so none is sent.</p>
+		{:else}
+			<p class="note">
+				How much the model thinks before it answers. Thinking tokens count against the reply limit
+				(<code>llm.maxTokens</code>).
+			</p>
 		{/if}
 	</section>
 

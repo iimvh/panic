@@ -11,9 +11,23 @@
 	import { actors } from '$lib/actors';
 	import { liveThought, scene } from '$lib/scene';
 	import { view } from '$lib/view.svelte';
+	import { load, save } from '$lib/storage';
 
 	let settingsOpen = $state(false);
 	let listOpen = $state(false);
+	/** Wide screens: the chat list is hidden (kept in this browser); narrow ones show it as a drawer instead. */
+	const COLLAPSED_KEY = 'panic.sidebar.collapsed';
+	let collapsed = $state(load(COLLAPSED_KEY, (v) => v === 'true' || v === 'false', 'false') === 'true');
+
+	/** The menu button and Ctrl/Cmd+B: hide or show the sidebar, or open the drawer on a narrow screen. */
+	function toggleList() {
+		if (narrow) {
+			listOpen = !listOpen;
+			return;
+		}
+		collapsed = !collapsed;
+		save(COLLAPSED_KEY, String(collapsed));
+	}
 	let scroller: HTMLElement;
 	let thread: HTMLElement;
 	let stick = $state(true); // follow the answer while the user is at the bottom
@@ -79,7 +93,7 @@
 
 	let width = $state(0);
 	/** Under 860px the map is a sheet over the chat, with the strip always shown. */
-	const narrow = $derived(width > 0 && width < 860);
+	const narrow = $derived(width > 0 && width <= 860);
 	const docked = $derived(!narrow && view.size !== 'mini');
 	const floating = $derived(!docked && (narrow ? view.sheet || !!chat.inspected : !!chat.inspected));
 
@@ -125,6 +139,12 @@
 			if (chat.inspected || view.sheet) closeFloating();
 			return;
 		}
+		// also while typing: a plain text box has no bold to lose
+		if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'b' && !settingsOpen) {
+			e.preventDefault();
+			toggleList();
+			return;
+		}
 		const t = e.target as HTMLElement | null;
 		if (settingsOpen || e.ctrlKey || e.metaKey || e.altKey) return;
 		if (t?.closest('input, textarea, select, [contenteditable="true"], [role="separator"]')) return;
@@ -163,9 +183,9 @@
 <svelte:window bind:innerWidth={width} {onkeydown} />
 
 <div class="shell" class:focus={docked && view.size === 'focus'}>
-<ChatList open={listOpen} onclose={() => (listOpen = false)} />
+<ChatList open={listOpen} {collapsed} onclose={() => (listOpen = false)} />
 <div class="app">
-	<Header onsettings={() => (settingsOpen = true)} onmenu={() => (listOpen = true)} />
+	<Header onsettings={() => (settingsOpen = true)} onmenu={toggleList} expanded={narrow ? listOpen : !collapsed} />
 
 	{#if chat.offline}
 		<div class="banner danger">

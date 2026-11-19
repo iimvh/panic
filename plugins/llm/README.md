@@ -13,12 +13,18 @@ LLM providers and the model the app chats with.
 
 ## Context window
 
-`Llm.inputWindow()` is how many tokens one request may hold: the model's context length less `maxTokens` (the
-reply), or 0 when unknown. `chat` sizes its context budget from it (see the chat README). The context length is
-`contextWindow` when given; otherwise the `active:<provider>` branch looks it up once, in the background, in the
-provider's model list (`context_length`, as `models` shows it), so it is 0 until that answers and stays 0 when the
-list does not say it (many OpenAI-compatible hosts list ids only: give `contextWindow` there). `/model` and
-`/provider` drop `contextWindow`, since it describes the old model.
+`Llm.inputWindow()` is how many tokens one request may hold: the model's context length less room for the reply,
+or 0 when unknown. `chat` sizes its context budget from it (see the chat README). The reply's room is `maxTokens`
+when set; otherwise the model's own reply limit as its provider lists it, up to 16384 (`Llm.REPLY_ROOM`); otherwise
+8192 (`Llm.DEFAULT_REPLY_ROOM`). Leaving `maxTokens` out sends no `max_tokens`: the provider's default applies.
+
+The context length is `contextWindow` when given; otherwise the provider's model list says it. The
+`active:<provider>` branch looks the model up once, in the background, in that list, and keeps what it says
+(`Llm.info()`, a `ModelInfo`): `context_length`, the reply limit (`top_provider.max_completion_tokens` on
+OpenRouter, or `max_completion_tokens` / `max_output_tokens`) and the parameters it takes (`supported_parameters`).
+So the length is 0 until that answers, and stays 0 when the list does not say it (many OpenAI-compatible hosts list
+ids only: give `contextWindow` there). `/model` and `/provider` drop `contextWindow`, since it describes the old
+model. `status` shows the limits in use and where they come from.
 
 ## Environment without `panic.json`
 
@@ -64,7 +70,7 @@ code. The entry's id becomes the provider id, so `/provider <id>` and `llm.provi
 | --- | --- | --- |
 | `Providers.key(id)` | service `Provider` | A connected provider: `chat()`, `models(signal)`, `checkKey(signal)` |
 | `Providers.STATUS` | hook `Query → Status(id, connected)` | Every installed provider, connected or not (`collect`) |
-| `Llm.KEY` | service `Llm` | The selected provider plus model and default options. Require it to depend on the LLM |
+| `Llm.KEY` | service `Llm` | The selected provider plus model and default options; `info()` is what the provider lists for the model (null while unknown). Require it to depend on the LLM |
 | `Llm.CURRENT` | hook `Query → Llm` | Look at the current Llm without tying your lifetime to it (front-ends) |
 | `Llm.CONFIG` | hook `Query → LlmConfig` | The selected provider and model, even when not connected |
 
@@ -103,8 +109,10 @@ is sent as `reasoning_effort` with every request that does not choose its own. S
 own with `ChatRequest.withReasoningEffort(level)`, or `ChatRequest.NO_REASONING_EFFORT` to send none whatever the
 default: `chat`'s compaction does, and so does the `review` reviewer unless `review.reasoningEffort` is set, because
 thinking tokens count against `max_tokens` and those calls have small limits. Raise `llm.maxTokens` when you turn it
-on: a reply cut at the limit while thinking has nothing to show (see `Completion.truncated()`). The level is sent to
-whatever model is selected, so switching to a model that refuses `reasoning_effort` needs `effort off`.
+on: a reply cut at the limit while thinking has nothing to show (see `Completion.truncated()`). The configured level is
+not sent to a model whose provider lists its parameters without `reasoning` (or `reasoning_effort`); a request's own
+level still is, and so is the configured one while nobody knows (the list says nothing, or the lookup has not
+answered). So a host that lists no parameters and a model that refuses `reasoning_effort` still need `effort off`.
 
 A model that writes `<think>` tags into its text (old Ollama versions) is not split; its thinking stays in the
 answer.

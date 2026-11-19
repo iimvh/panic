@@ -6,11 +6,23 @@ export type CommandInfo = { name: string; usage: string; description: string };
 export type State = {
 	provider: string | null;
 	model: string | null;
+	/** null when off. */
+	reasoningEffort: string | null;
 	connected: boolean;
+	/** Whether the model takes an effort, as its provider lists it; null when unknown. */
+	effortSupported: boolean | null;
 	providers: ProviderStatus[];
 	commands: CommandInfo[];
 };
-export type Model = { id: string; name: string; contextLength: number; free: boolean | null };
+/** `maxOutput`: the most tokens a reply may have, 0 when unknown; `reasoning`: takes an effort, null when unknown. */
+export type Model = {
+	id: string;
+	name: string;
+	contextLength: number;
+	maxOutput: number;
+	free: boolean | null;
+	reasoning: boolean | null;
+};
 /** One stored message: questions, answers with their tool calls, tool results and reviewer rejections. */
 export type HistoryMessage =
 	| { role: 'user'; content: string; traceId?: string }
@@ -121,7 +133,9 @@ export const getTrace = (session: string, id: string) =>
 export const getModels = (filter = '') =>
 	json<Model[]>(`/api/models?filter=${encodeURIComponent(filter)}`);
 
-export const putSettings = (change: { provider?: string; model?: string }) =>
+/** `reasoningEffort`: a level, or "off". */
+export type SettingsChange = { provider?: string; model?: string; reasoningEffort?: string };
+export const putSettings = (change: SettingsChange) =>
 	json<State>('/api/settings', {
 		method: 'PUT',
 		headers: { 'Content-Type': 'application/json' },

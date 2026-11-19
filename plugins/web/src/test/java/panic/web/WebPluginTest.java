@@ -96,7 +96,8 @@ class WebPluginTest {
 
     @Override
     public List<ModelInfo> models(Signal s) {
-      return List.of(new ModelInfo("a:free", "A", 8000, true), new ModelInfo("b", "B", 0, false));
+      return List.of(new ModelInfo("a:free", "A", 8000, true), new ModelInfo("b", "B", 0, false),
+          new ModelInfo("m2", "M2", 64_000, false, 4_096, java.util.Set.of("reasoning")));
     }
 
     @Override
@@ -186,6 +187,8 @@ class WebPluginTest {
     root.plugin("settings", ctx -> {
       Commands.command(ctx, "provider [id]", "", c -> llm.update(llm.config().withProvider(c.arg("id"))));
       Commands.command(ctx, "model [id]", "", c -> llm.update(llm.config().withModel(c.arg("id"))));
+      Commands.command(ctx, "effort [level]", "", c -> llm.update(llm.config()
+          .withReasoningEffort("off".equals(c.arg("level")) ? null : c.arg("level"))));
       return null;
     });
     web = root.plugin("web", new WebPlugin(line -> base = line.substring("web: ".length()), Duration.ofMillis(100)),
@@ -612,6 +615,33 @@ class WebPluginTest {
   }
 
   @Test
+  void settingsSetTheEffortAndStateSaysWhetherTheModelTakesOne() throws Exception {
+    JsonNode state = Json.parseOrNull(get("/api/state").body());
+    assertTrue(state.path("reasoningEffort").isNull());
+    assertTrue(state.path("effortSupported").isNull(), "m1 is not listed: unknown");
+
+    HttpResponse<String> r = send("PUT", "/api/settings", "{\"model\":\"m2\",\"reasoningEffort\":\"high\"}");
+    assertEquals(200, r.statusCode());
+    assertEquals("high", Json.parseOrNull(r.body()).path("reasoningEffort").asText(), "kept across the model switch");
+    JsonNode later = null;
+    for (int i = 0; i < 200 && (later == null || later.path("effortSupported").isNull()); i++) {
+      later = Json.parseOrNull(get("/api/state").body());
+      Thread.sleep(5);
+    }
+    assertTrue(later.path("effortSupported").asBoolean(), "m2 lists reasoning, once looked up");
+
+    JsonNode off = Json.parseOrNull(send("PUT", "/api/settings", "{\"reasoningEffort\":\"off\"}").body());
+    assertTrue(off.path("reasoningEffort").isNull());
+    assertEquals(400, send("PUT", "/api/settings", "{\"reasoningEffort\":\"a b\"}").statusCode());
+
+    JsonNode models = Json.parseOrNull(get("/api/models").body());
+    JsonNode m2 = models.path(2);
+    assertEquals(4096, m2.path("maxOutput").asLong());
+    assertTrue(m2.path("reasoning").asBoolean());
+    assertTrue(models.path(0).path("reasoning").isNull());
+  }
+
+  @Test
   void badRequests() throws Exception {
     assertEquals(400, send("POST", "/api/chat", "{\"session\":\"../x\",\"text\":\"hi\"}").statusCode());
     assertEquals(400, send("POST", "/api/chat", "{\"session\":\"s\",\"text\":\"  \"}").statusCode());
@@ -845,6 +875,24 @@ class WebPluginTest {
     assertEquals(503, get("/api/conversations").statusCode());
     assertEquals(503, get("/api/history?session=s1").statusCode());
     assertEquals(503, send("DELETE", "/api/conversations?session=s1", "").statusCode());
+  }
+
+  @Test
+  void aChatWhoseFirstAnswerRunsIsListedAsRunning() throws Exception {
+    send("POST", "/api/chat", "{\"session\":\"old\",\"text\":\"stored chat\"}").body();
+    try (BufferedReader in = slowAnswer()) {
+      JsonNode list = Json.parseOrNull(get("/api/conversations").body());
+      assertEquals(List.of("s", "old"), Json.MAPPER.convertValue(list.findValuesAsText("id"), List.class),
+          "not stored yet, listed first from the run");
+      assertEquals("slow", list.path(0).path("title").asText());
+      assertTrue(list.path(0).path("running").asBoolean());
+      assertTrue(list.path(1).path("running").isMissingNode());
+      fake.released.countDown();
+      rest(in);
+    }
+    JsonNode list = Json.parseOrNull(get("/api/conversations").body());
+    assertEquals(List.of("s", "old"), Json.MAPPER.convertValue(list.findValuesAsText("id"), List.class));
+    assertTrue(list.path(0).path("running").isMissingNode(), "stored once done, no longer running");
   }
 
   @Test

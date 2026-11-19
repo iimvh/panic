@@ -32,11 +32,27 @@ public interface Llm extends ChatModel {
   String model();
 
   /**
-   * Tokens one request may hold: the model's context length less the reply's {@code maxTokens}; 0 when unknown.
-   * The context length is {@link LlmConfig#contextWindow} when given, otherwise the provider's model list (looked up
-   * once in the background, so it can be 0 for the first requests or when the list does not say it).
+   * Tokens one request may hold: the model's context length less room for the reply; 0 when unknown. The context
+   * length is {@link LlmConfig#contextWindow} when given, otherwise the provider's model list (looked up once in the
+   * background, so it can be 0 for the first requests or when the list does not say it). The reply's room is
+   * {@code maxTokens} when set, else the model's own reply limit up to {@link #REPLY_ROOM}, else
+   * {@link #DEFAULT_REPLY_ROOM}.
    */
   default int inputWindow() {
     return 0;
+  }
+
+  /** The most of the context kept for a reply when {@code maxTokens} is not set but the model's limit is known. */
+  int REPLY_ROOM = 16_384;
+
+  /** The context kept for a reply when neither {@code maxTokens} nor the model's limit is known. */
+  int DEFAULT_REPLY_ROOM = 8_192;
+
+  /**
+   * What the provider's model list says about the selected model (context length, reply limit, parameters); null
+   * until the background lookup answers, or when the list fails or does not have the model.
+   */
+  default ModelInfo info() {
+    return null;
   }
 }

@@ -2,7 +2,7 @@
 
 Projects: the folders the user works in. Each conversation can work in one project; the file tools and the
 checks then run in that folder instead of the one fixed in `panic.json`. The web sidebar groups chats by project
-(Add project, "+" for a new chat in a project). Conversations, plans and traces are stored by Panic itself, so
+(Add project, "+" for a new chat in a project, the folder's path to copy, and a button to open it). Conversations, plans and traces are stored by Panic itself, so
 nothing here moves or deletes them.
 
 ## Plugins
@@ -10,7 +10,7 @@ nothing here moves or deletes them.
 | Name | Config (`panic.json` section) | Requires | Provides / registers |
 | --- | --- | --- | --- |
 | `workspace` | `WorkspaceConfig { dir = ".panic/workspace" }` | none | hooks `Workspace.ROOT`, `Workspace.LIST`; context section `Workspace`; command `workspace` |
-| `folder-picker` | `FolderPickerConfig { enabled = true, timeoutSeconds = 120 }` | none | hook `Workspace.PICK` (none when `enabled` is false) |
+| `folder-picker` | `FolderPickerConfig { enabled = true, timeoutSeconds = 120 }` | none | hooks `Workspace.PICK`, `Workspace.REVEAL` (none when `enabled` is false) |
 
 ## Storage
 
@@ -31,6 +31,11 @@ the dialog is closed. No answer (cancelled, or no dialog program) makes the comm
 (`workspace add <path>`), which front-ends show as a text field. Turn it off with `"folder-picker": {"enabled":
 false}` when Panic runs on a machine the user does not sit at.
 
+For the same reason `workspace open` asks the server to show a project in the file manager (`Workspace.REVEAL`):
+Windows `explorer`, macOS `open`, other systems `xdg-open`, started without waiting, the folder passed as one
+argument (no shell). Only a project can be opened, so a page cannot open any folder it names. Without an answer
+(disabled, or no file manager) the command gives the folder's path instead.
+
 ## Public keys
 
 All keys live in `Workspace` (`plugins/tools`), so `files` and `checks` use them without depending on this module.
@@ -40,6 +45,7 @@ All keys live in `Workspace` (`plugins/tools`), so `files` and `checks` use them
 | `Workspace.ROOT` | `workspace` | The folder of a conversation's project; no answer when it has none or the project was removed |
 | `Workspace.LIST` | `workspace` | The active projects with their conversations, and the hidden chats of removed projects |
 | `Workspace.PICK` | `folder-picker` | A folder chosen in the system's dialog |
+| `Workspace.REVEAL` | `folder-picker` | Opens a folder in the system's file manager; TRUE once started, no answer when unavailable. Callers pass only projects |
 
 ## Keys used
 
@@ -62,3 +68,4 @@ It requires no service, and nothing requires it: without `workspace` every chat 
 | `workspace reset` | This chat goes back to the default workspace |
 | `workspace remove [path]` | Removes a project (this chat's when no path); its chats are hidden |
 | `workspace pick` | Opens the folder dialog and adds the chosen folder |
+| `workspace open [path]` | Shows a project (this chat's when no path) in the file manager of the machine Panic runs on |

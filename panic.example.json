@@ -9,8 +9,7 @@
   "llm": {
     "provider": "openrouter",
     "model": "meta-llama/llama-3.3-70b-instruct:free",
-    "temperature": 0.2,
-    "maxTokens": 4096
+    "temperature": 0.2
   },
   "chat": {
     "systemPrompt": "You are Panic, a concise and helpful assistant.",

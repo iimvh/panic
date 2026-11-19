@@ -23,10 +23,10 @@ that left: a command is cancelled, an answer goes on without it (see [Resuming](
 
 | Endpoint | Built on |
 | --- | --- |
-| `GET /api/state` | hooks `Llm.CONFIG`, `Llm.CURRENT`, `Providers.STATUS`; `Commands.list` |
-| `GET /api/models?filter=` | hook `Llm.CURRENT` |
+| `GET /api/state` | hooks `Llm.CONFIG`, `Llm.CURRENT`, `Providers.STATUS`; `Commands.list`: `{provider, model, reasoningEffort, connected, effortSupported, providers, commands}`. `reasoningEffort` is null when off; `effortSupported` is whether the model takes an effort as its provider lists it (`Llm.info()`), null until looked up or when the list does not say |
+| `GET /api/models?filter=` | hook `Llm.CURRENT`: `[{id, name, contextLength, maxOutput, free, reasoning}]`; `maxOutput` 0 and `free` / `reasoning` null when the provider does not say |
 | `GET /api/history?session=` | hook `Conversations.HISTORY`: `user {content}`, `assistant {content, toolCalls[]}`, `tool {toolCallId, status: ok/error, content}` (content cut like `tool` events), `review {reason}` for a rejection sent back to the model (`Chat.REVIEW_FEEDBACK_PREFIX`; errors are told by `Chat.TOOL_ERROR_PREFIX`). The harness's notice of a reply cut at the output limit (`Chat.TRUNCATED_FEEDBACK_PREFIX`) is left out: it is not the user's words. Turns already compacted into the summary are left out. A sub-agent's steps are not in it: its `agent` call and result (the sub-agent's answer) are, and the trace of the turn holds the sub-agent's work. With a tracer (hook `Trace.LIST`), `user` entries whose turn was traced add `traceId` (see [Traces](#traces)) |
-| `GET /api/conversations` | hook `Conversations.LIST`: `[{id, title, updatedAt}]`, newest first. Only conversations whose id is a valid session id; sub-agents' conversations are not listed |
+| `GET /api/conversations` | hook `Conversations.LIST`: `[{id, title, updatedAt, running?}]`, newest first. Only conversations whose id is a valid session id; sub-agents' conversations are not listed. `running: true` marks a session whose answer runs now; one whose first answer still runs is not stored yet, so it is listed first from the run (titled by its question), and a page that leaves a chat while it answers still lists it |
 | `GET /api/permissions?session=` | hook `Tools.BYPASS`: `{bypass, default}`, whether the session runs in bypass mode (tool calls that would ask the user just run) and what the config says for every chat. `503` when nobody answers (no `permissions` plugin). Switching goes through `POST /api/command` (`bypass on \| off`) |
 | `GET /api/mode?session=` | hook `Planner.MODE`: `{plan, default}`, whether the session is in plan mode (read-only research, then a plan to approve) and what the config says for every chat. `503` when nobody answers (no `planner` plugin). Switching goes through `POST /api/command` (`plan on \| off`) |
 | `GET /api/workspaces` | hook `Workspace.LIST`: `{projects: [{path, name, conversations: [id]}], hidden: [id]}`; `hidden` are the chats of removed projects, which the page does not list. `503` when nobody answers (no `workspace` plugin). Projects are changed through `POST /api/command` (`workspace add \| use \| remove \| pick ...`) |
@@ -39,7 +39,7 @@ that left: a command is cancelled, an answer goes on without it (see [Resuming](
 | `POST /api/approve {session, id, allow}` | answers an SSE `approve` (`404` when it is unknown, already answered or expired) |
 | `POST /api/plan {session, id, approve, feedback?}` | answers an SSE `plan`: approve it, or send it back with `feedback` (`404` when it is unknown, already answered or expired) |
 | `POST /api/answer {session, id, answers: [{selected: [label], other?}]}` | answers an SSE `question`, one answer per question in order (`400` for a wrong count, an unknown label, or several picks on a single-select question; all empty skips; `404` when it is unknown, already answered or expired) |
-| `PUT /api/settings {provider?, model?}` | the `provider` / `model` commands |
+| `PUT /api/settings {provider?, model?, reasoningEffort?}` | the `provider`, `model` and `effort` commands, in that order (a model switch keeps the effort); `reasoningEffort` null or `"off"` turns it off |
 
 ### Resuming
 

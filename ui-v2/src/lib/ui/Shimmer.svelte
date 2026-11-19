@@ -7,7 +7,8 @@
 	 * work, never while it waits for the user. The one place a gradient and this animation are allowed
 	 * (src/lib/tokens.test.ts): use this component, do not copy it.
 	 *
-	 * The sweep goes from --muted to --text and back, both AA on every surface, so the text always reads. Without
+	 * At rest the text is --shimmer-base (AA on every surface); --shimmer-glow is the light passing over it, for a
+	 * moment, so it is exempt from contrast (the words read before and after it). Without
 	 * motion (reduced motion, forced colours) it is plain muted text.
 	 */
 	let { children }: { children: Snippet } = $props();
@@ -17,12 +18,13 @@
 
 <style>
 	.ui-shimmer {
-		background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 35%, var(--text) 50%, var(--muted) 65%, var(--muted) 100%);
-		background-size: 250% 100%;
+		/* a band of light whose centre goes from the left edge to the right edge, so it is always on the text */
+		background: linear-gradient(90deg, var(--shimmer-base) 0%, var(--shimmer-base) 40%, var(--shimmer-glow) 50%, var(--shimmer-base) 60%, var(--shimmer-base) 100%);
+		background-size: 200% 100%;
 		-webkit-background-clip: text;
 		background-clip: text;
 		color: transparent;
-		animation: shimmer 1.8s linear infinite;
+		animation: shimmer 1.6s linear infinite;
 	}
 	@keyframes shimmer {
 		from {
@@ -36,7 +38,7 @@
 		.ui-shimmer {
 			animation: none;
 			background: none;
-			color: var(--muted);
+			color: var(--shimmer-base);
 		}
 	}
 	@media (forced-colors: active) {

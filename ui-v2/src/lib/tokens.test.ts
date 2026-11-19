@@ -33,7 +33,7 @@ const RULES: Record<string, RegExp> = {
  * use its gradient and its keyframes, and nothing else may. Only those exact pieces are allowed there.
  */
 const SHIMMER = '/src/lib/ui/Shimmer.svelte';
-const SHIMMER_ALLOWED = [/background:\s*linear-gradient\(90deg, var\(--muted\)[^;]*var\(--text\)[^;]*\);/, /@keyframes shimmer\b/];
+const SHIMMER_ALLOWED = [/background:\s*linear-gradient\(90deg, var\(--shimmer-base\)[^;]*var\(--shimmer-glow\)[^;]*\);/, /@keyframes shimmer\b/];
 
 function offenders(rule: RegExp): string[] {
 	const out: string[] = [];
@@ -121,13 +121,20 @@ describe('contrast (WCAG AA, 4.5:1 for text)', () => {
 			const t = (n: string) => token(selector, n);
 			const low: string[] = [];
 			for (const bg of ['bg', 'surface', 'surface-2', 'accent-soft'])
-				for (const fg of ['text', 'text-2', 'muted', 'accent', 'ok', 'warn', 'danger']) {
+				// --shimmer-glow is not here on purpose: it is the light passing over --shimmer-base for a moment
+				for (const fg of ['text', 'text-2', 'muted', 'accent', 'ok', 'warn', 'danger', 'shimmer-base']) {
 					const c = contrast(t(fg), t(bg));
 					if (c < 4.5) low.push(`${fg} on ${bg}: ${c.toFixed(2)}`);
 				}
 			const button = contrast(t('accent-fg'), t('accent-bg'));
 			if (button < 4.5) low.push(`accent-fg on accent-bg: ${button.toFixed(2)}`);
 			expect(low).toEqual([]);
+		});
+
+		it(`makes the shimmer's light visible in ${theme}`, () => {
+			// the band has to stand out from the text it crosses, or nothing seems to move
+			const t = (n: string) => token(selector, n);
+			expect(contrast(t('shimmer-glow'), t('shimmer-base'))).toBeGreaterThan(2.5);
 		});
 	}
 

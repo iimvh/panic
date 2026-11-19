@@ -55,6 +55,9 @@ npm run check        # svelte-check
 npm test             # vitest: core logic, layer rules, tokens, components
 npm run test:e2e     # Playwright on the built app with a scripted fake API (no server, no keys)
 npm run budget       # bundle size budget, after npm run build
+MEASURE_URLS="v1=http://127.0.0.1:4174,v2=http://127.0.0.1:4173" npm run measure
+                     # compares UIs (vite preview of each) on one scripted chat: elements, controls,
+                     # colours, type sizes, radii, shadows; writes measure/out/results.md and screenshots
 ```
 
 Keyboard shortcuts:

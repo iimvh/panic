@@ -244,6 +244,8 @@ pub const KEYS: &[(&str, &str)] = &[
     ("Ctrl+C twice", "quit (once: clear the text, or stop)"),
     ("Shift+Tab", "next mode: Ask first, Plan, Auto-run"),
     ("Ctrl+K", "palette: chats, commands, models, effort, mode, actions"),
+    ("  Enter / → / ←", "  in the palette: pick or open / the choices behind it / back"),
+    ("Ctrl+P", "model: change provider, model and reasoning effort"),
     ("Ctrl+J", "go to the chat that needs you"),
     ("Ctrl+N", "new chat"),
     ("Ctrl+O", "run overview"),

@@ -85,3 +85,92 @@ fn the_palette_finds_commands_and_actions() {
     key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
     assert_eq!(app.composer.text, "/help ");
 }
+
+fn typed(app: &mut App, text: &str) {
+    for c in text.chars() {
+        key(app, KeyCode::Char(c), KeyModifiers::NONE);
+    }
+}
+
+#[test]
+fn a_provider_leads_to_its_models_and_a_reasoning_model_to_its_effort() {
+    let fake = Fake::start().with_defaults();
+    common::with_providers(&fake);
+    let (store, rx) = fake.store(None);
+    let mut app = App::new(store, &fake.url);
+    until(&mut app.store, &rx, |s| s.current_models().is_some());
+
+    key(&mut app, KeyCode::Char('p'), KeyModifiers::CONTROL);
+    let s = screen(&mut app, 100, 24);
+    assert!(s.contains(" Model ") && s.contains("Change provider") && s.contains("mistral-small"), "{s}");
+    // Change provider › openrouter: the palette stays open on openrouter's models
+    key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(screen(&mut app, 100, 24).contains("Model › Provider"));
+    key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+    key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(screen(&mut app, 100, 24).contains("┌ Model ─"), "back on the models, now openrouter's");
+    until(&mut app.store, &rx, |s| s.current_models().is_some_and(|m| m[0].id == "or/sonnet"));
+    app.after_update();
+    let s = screen(&mut app, 100, 24);
+    assert!(s.contains("mistral-small is not a model of openrouter: pick one"), "{s}");
+    assert!(s.contains("or/sonnet") && s.contains("or/free-llama"), "{s}");
+    // a reasoning model leads on to its effort
+    typed(&mut app, "sonnet");
+    key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+    let s = screen(&mut app, 100, 24);
+    assert!(s.contains("› Reasoning effort") && s.contains("Keep off"), "{s}");
+    typed(&mut app, "high");
+    key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(!screen(&mut app, 100, 24).contains("Reasoning effort"), "the last choice closes the palette");
+    until(&mut app.store, &rx, |s| s.state.as_ref().is_some_and(|st| st.reasoning_effort.as_deref() == Some("high")));
+    let puts: Vec<String> = fake.requests("PUT", "/api/settings").iter().map(|r| r.body.to_string()).collect();
+    assert_eq!(puts, vec![r#"{"provider":"openrouter"}"#, r#"{"model":"or/sonnet"}"#, r#"{"reasoningEffort":"high"}"#]);
+    app.after_update();
+    let s = screen(&mut app, 100, 24);
+    assert!(s.contains("or/sonnet · high"), "the top bar shows the choice: {s}");
+}
+
+#[test]
+fn chats_projects_and_commands_open_their_choices() {
+    let fake = Fake::start().with_defaults();
+    common::with_providers(&fake);
+    fake.on(|r| (r.path == "/api/conversations").then(|| Reply::Json(200, json!([{"id":"c1","title":"Old work","updatedAt":1}]))));
+    fake.on(|r| {
+        (r.path == "/api/workspaces")
+            .then(|| Reply::Json(200, json!({"projects":[{"path":"/w/app","name":"app","conversations":[]}],"hidden":[]})))
+    });
+    let (store, rx) = fake.store(None);
+    let mut app = App::new(store, &fake.url);
+    until(&mut app.store, &rx, |s| !s.conversations.is_empty() && s.workspaces.is_some() && s.state.is_some());
+
+    // a chat: Enter opens it, → shows what else can be done with it
+    key(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL);
+    typed(&mut app, "old work");
+    key(&mut app, KeyCode::Right, KeyModifiers::NONE);
+    let s = screen(&mut app, 100, 24);
+    assert!(s.contains("Go to › Old work") && s.contains("Delete…") && s.contains("Copy its id"), "{s}");
+    typed(&mut app, "delete");
+    key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(screen(&mut app, 100, 24).contains("Delete chat?"));
+    key(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
+
+    // a project: its actions
+    key(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL);
+    typed(&mut app, "new chat in app");
+    key(&mut app, KeyCode::Right, KeyModifiers::NONE);
+    let s = screen(&mut app, 100, 24);
+    assert!(s.contains("Go to › app") && s.contains("New chat here") && s.contains("Remove…"), "{s}");
+    key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+
+    // a command whose argument is a choice: the composer suggests the values, a bare one opens them
+    typed(&mut app, "/plan ");
+    let s = screen(&mut app, 100, 24);
+    assert!(s.contains(" on") && s.contains(" off"), "{s}");
+    key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+    assert_eq!(app.composer.text, "/plan on");
+    app.composer.set("/model");
+    key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+    let s = screen(&mut app, 100, 24);
+    assert!(s.contains(" Model ") && s.contains("Change provider"), "a bare /model opens the models: {s}");
+    assert!(fake.requests("POST", "/api/command").iter().all(|r| r.body["line"] != "model"), "and is not sent");
+}

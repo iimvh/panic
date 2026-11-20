@@ -4,6 +4,7 @@
 
 pub mod cards;
 pub mod composer;
+pub mod menus;
 pub mod palette;
 pub mod term;
 pub mod text;
@@ -11,15 +12,14 @@ pub mod theme;
 pub mod thread;
 pub mod views;
 
-use crate::api::{SettingsChange, quote_arg};
-use crate::core::conversations::listed;
-use crate::core::format::{ago, compact, duration};
+use crate::api::quote_arg;
+use crate::core::format::duration;
 use crate::core::reply::{CONTINUE_TEXT, Message, Role, activity, can_continue};
 use crate::core::summary::{TodoStatus, all_steps, summary};
 use crate::state::{Mode, RunKind, Store, TraceLoad};
 use cards::{PlanForm, QuestionForm};
 use composer::Composer;
-use palette::{Action, Item, Palette};
+use palette::Palette;
 use ratatui::Frame;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -85,8 +85,6 @@ pub struct App {
     pub out: Vec<Out>,
     base: String,
 }
-
-const EFFORTS: [&str; 5] = ["off", "minimal", "low", "medium", "high"];
 
 impl App {
     pub fn new(store: Store, base: &str) -> Self {
@@ -177,10 +175,7 @@ impl App {
 
     fn paste(&mut self, text: &str) {
         match &mut self.view {
-            View::Palette(p) => {
-                p.query.push_str(text.lines().next().unwrap_or(""));
-                p.typed();
-            }
+            View::Palette(p) => p.paste(text),
             View::None => {
                 if let Some(f) = &mut self.plan.feedback {
                     f.push_str(text);
@@ -215,6 +210,7 @@ impl App {
         // keys that work everywhere on the main screen
         match (ctrl, k.code) {
             (true, KeyCode::Char('k')) => return self.open_palette(),
+            (true, KeyCode::Char('p')) => return self.open_models(),
             (true, KeyCode::Char('r')) => return self.open_history(),
             (true, KeyCode::Char('n')) => return self.new_chat(),
             (true, KeyCode::Char('o')) => return self.view = View::Overview { scroll: 0 },
@@ -303,17 +299,19 @@ impl App {
             KeyCode::Enter if shift || alt => self.composer.insert('\n'),
             KeyCode::Enter => {
                 if !suggestions.is_empty() {
-                    let name = &suggestions[self.suggestion.min(suggestions.len() - 1)].0;
-                    if self.composer.text != format!("/{name}") {
-                        self.composer.set(&format!("/{name} "));
+                    let fill = &suggestions[self.suggestion.min(suggestions.len() - 1)].0;
+                    if self.composer.text.trim_end() != fill.trim_end() {
+                        self.composer.set(fill);
+                        self.suggestion = 0;
                         return;
                     }
                 }
                 self.submit();
             }
             KeyCode::Tab if !suggestions.is_empty() => {
-                let name = suggestions[self.suggestion.min(suggestions.len() - 1)].0.clone();
-                self.composer.set(&format!("/{name} "));
+                let fill = suggestions[self.suggestion.min(suggestions.len() - 1)].0.clone();
+                self.composer.set(&fill);
+                self.suggestion = 0;
             }
             KeyCode::Tab => self.enter_thread(),
             KeyCode::Esc => {
@@ -376,6 +374,12 @@ impl App {
         self.scroll = 0;
         match t {
             "/exit" | "/quit" => self.out.push(Out::Quit),
+            // a command whose argument is a choice: the choices, in the palette
+            "/model" | "/provider" | "/effort" | "/plan" | "/bypass" | "/workspace" => {
+                if let Some((node, title)) = menus::arg_node(&t[1..]) {
+                    self.open_menu(node, title);
+                }
+            }
             "/continue" => match self.store.conv().messages.last() {
                 Some(m) if can_continue(m) => self.store.send(CONTINUE_TEXT),
                 _ => self.notify("Nothing to continue: the last answer did not stop at a limit."),
@@ -390,16 +394,27 @@ impl App {
     }
 
     /// Commands whose name starts with what is typed after `/` (not `exit`).
+    /// What the composer suggests: commands while the name is typed, then the values of an argument that is a
+    /// choice (`/plan on`, `/provider openrouter`). Each is (the text to fill in, its label, a detail).
     fn suggestions(&self) -> Vec<(String, String, String)> {
-        let Some(prefix) = self.composer.command_prefix() else { return vec![] };
         let Some(state) = &self.store.state else { return vec![] };
-        state
-            .commands
-            .iter()
-            .filter(|c| c.name != "exit" && c.name.starts_with(prefix))
-            .map(|c| (c.name.clone(), c.usage.clone(), c.description.clone()))
-            .take(8)
-            .collect()
+        if let Some(prefix) = self.composer.command_prefix() {
+            return state
+                .commands
+                .iter()
+                .filter(|c| c.name != "exit" && c.name.starts_with(prefix))
+                .map(|c| (format!("/{} ", c.name), format!("/{}", c.usage), c.description.clone()))
+                .take(8)
+                .collect();
+        }
+        let Some(rest) = self.composer.text.strip_prefix('/') else { return vec![] };
+        let Some((name, typed)) = rest.split_once(' ') else { return vec![] };
+        if self.composer.text.contains('\n') {
+            return vec![];
+        }
+        let list = self.arg_suggestions(name, typed);
+        // once a value is typed in full, nothing is left to suggest
+        if list.len() == 1 && list[0].0 == self.composer.text { vec![] } else { list }
     }
 
     fn card_key(&mut self, k: KeyEvent) {
@@ -621,33 +636,7 @@ impl App {
         let page = self.page.saturating_sub(4).max(1);
         let traced = self.traced().len();
         match &mut self.view {
-            View::Palette(p) => match code {
-                KeyCode::Esc => self.view = View::None,
-                KeyCode::Up => p.move_by(-1),
-                KeyCode::Down | KeyCode::Tab => p.move_by(1),
-                KeyCode::PageUp => p.move_by(-(page as isize)),
-                KeyCode::PageDown => p.move_by(page as isize),
-                KeyCode::Enter => {
-                    let chosen = p.chosen();
-                    self.view = View::None;
-                    if let Some(a) = chosen {
-                        self.act(a);
-                    }
-                }
-                KeyCode::Backspace => {
-                    p.query.pop();
-                    p.typed();
-                }
-                KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                    p.query.clear();
-                    p.typed();
-                }
-                KeyCode::Char(c) => {
-                    p.query.push(c);
-                    p.typed();
-                }
-                _ => {}
-            },
+            View::Palette(_) => self.palette_key(k),
             View::Step { index, scroll } => {
                 let n = all_steps(&self.store.conv().messages).len();
                 match code {
@@ -727,206 +716,6 @@ impl App {
         }
     }
 
-    fn act(&mut self, a: Action) {
-        match a {
-            Action::NewChat => self.new_chat(),
-            Action::Open(id) => self.open_chat(&id),
-            Action::Command(name) => {
-                self.focus = Focus::Composer;
-                self.composer.set(&format!("/{name} "));
-            }
-            Action::Model(id) => self.store.settings(SettingsChange { model: Some(id), ..Default::default() }),
-            Action::Effort(e) => self.store.settings(SettingsChange { reasoning_effort: Some(e), ..Default::default() }),
-            Action::Provider(p) => self.store.settings(SettingsChange { provider: Some(p), ..Default::default() }),
-            Action::Mode(m) => {
-                if self.store.conv().busy() {
-                    self.notify("Switch the mode once the answer ends.");
-                } else if m == Mode::Auto && self.store.conv().mode() != Some(Mode::Auto) {
-                    self.view = View::Confirm(Confirm::AutoRun(None));
-                } else {
-                    self.store.set_mode(m);
-                }
-            }
-            Action::Delete(id) => {
-                let title = self.store.conversations.iter().find(|c| c.id == id).map(|c| c.title.clone()).unwrap_or_default();
-                self.view = View::Confirm(Confirm::Delete(id, title));
-            }
-            Action::Overview => self.view = View::Overview { scroll: 0 },
-            Action::Trace => {
-                let n = self.traced().len();
-                self.open_trace(n.saturating_sub(1));
-            }
-            Action::AddProject(path) => self.store.workspace(format!("workspace add {}", quote_arg(&path))),
-            Action::RemoveProject(path, name) => self.view = View::Confirm(Confirm::RemoveProject(path, name)),
-            Action::NewChatIn(path) => {
-                self.new_chat();
-                self.store.workspace(format!("workspace use {}", quote_arg(&path)));
-            }
-            Action::Continue => self.store.send(CONTINUE_TEXT),
-            Action::CopyLast => {
-                let last = self
-                    .store
-                    .conv()
-                    .messages
-                    .iter()
-                    .rev()
-                    .find(|m| m.role == Role::Assistant && !m.text.is_empty())
-                    .map(|m| m.text.clone());
-                match last {
-                    Some(t) => {
-                        self.out.push(Out::Copy(t));
-                        self.notify("Copied the last answer.");
-                    }
-                    None => self.notify("No answer to copy yet."),
-                }
-            }
-            Action::Help => self.view = View::Help,
-            Action::Recall(t) => {
-                self.focus = Focus::Composer;
-                self.composer.set(&t);
-            }
-        }
-    }
-
-    fn open_history(&mut self) {
-        let items = self
-            .composer
-            .history()
-            .iter()
-            .rev()
-            .map(|h| Item::new("History", h.replace('\n', " ⏎ "), "", Action::Recall(h.clone())))
-            .collect();
-        self.view = View::Palette(Palette::new("History", items));
-    }
-
-    fn open_palette(&mut self) {
-        self.store.load_models();
-        let s = &self.store;
-        let conv = s.conv();
-        let now = s.now();
-        let mut items = vec![Item::new("Actions", "New chat", "Ctrl+N", Action::NewChat)];
-        if conv.messages.last().is_some_and(can_continue) {
-            items.push(Item::new("Actions", "Continue where it stopped", "", Action::Continue));
-        }
-        items.push(Item::new("Actions", "Run overview", "Ctrl+O", Action::Overview));
-        if !self.traced().is_empty() {
-            items.push(Item::new("Actions", "Trace of the last answer", "where the time went", Action::Trace));
-        }
-        items.push(Item::new("Actions", "Copy the last answer", "", Action::CopyLast));
-        if !conv.fresh {
-            items.push(Item::new("Actions", "Delete this chat…", "with its plan and traces", Action::Delete(conv.id.clone())).alert());
-        }
-        items.push(Item::new("Actions", "Keys", "?", Action::Help));
-        for id in s.needs_you() {
-            let title = s.conversations.iter().find(|c| c.id == id).map(|c| c.title.clone()).unwrap_or_default();
-            items.push(
-                Item::new("Needs you", if title.is_empty() { "New chat".into() } else { title }, "waiting · Ctrl+J", Action::Open(id))
-                    .alert(),
-            );
-        }
-        for l in listed(&s.conversations, s.workspaces.as_ref(), &s.current, now) {
-            if l.chat.id == s.current {
-                continue;
-            }
-            let title = if l.chat.title.is_empty() { "New chat".to_string() } else { l.chat.title.clone() };
-            let mut detail = vec![];
-            if let Some(p) = &l.project {
-                detail.push(p.clone());
-            }
-            if l.chat.running || s.convs.get(&l.chat.id).is_some_and(|c| c.busy()) {
-                detail.push("running".into());
-            } else if s.convs.get(&l.chat.id).is_some_and(|c| c.unseen) {
-                detail.push("new answer".into());
-            }
-            detail.push(ago(l.chat.updated_at, now));
-            items.push(Item::new("Chats", title, detail.join(" · "), Action::Open(l.chat.id)));
-        }
-        let current_mode = conv.mode();
-        for m in Mode::available(conv.mode, conv.permissions) {
-            if conv.mode().is_none() {
-                break;
-            }
-            let detail = if Some(m) == current_mode { format!("current · {}", m.description()) } else { m.description().to_string() };
-            let it = Item::new("Mode", m.label(), detail, Action::Mode(m));
-            items.push(if m == Mode::Auto { it.alert() } else { it });
-        }
-        if let Some(state) = &s.state {
-            match &s.models {
-                Some(Ok(models)) => {
-                    for m in models {
-                        let mut tags = vec![];
-                        if m.free == Some(true) {
-                            tags.push("free".to_string());
-                        }
-                        if m.reasoning == Some(true) {
-                            tags.push("reasoning".into());
-                        }
-                        if m.context_length > 0 {
-                            tags.push(format!("{} context", compact(m.context_length)));
-                        }
-                        if state.model.as_deref() == Some(&m.id) {
-                            tags.insert(0, "current".into());
-                        }
-                        items.push(Item::new("Models", m.id.clone(), tags.join(" · "), Action::Model(m.id.clone())));
-                    }
-                }
-                Some(Err(e)) => items.push(Item::new("Models", "Models could not be listed", e.clone(), Action::Help)),
-                None => {}
-            }
-            let current = state.reasoning_effort.clone().unwrap_or_else(|| "off".into());
-            let mut levels: Vec<String> = EFFORTS.iter().map(|e| e.to_string()).collect();
-            if !levels.contains(&current) {
-                levels.push(current.clone());
-            }
-            for e in levels {
-                let mut detail = if e == current { "current".to_string() } else { String::new() };
-                if state.effort_supported == Some(false) && e != "off" {
-                    detail = "this model takes no reasoning effort".into();
-                }
-                items.push(Item::new("Reasoning effort", e.clone(), detail, Action::Effort(e)));
-            }
-            for p in &state.providers {
-                let mut detail = if p.connected {
-                    String::new()
-                } else {
-                    "not connected: its API key is missing or it is disabled in panic.json".into()
-                };
-                if state.provider.as_deref() == Some(&p.id) {
-                    detail = format!("current{}", if detail.is_empty() { String::new() } else { format!(" · {detail}") });
-                }
-                items.push(Item::new("Provider", p.id.clone(), detail, Action::Provider(p.id.clone())));
-            }
-            for c in &state.commands {
-                if c.name == "exit" {
-                    continue;
-                }
-                items.push(Item::new("Commands", format!("/{}", c.usage), c.description.clone(), Action::Command(c.name.clone())));
-            }
-        }
-        if let Some(ws) = &s.workspaces {
-            if let Some(dir) = &s.cwd
-                && ws.project_at(dir).is_none()
-            {
-                items.push(Item::new("Projects", "Add this folder as a project", dir.clone(), Action::AddProject(dir.clone())));
-            }
-            for p in &ws.projects {
-                items.push(Item::new("Projects", format!("New chat in {}", p.name), p.path.clone(), Action::NewChatIn(p.path.clone())));
-            }
-            for p in &ws.projects {
-                items.push(
-                    Item::new(
-                        "Projects",
-                        format!("Remove project {}…", p.name),
-                        p.path.clone(),
-                        Action::RemoveProject(p.path.clone(), p.name.clone()),
-                    )
-                    .alert(),
-                );
-            }
-        }
-        self.view = View::Palette(Palette::new("Go to", items));
-    }
-
     // ---------------------------------------------------------------- drawing
 
     pub fn window_title(&mut self) -> Option<String> {
@@ -1002,9 +791,9 @@ impl App {
             let lines: Vec<Line> = sugg
                 .iter()
                 .enumerate()
-                .map(|(i, (_, usage, desc))| {
+                .map(|(i, (_, label, desc))| {
                     let here = i == self.suggestion.min(sugg.len() - 1);
-                    let u = format!(" /{usage}");
+                    let u = format!(" {label}");
                     let line = Line::from(vec![
                         Span::styled(fit(&u, w / 2), theme::accent()),
                         Span::styled(format!("  {}", fit(desc, w.saturating_sub(width(&u) + 3))), theme::muted()),
@@ -1269,7 +1058,7 @@ impl App {
         } else if waiting == 0 && self.focus == Focus::Thread {
             middle.push(Span::styled("  ↵ open · space fold · c copy · esc back", theme::muted()));
         }
-        let right = Span::styled("^K palette · ? keys ", theme::muted());
+        let right = Span::styled("^K palette · ^P model · ? keys ", theme::muted());
         let room = w.saturating_sub(left.iter().map(|s| width(&s.content)).sum::<usize>() + width(&right.content) + 1);
         let mut used_mid = 0;
         for sp in &mut middle {
@@ -1312,19 +1101,43 @@ impl App {
             f.render_widget(block, area);
             Rect { x: inner.x + 1, width: inner.width.saturating_sub(2), ..inner }
         };
+        // a palette level lists what the store holds now: lists that load later appear in place
+        let palette = match &self.view {
+            View::Palette(p) => Some(self.palette_items(&p.top().node, p)),
+            _ => None,
+        };
         match &mut self.view {
             View::None => {}
             View::Palette(p) => {
-                let inner = popup(f, p.title.to_string(), 70, 70);
+                let (items, note) = palette.unwrap_or_default();
+                let w = (area.width * 70 / 100).max(40).min(area.width);
+                let h = (area.height * 70 / 100).max(8).min(area.height);
+                let r = Rect { x: area.x + (area.width - w) / 2, y: area.y + (area.height - h) / 2, width: w, height: h };
+                f.render_widget(Clear, r);
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(theme::muted())
+                    .title(Span::styled(format!(" {} ", p.breadcrumb()), theme::bold()))
+                    .title_bottom(Span::styled(format!(" {} ", p.hint()), theme::muted()));
+                let inner = block.inner(r);
+                f.render_widget(block, r);
                 let [q, list] = Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).areas(inner);
-                let query = Line::from(vec![
+                let query = &p.top().query;
+                let placeholder = if !query.is_empty() {
+                    ""
+                } else if p.is_input() {
+                    "  type, then Enter"
+                } else {
+                    "  type to search"
+                };
+                let line = Line::from(vec![
                     Span::styled("❯ ", theme::accent()),
-                    Span::raw(p.query.clone()),
-                    Span::styled(if p.query.is_empty() { "  type to search" } else { "" }, theme::muted()),
+                    Span::raw(query.clone()),
+                    Span::styled(placeholder, theme::muted()),
                 ]);
-                f.render_widget(Paragraph::new(vec![query, Line::from(Span::styled("─".repeat(inner.width as usize), theme::muted()))]), q);
-                f.set_cursor_position((q.x + 2 + width(&p.query) as u16, q.y));
-                f.render_widget(Paragraph::new(p.lines(list.width as usize, list.height as usize)), list);
+                f.render_widget(Paragraph::new(vec![line, Line::from(Span::styled("─".repeat(inner.width as usize), theme::muted()))]), q);
+                f.set_cursor_position((q.x + 2 + width(query) as u16, q.y));
+                f.render_widget(Paragraph::new(p.lines(&items, note, list.width as usize, list.height as usize)), list);
             }
             View::Step { index, scroll } => {
                 let steps = all_steps(&self.store.conv().messages);

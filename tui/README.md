@@ -92,9 +92,22 @@ ends.
   files changed, model, tokens, tools, time. Enter on it opens the trace.
 - Space folds or unfolds any line.
 
-**Fast to steer.**
+**Fast to steer, and a choice leads on to the choices behind it.**
 - Ctrl+K is one palette for chats, `/commands`, models, reasoning effort, provider, mode and actions (new chat, delete,
   projects, overview, trace, copy).
+- The palette has levels, with a breadcrumb:
+  - Enter picks an item, or opens it when it is only a menu.
+  - → opens the choices behind an item (marked ›). ← or Backspace goes back.
+- Where choices lead on:
+  - a provider switches and shows its models (loaded in place; a warning says when the current model is not one of them);
+  - a reasoning model goes on to its effort;
+  - a chat has Open, Delete… and Copy id;
+  - a project has New chat here, Copy path and Remove…;
+  - a prompt from the history can be put back or sent;
+  - a command whose argument is a choice (`/provider`, `/model`, `/effort`, `/plan`, `/bypass`, `/workspace`,
+    `/help`, `/trace`) lists the values.
+- Ctrl+P opens the models straight away. A bare `/model`, `/provider` or `/effort` opens its level too.
+- After `/plan ` and the like, the composer suggests the values (Tab fills one in).
 - Shift+Tab cycles Ask first → Plan → Auto-run. Auto-run asks first.
 - A chat started in a project's folder works in that project.
 
@@ -106,7 +119,8 @@ ends.
 | Esc | Close a view, else stop the answer. |
 | Ctrl+C twice | Quit. Once clears the text or stops the answer. |
 | Shift+Tab | Next mode. |
-| Ctrl+K | Palette. |
+| Ctrl+K | Palette. Enter picks, → opens the choices behind an item, ← or Backspace goes back, Esc closes. |
+| Ctrl+P | Model: provider, model and reasoning effort (Ctrl+F: free models only). |
 | Ctrl+R | Search the prompt history. |
 | Ctrl+J | Go to the chat that needs you. |
 | Ctrl+N | New chat. |

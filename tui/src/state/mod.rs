@@ -23,7 +23,6 @@ use crate::core::trace::Span;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
@@ -145,6 +144,12 @@ impl Conv {
         }
     }
 
+    /// An empty chat, for views' tests.
+    #[doc(hidden)]
+    pub fn for_tests(id: &str) -> Self {
+        Conv::new(id, true)
+    }
+
     pub fn busy(&self) -> bool {
         self.run.is_some()
     }
@@ -179,9 +184,12 @@ pub enum TraceLoad {
     Failed(String),
 }
 
+/// Where workers hand their results; false once nobody listens.
+pub type Sink = Arc<dyn Fn(Msg) -> bool + Send + Sync>;
+
 pub struct Store {
     backend: Arc<dyn Backend>,
-    tx: Sender<Msg>,
+    tx: Sink,
     clock: fn() -> i64,
     generation: u64,
     pub current: String,
@@ -213,11 +221,11 @@ fn message(e: &ApiError) -> String {
 }
 
 impl Store {
-    pub fn new(backend: Arc<dyn Backend>, tx: Sender<Msg>, session: Option<String>) -> Self {
+    pub fn new(backend: Arc<dyn Backend>, tx: Sink, session: Option<String>) -> Self {
         Self::with_clock(backend, tx, session, now_ms)
     }
 
-    pub fn with_clock(backend: Arc<dyn Backend>, tx: Sender<Msg>, session: Option<String>, clock: fn() -> i64) -> Self {
+    pub fn with_clock(backend: Arc<dyn Backend>, tx: Sink, session: Option<String>, clock: fn() -> i64) -> Self {
         let mut s = Store {
             backend,
             tx,
@@ -260,26 +268,26 @@ impl Store {
     fn spawn(&self, job: impl FnOnce(&dyn Backend) -> Msg + Send + 'static) {
         let (backend, tx) = (self.backend.clone(), self.tx.clone());
         thread::spawn(move || {
-            let _ = tx.send(job(backend.as_ref()));
+            tx(job(backend.as_ref()));
         });
     }
 
     /// Forwards every event of `events` as [`Msg::Event`], then [`Msg::StreamEnd`].
-    fn pump(tx: &Sender<Msg>, session: &str, generation: u64, events: Events) {
+    fn pump(tx: &Sink, session: &str, generation: u64, events: Events) {
         for e in events {
             match e {
                 Ok(event) => {
-                    if tx.send(Msg::Event { session: session.into(), generation, event }).is_err() {
+                    if !tx(Msg::Event { session: session.into(), generation, event }) {
                         return;
                     }
                 }
                 Err(error) => {
-                    let _ = tx.send(Msg::StreamEnd { session: session.into(), generation, error: Some(error) });
+                    tx(Msg::StreamEnd { session: session.into(), generation, error: Some(error) });
                     return;
                 }
             }
         }
-        let _ = tx.send(Msg::StreamEnd { session: session.into(), generation, error: None });
+        tx(Msg::StreamEnd { session: session.into(), generation, error: None });
     }
 
     fn stream(&mut self, session: &str, open: impl FnOnce(&dyn Backend) -> Result<Events, ApiError> + Send + 'static) -> u64 {
@@ -289,7 +297,7 @@ impl Store {
         thread::spawn(move || match open(backend.as_ref()) {
             Ok(events) => Self::pump(&tx, &session, generation, events),
             Err(error) => {
-                let _ = tx.send(Msg::StreamEnd { session, generation, error: Some(error) });
+                tx(Msg::StreamEnd { session, generation, error: Some(error) });
             }
         });
         generation
@@ -712,7 +720,7 @@ impl Store {
                 let (backend, tx) = (self.backend.clone(), self.tx.clone());
                 thread::spawn(move || {
                     if let Ok(Some(events)) = backend.follow(&s, 0) {
-                        let _ = tx.send(Msg::Running { session: s, events });
+                        tx(Msg::Running { session: s, events });
                     }
                 });
             }

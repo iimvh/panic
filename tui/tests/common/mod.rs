@@ -84,7 +84,7 @@ impl Fake {
     /// A store on this server, and the channel its workers answer on.
     pub fn store(&self, session: Option<&str>) -> (Store, Receiver<Msg>) {
         let (tx, rx) = channel();
-        let store = Store::new(Arc::new(HttpBackend::new(&self.url)), tx, session.map(Into::into));
+        let store = Store::new(Arc::new(HttpBackend::new(&self.url)), Arc::new(move |m| tx.send(m).is_ok()), session.map(Into::into));
         (store, rx)
     }
 

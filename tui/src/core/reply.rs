@@ -443,10 +443,17 @@ fn upsert_step(t: &mut impl Timeline, mut step: ToolStep, now: Option<i64>) {
         Part::Tool(s) => Some(s.clone()),
         _ => None,
     });
-    if let Some(old) = &old
-        && old.agent.is_some()
-    {
-        step.agent = old.agent.clone(); // the sub-agent's work stays
+    if let Some(old) = &old {
+        if old.agent.is_some() {
+            step.agent = old.agent.clone(); // the sub-agent's work stays
+        }
+        // an end event without the call's name or arguments keeps those it started with
+        if step.arguments.is_empty() {
+            step.arguments = old.arguments.clone();
+        }
+        if step.name.is_empty() {
+            step.name = old.name.clone();
+        }
     }
     if let Some(now) = now {
         step.started_at = if step.status == Status::Running { Some(now) } else { old.as_ref().and_then(|o| o.started_at) };

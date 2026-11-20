@@ -1,8 +1,91 @@
 # tui
 
-Panic's terminal front-end, written in Rust: a full-screen chat in the terminal, so you don't need a browser on a weak machine.
-It is a single small binary. It talks only to the `web` plugin's JSON + SSE API (see `plugins/web/README.md`), the same
-API ui-v2 uses, and owns no feature.
+Panic's terminal front-end, in Rust: a full-screen chat in the terminal, so a weak machine needs no browser.
+
+- **Small.** It is one binary of about 2 MB that uses about 8 MB of memory. It starts at once and uses no CPU while idle.
+- **Same API as ui-v2.** It talks only to the `web` plugin's JSON + SSE API (see `plugins/web/README.md`) and owns no feature.
+
+```bash
+cargo build --release
+target/release/panic-tui                     # against `panic --serve` on http://127.0.0.1:8080
+target/release/panic-tui --url http://host:8080 --session <id>
+target/release/panic-tui --spawn ../app/build/install/app/bin/app   # starts `app --serve`, stops it on exit
+target/release/panic-tui ask "Explain SSE in one line"              # one answer to stdout, tool calls to stderr
+```
+
+On a weak machine, give the JVM a small heap as well: `JAVA_OPTS="-Xmx256m -XX:+UseSerialGC" app --serve`. It then runs in about 150 MB.
+
+## Design
+
+The design starts from ui-v2's weaknesses rather than copying it.
+
+```
+ Panic · agent-panic · fix resume                          m/sonnet · medium · ctx 4%
+ ❯ fix resume
+ ● I'll read ChatStream first.
+ ✓ read_file  ChatStream.java                                                 2.1 KB
+ ✓ edit_file  ChatStream.java                                           +2 −1  7s
+     41 - if (e.seq() >= after)
+     41 + if (e.seq() > after)
+ ✓ exec       ./gradlew :web:test                                          16 B  1s
+   ─ 1 file +2 −1 · m/sonnet · 17k tokens · 4 tools · 10s ─ trace ↵
+ Todo 1/3  ✓ read  ◐ fix  ○ run tests
+ ⠼ Running exec… 9s  Esc to stop
+ ⏎ queued  then run all tests
+──────────────────────────────────────────────────────────────────────────────────────
+❯ _
+ ask first (⇧Tab)  1 chat needs you (^J)                          ^K palette · ? keys
+```
+
+**Nothing that waits for you can be missed.**
+- An approval, a plan or the agent's questions take the place of the message box until they are answered:
+  `y`/`n`, `a`/`f`, or ↑↓ Space Enter. They never sit inside the scrolling thread.
+- An approval for a file change shows the change it would make.
+- Every chat with an answer in flight stays in memory with its stream open. A chat left in the background that waits for
+  you is counted in the footer and rings the terminal bell, and Ctrl+J goes to it.
+
+**You can always type.** A message sent while an answer runs waits in a queue (↑ takes it back) and goes when the answer
+ends.
+
+**One place for each thing, and progress in view.**
+- Tool calls are shown once: one line each in the thread, with Enter opening the full step (arguments, diff, result,
+  sub-agent). There is no second list of steps.
+- The todo list and the status are pinned above the message box.
+- The context use (the last model call's tokens against the model's window, from the trace) is in the top bar.
+
+**The thread stays short.**
+- Diffs are open in the turn that runs and the last one, cut at 20 lines.
+- Older turns keep their text and fold each run of tool calls into one line, and every answer ends with a summary line:
+  files changed, model, tokens, tools, time. Enter on it opens the trace.
+- Space folds or unfolds any line.
+
+**Fast to steer.**
+- Ctrl+K is one palette for chats, `/commands`, models, reasoning effort, provider, mode and actions (new chat, delete,
+  projects, overview, trace, copy).
+- Shift+Tab cycles Ask first → Plan → Auto-run. Auto-run asks first.
+- A chat started in a project's folder works in that project.
+
+## Keys
+
+| Keys | Action |
+| --- | --- |
+| Enter, Shift+Enter or Alt+Enter | Send (queue while an answer runs). New line. |
+| Esc | Close a view, else stop the answer. |
+| Ctrl+C twice | Quit. Once clears the text or stops the answer. |
+| Shift+Tab | Next mode. |
+| Ctrl+K | Palette. |
+| Ctrl+R | Search the prompt history. |
+| Ctrl+J | Go to the chat that needs you. |
+| Ctrl+N | New chat. |
+| Ctrl+O | Run overview: mode, model, context, time, tokens, calls, edits, checklist, files. |
+| Ctrl+G | Write the prompt in `$VISUAL` / `$EDITOR`. |
+| ↑ / ↓ in an empty prompt | The queued message, then the history (kept in `$XDG_STATE_HOME/panic-tui/history`). |
+| PgUp / PgDn, mouse wheel | Scroll. |
+| Tab | Select lines in the thread: j/k move, Enter opens, Space folds, `c` / `C` copy the line / its last code block. |
+| `/continue` | Go on after an answer stopped at a limit. |
+| `?` | All keys. |
+
+Copying uses the OSC 52 terminal sequence, so it works over SSH too.
 
 ## Layers
 
@@ -14,11 +97,8 @@ src/state   chats and runs, the only layer that calls the backend
 src/ui      drawing and keys (ratatui), never calls the backend
 ```
 
-Each layer uses only the layers above it in this list.
-
-The state layer keeps every chat that has an answer in flight in memory, with its stream open. This has two effects:
-- Leaving a chat never loses its answer.
-- A chat in the background that waits for an approval is known at once.
+Each layer uses only the ones above it, and `tests/layers.rs` checks this. A later Rust core can implement `Backend`
+without the other layers changing.
 
 ## Dependencies
 
@@ -26,13 +106,14 @@ AGENTS.md rule 10 asks for a reason for each one. They are kept few so the crate
 
 | Crate | Why |
 | --- | --- |
-| `ratatui` (with its `crossterm` backend) | Drawing, keys, mouse and resize in every common terminal. Writing this by hand would be a terminal library of our own. |
-| `ureq` (no default features: plain HTTP, no TLS) | A blocking HTTP client small enough to read SSE line by line. It needs no async runtime: worker threads and one channel are enough for a front-end. |
+| `ratatui` (with its `crossterm` backend) | Drawing, keys, mouse, paste and resize in every common terminal. Writing this by hand would be a terminal library of our own. |
+| `ureq` (no default features: plain HTTP, no TLS) | A blocking HTTP client that reads SSE as it arrives. It needs no async runtime: worker threads and one channel are enough for a front-end. |
 | `serde`, `serde_json` | The API's JSON. |
+| `unicode-width` | The width of text in terminal cells, for wrapping. ratatui already depends on it. |
 
-The crate deliberately has no async runtime, no CLI-argument crate, no Markdown crate and no clipboard crate:
-- Markdown is a port of ui-v2's own parser, so both front-ends render answers the same way.
-- Copying uses the OSC 52 terminal sequence, which also works over SSH.
+There is no async runtime, no CLI-argument crate, no Markdown crate and no clipboard crate:
+- Markdown is a port of ui-v2's own parser, so both front-ends read answers the same way.
+- The clipboard is OSC 52.
 
 ## Tests
 
@@ -40,8 +121,13 @@ The crate deliberately has no async runtime, no CLI-argument crate, no Markdown 
 cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-- **Unit tests** in `src/core` are the cases of ui-v2's `*.test.ts`.
-- **`tests/state.rs`** drives the state layer against `tests/common`, a scripted fake of the API on a local port.
-  It covers resuming, background chats, the queue, cards, mode switches and deletes.
+- **Unit tests** in `src/core` are the cases of ui-v2's `*.test.ts`, plus tests of the views (thread lines, cards,
+  palette, composer).
+- **`tests/state.rs`** drives the state layer against `tests/common`, a scripted fake of the API on a local port. It
+  covers answers, approvals, the queue, background chats, resuming after a dropped stream, skills, `/reset`, mode
+  switches and deletes.
+- **`tests/screen.rs`** draws the whole screen on a test terminal at 80 and 160 columns.
+- **`tests/layers.rs`** checks the layers' direction.
 
-When the API changes (an endpoint, an event or a field), change that fake in the same commit as `ui-v2/e2e/fake-api.ts`.
+When the API changes (an endpoint, an event or a field), change `tests/common/mod.rs` in the same commit as
+`ui-v2/e2e/fake-api.ts`.

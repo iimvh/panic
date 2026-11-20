@@ -52,7 +52,8 @@ order, exactly once, after any call still running.
 10. **No new libraries without a reason** that you write down in the change. The Java side uses only z and
     Jackson. The UI (`ui-v2`) uses SvelteKit and Bits UI (headless primitives: dialogs, menus, tabs,
     tooltips with tested focus and keyboard handling, styled only with our tokens) and, for tests only,
-    Testing Library, jsdom, Playwright and axe.
+    Testing Library, jsdom, Playwright and axe. The terminal UI (`tui`) uses ratatui (crossterm), ureq (no TLS),
+    serde, serde_json and unicode-width; their reasons are in `tui/README.md`.
 
 `app/src/test/java/panic/app/ConventionsTest.java` enforces the rules a machine can check. Do not weaken it
 to make a change pass.
@@ -97,6 +98,7 @@ to make a change pass.
 ./gradlew check                     # Java tests (+ UI build); compiler warnings are errors
 ./gradlew check -PskipUi            # without Node
 cd ui-v2 && npm run check && npm test && npm run build && npm run budget && npm run test:e2e  # when you touch ui-v2/
+cd tui && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test          # when you touch tui/
 ```
 
 CI (`.github/workflows/ci.yml`, job **Build and test**) runs the same checks on every push to `master` and
@@ -114,7 +116,10 @@ every pull request. A change is not done until it passes.
 - The UI is in `ui-v2/` (SvelteKit SPA, Svelte 5 runes, scoped CSS on the tokens of `src/app.css`; see its README
   for the layers and design rules). `ui-v1/` is deprecated and frozen: do not change it. The UI talks only to the `web` plugin's
   JSON + SSE API, never to anything else. When that API changes (an event, a field, an endpoint), change
-  `ui-v2/e2e/fake-api.ts` in the same commit, or the end-to-end tests test a server that no longer exists.
+  `ui-v2/e2e/fake-api.ts` and `tui/tests/common/mod.rs` in the same commit, or the tests test a server that no
+  longer exists.
+- The terminal UI is in `tui/` (Rust, layered core / api / state / ui, checked by `tui/tests/layers.rs`; see its
+  README). Like ui-v2 it talks only to the `web` plugin's API and owns no feature.
 
 ## Map
 
@@ -136,4 +141,5 @@ every pull request. A change is not done until it passes.
 | `plugins/agents` | `agents` | [README](plugins/agents/README.md) |
 | `plugins/cli` | `cli` | [README](plugins/cli/README.md) |
 | `plugins/web` | `web` | [README](plugins/web/README.md) |
+| `tui` | none (Rust terminal front-end over the web API) | [README](tui/README.md) |
 | `app` | none (bootstraps) | `Panic`, `PluginHost`, `ConfigLoader`, `ConfigWatch`, `Main` |

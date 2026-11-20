@@ -225,6 +225,26 @@ Run `panic --serve` and open `http://127.0.0.1:8080`:
 
 The UI is `ui-v2/` (see its README for its design rules). The first UI, `ui-v1/` with the agent map, is deprecated; it can still be packed with `./gradlew :app:installDist -Pui=ui-v1` but is no longer maintained.
 
+### Terminal UI
+
+`tui/` is a full-screen terminal front-end in Rust for the same API. It needs no browser and uses about 8 MB of memory.
+
+```bash
+cd tui && cargo build --release
+target/release/panic-tui                                         # against `panic --serve` on 127.0.0.1:8080
+target/release/panic-tui --spawn ../app/build/install/app/bin/app # start Panic too, and stop it on exit
+target/release/panic-tui ask "Explain SSE in one line"           # one answer to stdout
+```
+
+It shows the thread in one column:
+- One line per tool call. Diffs are open in the last turn only, and older turns fold into a summary line.
+- A card that waits for you (an approval with a preview of the change, a plan, questions) takes the place of the message box.
+- Messages typed while an answer runs are queued.
+- A chat left in the background that needs you is counted in the footer (Ctrl+J).
+- Ctrl+K opens one palette for chats, commands, models, effort, provider, mode and actions.
+
+On a weak machine, give the JVM a small heap: `JAVA_OPTS="-Xmx256m -XX:+UseSerialGC" app --serve`. See [tui/README.md](tui/README.md).
+
 ## How it works
 
 ```mermaid
@@ -384,6 +404,7 @@ A module may declare several plugins. For example `:llm` declares `openrouter`, 
 │   └── web/          panic.web      web: HTTP + SSE API, static files; builds and packs ui-v2/ (-Pui=<dir> picks another)
 ├── ui-v2/                           SvelteKit SPA: lib/core (logic), lib/state, lib/ui (primitives), features/, e2e/
 ├── ui-v1/                           the first UI with the agent map (deprecated, frozen)
+├── tui/                             Rust terminal UI for the same API: core (logic), api, state, ui; tests/ with a fake API
 ├── app/              panic.app      Panic (discovers PluginSets), PluginHost (configs by name), ConfigLoader, ConfigWatch, Main
 ├── buildSrc/                        Shared conventions: Java 21, -Xlint:all -Werror, JUnit 5
 └── z/                               The z kernel (git submodule, consumed as a Gradle composite build)
@@ -397,6 +418,12 @@ A module may declare several plugins. For example `:llm` declares `openrouter`, 
 ```
 
 Compiler warnings are errors. The tests run against local fake HTTP servers, so they need no network and no API keys. They cover the SSE parser, content normalization, request cancellation, provider switching and retraction, chat history, the command system, hot reload, and end-to-end REPL and one-shot runs.
+
+### Working on the terminal UI
+
+```bash
+cd tui && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+```
 
 ### Working on the UI
 

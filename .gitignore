@@ -57,3 +57,6 @@ SCRATCH*.md
 ui*/node_modules/
 ui*/build/
 ui*/.svelte-kit/
+
+# ---- TUI (Rust) ----
+tui/target/

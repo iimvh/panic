@@ -205,3 +205,17 @@ fn opening_a_chat_attaches_to_its_answer_in_flight() {
     until(&mut s, &rx, |s| !s.conv().busy());
     settle(&mut s, &rx, 50);
 }
+
+#[test]
+fn switching_the_provider_lists_its_models() {
+    let fake = Fake::start().with_defaults();
+    common::with_providers(&fake);
+    let (mut s, rx) = fake.store(None);
+    until(&mut s, &rx, |s| s.current_models().is_some_and(|m| m[0].id == "mistral-small"));
+    s.settings(panic_tui::api::SettingsChange { provider: Some("openrouter".into()), ..Default::default() });
+    // the model stays "mistral-small", as the server keeps it: the list still has to follow the provider
+    until(&mut s, &rx, |s| s.current_models().is_some_and(|m| m[0].id == "or/sonnet"));
+    assert_eq!(s.state.as_ref().unwrap().model.as_deref(), Some("mistral-small"));
+    assert_eq!(s.models_for.as_deref(), Some("openrouter"));
+    assert_eq!(s.take_notices(), vec!["Provider: openrouter"]);
+}

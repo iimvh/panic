@@ -62,7 +62,11 @@ pub enum Msg {
         permissions: Result<Option<Toggle>, ApiError>,
         mode: Result<Option<Toggle>, ApiError>,
     },
-    Models(Result<Vec<Model>, ApiError>),
+    /// The models of `provider`, the one running when they were asked for.
+    Models {
+        provider: Option<String>,
+        result: Result<Vec<Model>, ApiError>,
+    },
     Trace {
         session: String,
         id: String,
@@ -83,7 +87,10 @@ pub enum Msg {
         error: Option<String>,
         then: Then,
     },
-    Settings(Result<State, ApiError>),
+    Settings {
+        change: SettingsChange,
+        result: Result<State, ApiError>,
+    },
 }
 
 /// What to reload after quiet commands.
@@ -199,7 +206,11 @@ pub struct Store {
     pub offline: Option<String>,
     pub conversations: Vec<ConversationInfo>,
     pub workspaces: Option<Workspaces>,
+    /// The models of the provider in `models_for` (the server lists only the running provider's).
     pub models: Option<Result<Vec<Model>, String>>,
+    pub models_for: Option<String>,
+    /// The provider whose models are being asked for.
+    models_loading: Option<String>,
     pub traces: HashMap<(String, String), TraceLoad>,
     /// Tokens of the last model call of each traced answer, by trace id.
     last_call: HashMap<String, u64>,
@@ -238,6 +249,8 @@ impl Store {
             conversations: vec![],
             workspaces: None,
             models: None,
+            models_for: None,
+            models_loading: None,
             traces: HashMap::new(),
             last_call: HashMap::new(),
             notices: vec![],
@@ -562,14 +575,31 @@ impl Store {
     }
 
     pub fn settings(&mut self, change: SettingsChange) {
-        self.spawn(move |b| Msg::Settings(b.put_settings(&change)));
+        self.spawn(move |b| Msg::Settings { result: b.put_settings(&change), change });
     }
 
+    fn provider(&self) -> Option<String> {
+        self.state.as_ref().and_then(|s| s.provider.clone())
+    }
+
+    /// Asks for the running provider's models, unless they are here or on their way.
     pub fn load_models(&mut self) {
-        if matches!(self.models, Some(Ok(_))) {
+        let provider = self.provider();
+        if (matches!(self.models, Some(Ok(_))) && self.models_for == provider)
+            || (self.models_loading.is_some() && self.models_loading == provider)
+        {
             return;
         }
-        self.spawn(|b| Msg::Models(b.models("")));
+        self.models_loading = provider.clone();
+        self.spawn(move |b| Msg::Models { result: b.models(""), provider });
+    }
+
+    /// The running provider's models once they are loaded; None while they load (or the server cannot list them).
+    pub fn current_models(&self) -> Option<&[Model]> {
+        match &self.models {
+            Some(Ok(list)) if self.models_for == self.provider() => Some(list),
+            _ => None,
+        }
     }
 
     pub fn load_trace(&mut self, id: &str) {
@@ -585,10 +615,7 @@ impl Store {
     /// Tokens of the current chat's last model call against the window of the model in use.
     pub fn context_use(&self) -> Option<ContextUse> {
         let model = self.state.as_ref()?.model.as_deref()?;
-        let window = match &self.models {
-            Some(Ok(list)) => list.iter().find(|m| m.id == model)?.context_length,
-            _ => return None,
-        };
+        let window = self.current_models()?.iter().find(|m| m.id == model)?.context_length;
         let c = self.convs.get(&self.current)?;
         let trace = c.messages.iter().rev().find(|m| m.role == Role::Assistant && m.trace_id.is_some())?.trace_id.as_ref()?;
         let used = *self.last_call.get(trace)?;
@@ -605,10 +632,11 @@ impl Store {
             Msg::State(r) => match r {
                 Ok(s) => {
                     self.offline = None;
-                    let model_changed = self.state.as_ref().map(|o| &o.model) != Some(&s.model);
+                    let reload = needs_models(self.state.as_ref(), &s);
                     self.state = Some(s);
-                    if model_changed {
+                    if reload {
                         self.models = None;
+                        self.models_for = None;
                         self.load_models();
                     }
                 }
@@ -648,7 +676,16 @@ impl Store {
                     }
                 }
             }
-            Msg::Models(r) => self.models = Some(r.map_err(|e| message(&e))),
+            Msg::Models { provider, result } => {
+                if self.models_loading == provider {
+                    self.models_loading = None;
+                }
+                // a list asked for before a provider switch is not the new provider's
+                if provider == self.provider() {
+                    self.models = Some(result.map_err(|e| message(&e)));
+                    self.models_for = provider;
+                }
+            }
             Msg::Trace { session, id, result } => {
                 let load = match result {
                     Ok(spans) => {
@@ -690,8 +727,19 @@ impl Store {
                     Then::Workspaces => self.spawn(|b| Msg::Workspaces(b.workspaces())),
                 }
             }
-            Msg::Settings(r) => match r {
-                Ok(s) => self.update(Msg::State(Ok(s))),
+            Msg::Settings { change, result } => match result {
+                Ok(s) => {
+                    let said = match (&change.provider, &change.model, &change.reasoning_effort) {
+                        (Some(p), None, None) => format!("Provider: {p}"),
+                        (_, Some(m), _) => format!("Model: {m} · {}", s.provider.clone().unwrap_or_default()),
+                        (_, None, Some(e)) => format!("Reasoning effort: {e}"),
+                        _ => String::new(),
+                    };
+                    if !said.is_empty() {
+                        self.notices.push(said);
+                    }
+                    self.update(Msg::State(Ok(s)));
+                }
                 Err(e) => self.notices.push(e.message),
             },
         }
@@ -925,6 +973,11 @@ impl Store {
     pub fn take_notices(&mut self) -> Vec<String> {
         std::mem::take(&mut self.notices)
     }
+}
+
+/// The model list depends on the provider (the server lists the running provider's) and the window on the model.
+pub fn needs_models(old: Option<&State>, new: &State) -> bool {
+    old.is_none_or(|o| o.provider != new.provider || o.model != new.model)
 }
 
 fn fail_command(m: &mut Message, text: &str) {

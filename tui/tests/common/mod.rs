@@ -188,6 +188,41 @@ fn serve(
     }
 }
 
+/// A server with two providers whose settings change: `PUT /api/settings` switches like the `settings` plugin
+/// (a provider switch keeps the model), and `/api/models` lists the running provider's models.
+pub fn with_providers(fake: &Fake) {
+    let state = Arc::new(Mutex::new(json!({
+        "provider": "mistral", "model": "mistral-small", "reasoningEffort": null, "connected": true, "effortSupported": true,
+        "providers": [{"id":"mistral","connected":true},{"id":"openrouter","connected":true}],
+        "commands": [{"name":"model","usage":"model [id]","description":"show or switch the model"},
+                     {"name":"plan","usage":"plan [state]","description":"plan mode"},
+                     {"name":"help","usage":"help [command]","description":"commands"}]
+    })));
+    fake.on(move |r| {
+        let path = r.path.split('?').next().unwrap();
+        let mut st = state.lock().unwrap();
+        match (r.method.as_str(), path) {
+            ("GET", "/api/state") => Some(Reply::Json(200, st.clone())),
+            ("PUT", "/api/settings") => {
+                for (k, v) in r.body.as_object().unwrap() {
+                    st[k] = if v == "off" { Value::Null } else { v.clone() };
+                }
+                Some(Reply::Json(200, st.clone()))
+            }
+            ("GET", "/api/models") => Some(Reply::Json(
+                200,
+                if st["provider"] == "openrouter" {
+                    json!([{"id":"or/sonnet","name":"S","contextLength":200000,"reasoning":true,"free":false},
+                           {"id":"or/free-llama","name":"L","contextLength":8000,"reasoning":false,"free":true}])
+                } else {
+                    json!([{"id":"mistral-small","name":"M","contextLength":32000,"reasoning":false,"free":false}])
+                },
+            )),
+            _ => None,
+        }
+    });
+}
+
 /// Applies the workers' messages until `done` holds (or fails after 5 s).
 pub fn until(store: &mut Store, rx: &Receiver<Msg>, done: impl Fn(&Store) -> bool) {
     let end = Instant::now() + Duration::from_secs(5);

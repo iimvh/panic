@@ -98,10 +98,26 @@ fn main() -> ExitCode {
         },
     };
     if let Some(c) = server.as_mut() {
-        let _ = c.kill();
-        let _ = c.wait();
+        shut_down(c);
     }
     code
+}
+
+/// Stops the Panic it started: SIGTERM first, so its shutdown hook disposes the tree; SIGKILL after 10 s.
+fn shut_down(c: &mut Child) {
+    eprintln!("stopping Panic…");
+    let asked = cfg!(unix) && Command::new("kill").arg("-TERM").arg(c.id().to_string()).status().is_ok_and(|s| s.success());
+    if asked {
+        let end = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < end {
+            if let Ok(Some(_)) = c.try_wait() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+    let _ = c.kill();
+    let _ = c.wait();
 }
 
 /// Starts `cmd --serve` with its output in a log file, and waits until it answers.

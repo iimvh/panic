@@ -13,7 +13,10 @@ fn screen(app: &mut App, w: u16, h: u16) -> String {
     let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
     t.draw(|f| app.draw(f)).unwrap();
     let buf = t.backend().buffer().clone();
-    (0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string()).collect::<Vec<_>>().join("\n")
+    (0..h)
+        .map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn key(app: &mut App, code: KeyCode, m: KeyModifiers) {
@@ -40,7 +43,7 @@ fn the_card_that_waits_takes_the_composers_place() {
         key(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
     }
     key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
-    until(&mut app.store, &rx, |s| s.conv().waiting().is_some());
+    until(&mut app.store, &rx, |s| s.conv().waiting().is_some() && s.state.is_some() && s.conv().mode().is_some());
     app.after_update();
 
     for (w, h) in [(80, 24), (160, 40)] {
@@ -73,10 +76,12 @@ fn the_palette_finds_commands_and_actions() {
     until(&mut app.store, &rx, |s| s.state.is_some());
     key(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL);
     let s = screen(&mut app, 100, 30);
-    assert!(s.contains("Go to") && s.contains("New chat") && s.contains("/help"), "{s}");
+    assert!(s.contains("Go to") && s.contains("New chat"), "{s}");
     for c in "help".chars() {
         key(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
     }
+    let s = screen(&mut app, 100, 30);
+    assert!(s.contains("/help"), "{s}");
     key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
     assert_eq!(app.composer.text, "/help ");
 }

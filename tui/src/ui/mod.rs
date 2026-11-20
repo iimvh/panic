@@ -121,7 +121,10 @@ impl App {
     /// Time passed with nothing to do: spinners turn, the state is polled every 15 s.
     pub fn tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
-        if self.last_poll.elapsed() >= Duration::from_secs(15) {
+        // every 15 s, and every 2 s while the server is unreachable or its model not connected yet
+        let settled = self.store.offline.is_none() && self.store.state.as_ref().is_some_and(|s| s.connected);
+        let every = Duration::from_secs(if settled { 15 } else { 2 });
+        if self.last_poll.elapsed() >= every {
             self.last_poll = Instant::now();
             self.store.refresh_state();
         }

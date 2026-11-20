@@ -229,11 +229,14 @@ The UI is `ui-v2/` (see its README for its design rules). The first UI, `ui-v1/`
 
 `tui/` is a full-screen terminal front-end in Rust for the same API. It needs no browser and uses about 8 MB of memory.
 
+Run from the repository root (Panic reads `panic.json` from there). You need Rust ([rustup](https://rustup.rs)):
+
 ```bash
-cd tui && cargo build --release
-target/release/panic-tui                                         # against `panic --serve` on 127.0.0.1:8080
-target/release/panic-tui --spawn ../app/build/install/app/bin/app # start Panic too, and stop it on exit
-target/release/panic-tui ask "Explain SSE in one line"           # one answer to stdout
+./gradlew :app:installDist -PskipUi                          # the Panic launcher (no Node needed)
+cargo build --release --manifest-path tui/Cargo.toml         # the TUI
+tui/target/release/panic-tui --spawn app/build/install/app/bin/app   # starts Panic, stops it on exit
+tui/target/release/panic-tui                                 # or against a running `app --serve`
+tui/target/release/panic-tui ask "Explain SSE in one line"   # one answer to stdout
 ```
 
 It shows the thread in one column:

@@ -5,15 +5,48 @@ Panic's terminal front-end, in Rust: a full-screen chat in the terminal, so a we
 - **Small.** It is one binary of about 2 MB that uses about 8 MB of memory. It starts at once and uses no CPU while idle.
 - **Same API as ui-v2.** It talks only to the `web` plugin's JSON + SSE API (see `plugins/web/README.md`) and owns no feature.
 
+## Running
+
+Run everything from the repository root. Panic reads `panic.json` from the folder it starts in, and the TUI puts a
+new chat in the project of the folder it starts in.
+
+1. **Install Rust** once (no root needed):
+   `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal`.
+   Then open a new shell, or run `export PATH="$HOME/.cargo/bin:$PATH"`.
+2. **Build the Panic launcher**, once and again after Java changes. `-PskipUi` skips the web UI and needs no Node:
+   `./gradlew :app:installDist -PskipUi`
+3. **Configure Panic**: copy `panic.example.json` to `panic.json` and set a provider's key. You can skip this when
+   `OPENROUTER_API_KEY` is set.
+4. **Build the TUI**, once and again after changes to `tui/`: `cargo build --release --manifest-path tui/Cargo.toml`.
+   The first build takes about a minute.
+5. **Run**, either way:
+
+   ```bash
+   # one terminal: the TUI starts Panic (`app --serve`) and stops it on exit
+   tui/target/release/panic-tui --spawn app/build/install/app/bin/app
+
+   # or two terminals: Panic keeps running between TUI sessions (and serves the web UI too)
+   JAVA_OPTS="-Xmx256m -XX:+UseSerialGC" app/build/install/app/bin/app --serve   # terminal 1
+   tui/target/release/panic-tui                                                  # terminal 2
+   ```
+
+Other ways to run it:
+
 ```bash
-cargo build --release
-target/release/panic-tui                     # against `panic --serve` on http://127.0.0.1:8080
-target/release/panic-tui --url http://host:8080 --session <id>
-target/release/panic-tui --spawn ../app/build/install/app/bin/app   # starts `app --serve`, stops it on exit
-target/release/panic-tui ask "Explain SSE in one line"              # one answer to stdout, tool calls to stderr
+tui/target/release/panic-tui --session <id>               # open a stored chat (its id is in the web UI's /c/<id>)
+tui/target/release/panic-tui --url http://host:8080       # Panic on another machine, e.g. through an SSH tunnel
+tui/target/release/panic-tui ask "Explain SSE in one line" # one answer to stdout, tool calls to stderr
+tui/target/release/panic-tui --help
 ```
 
-On a weak machine, give the JVM a small heap as well: `JAVA_OPTS="-Xmx256m -XX:+UseSerialGC" app --serve`. It then runs in about 150 MB.
+`JAVA_OPTS="-Xmx256m -XX:+UseSerialGC"` keeps Panic at about 150 MB on a weak machine. With `--spawn`, set it in the
+shell before you run the TUI.
+
+**When something goes wrong:**
+- **The top bar says `offline`.** Panic is not answering at `--url`. Start `app --serve` (or use `--spawn`), then press `r`.
+- **"No model is connected".** The provider has no key. Commands still work; pick a provider or model with Ctrl+K,
+  or fix `panic.json` (Panic applies it without a restart).
+- **`--spawn` fails.** It waits up to 90 s and names the log file holding Panic's output.
 
 ## Design
 
